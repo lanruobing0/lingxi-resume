@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+*-check*.png
+ai-resume-*.png
+magic-resume-screenshot.png
+*.docx
