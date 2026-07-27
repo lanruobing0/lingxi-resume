@@ -6,10 +6,18 @@ dist/
 
 *.log
 *.tmp
+backend/data/store.json
 .DS_Store
 Thumbs.db
 
 *-check*.png
 ai-resume-*.png
 magic-resume-screenshot.png
+landing-*.png
+match-card-fixed.png
+providers-check.png
+resume-*.png
+taste-premium-*.png
+templates-*.png
+*.traineddata
 *.docx

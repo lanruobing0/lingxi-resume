@@ -6,8 +6,10 @@ USE ai_resume_coach;
 
 DROP TABLE IF EXISTS interview_answer;
 DROP TABLE IF EXISTS mock_interview;
+DROP TABLE IF EXISTS resume_grammar_check_record;
 DROP TABLE IF EXISTS resume_optimize_record;
 DROP TABLE IF EXISTS resume_analysis_record;
+DROP TABLE IF EXISTS resume_version_history;
 DROP TABLE IF EXISTS interview_question;
 DROP TABLE IF EXISTS skill;
 DROP TABLE IF EXISTS project_experience;
@@ -21,7 +23,7 @@ DROP TABLE IF EXISTS user;
 CREATE TABLE user (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   username VARCHAR(50) NOT NULL UNIQUE,
-  password VARCHAR(100) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
   real_name VARCHAR(50),
   phone VARCHAR(20),
   email VARCHAR(100),
@@ -110,6 +112,16 @@ CREATE TABLE skill (
   CONSTRAINT fk_skill_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
 );
 
+CREATE TABLE resume_version_history (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  resume_id BIGINT NOT NULL,
+  version_no INT NOT NULL,
+  summary VARCHAR(200),
+  snapshot_json TEXT,
+  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_history_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
+);
+
 CREATE TABLE resume_analysis_record (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL,
@@ -139,6 +151,18 @@ CREATE TABLE resume_optimize_record (
   create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_optimize_user FOREIGN KEY (user_id) REFERENCES user(id),
   CONSTRAINT fk_optimize_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
+);
+
+CREATE TABLE resume_grammar_check_record (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  resume_id BIGINT NOT NULL,
+  score INT,
+  original_content TEXT,
+  issue_json TEXT,
+  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_grammar_user FOREIGN KEY (user_id) REFERENCES user(id),
+  CONSTRAINT fk_grammar_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
 );
 
 CREATE TABLE interview_question (
@@ -189,9 +213,7 @@ CREATE TABLE system_notice (
   create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO user (username, password, real_name, phone, email, role) VALUES
-('admin', '123456', '管理员', '13800138000', 'admin@example.com', 'ADMIN'),
-('linche', '123456', '林澈', '13800138001', 'linche@example.com', 'USER');
+-- Create users through the application registration flow so passwords are stored as scrypt hashes.
 
 INSERT INTO job_position (position_name, position_type, keywords, description) VALUES
 ('前端开发工程师', '技术', 'React,Vue,TypeScript,工程化,性能优化,组件化', '负责 Web 前端页面、组件和业务交互开发。'),
@@ -207,6 +229,14 @@ INSERT INTO project_experience (resume_id, project_name, role_name, start_date, 
 INSERT INTO skill (resume_id, skill_name, skill_level, description, sort_no) VALUES
 (1, 'React / Vue', '熟练', '能够完成组件化开发、状态管理和复杂表单页面。', 1),
 (1, 'Spring Boot 联调', '掌握', '能够根据接口文档完成前后端联调。', 2);
+
+INSERT INTO resume_version_history (resume_id, version_no, summary, snapshot_json) VALUES
+(1, 1, '创建基础简历信息', '{}'),
+(1, 2, '补充项目经历和岗位方向', '{}'),
+(1, 3, '加入 AI 诊断后的量化结果', '{}');
+
+INSERT INTO resume_grammar_check_record (user_id, resume_id, score, original_content, issue_json) VALUES
+(2, 1, 82, '负责招聘平台页面开发，完成筛选和面试排期功能，Thier 页面响应比较快。', '[{"type":"拼写","original":"Thier","suggestion":"Their"},{"type":"表达","original":"负责","suggestion":"主导"}]');
 
 INSERT INTO interview_question (position_id, question_text, question_type, difficulty, reference_answer) VALUES
 (1, '请介绍一个你主导或深度参与的前端项目，并说明你解决的核心问题。', '项目经历', '中等', '建议按项目背景、个人职责、技术难点、解决方案和结果进行回答。'),
