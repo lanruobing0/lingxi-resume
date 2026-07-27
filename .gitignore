@@ -17,6 +17,7 @@ landing-*.png
 match-card-fixed.png
 providers-check.png
 resume-*.png
+!docs/images/resume-editor.png
 taste-premium-*.png
 templates-*.png
 *.traineddata
