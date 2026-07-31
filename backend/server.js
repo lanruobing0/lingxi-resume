@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { ANALYSIS_DIMENSIONS, calculateAnalysisTotalScore, normalizeAnalysisDimensions } from "./analysisDimensions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(__dirname, "data");
@@ -779,13 +778,7 @@ async function runAiJson(store, userId, { system, user, schemaName, schema }) {
         },
       },
     }, config.apiKey);
-    return {
-      ok: true,
-      mode: "live",
-      data: unwrapAiPayload(parseJsonText(extractResponseText(responsesData)), schemaName),
-      modelProvider: config.provider,
-      modelId: config.modelId,
-    };
+    return { ok: true, mode: "live", data: unwrapAiPayload(parseJsonText(extractResponseText(responsesData)), schemaName) };
   } catch (responsesError) {
     try {
       const chatData = await requestJson(`${config.baseUrl}/chat/completions`, {
@@ -797,41 +790,24 @@ async function runAiJson(store, userId, { system, user, schemaName, schema }) {
         response_format: { type: "json_object" },
       }, config.apiKey);
       const text = chatData.choices?.[0]?.message?.content || "";
-      return {
-        ok: true,
-        mode: "live",
-        data: unwrapAiPayload(parseJsonText(text), schemaName),
-        modelProvider: config.provider,
-        modelId: config.modelId,
-      };
+      return { ok: true, mode: "live", data: unwrapAiPayload(parseJsonText(text), schemaName) };
     } catch (chatError) {
       return { ok: false, status: 502, error: chatError.message || responsesError.message };
     }
   }
 }
 
-const analysisDimensionSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["key", "label", "score", "weight", "summary", "evidence", "suggestions"],
-  properties: {
-    key: { type: "string", enum: ANALYSIS_DIMENSIONS.map((item) => item.key) },
-    label: { type: "string" },
-    score: { type: "integer", minimum: 0, maximum: 100 },
-    weight: { type: "integer", minimum: 0, maximum: 100 },
-    summary: { type: "string" },
-    evidence: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 4 },
-    suggestions: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 },
-  },
-};
-
 const analysisSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["analysisResult", "dimensions", "keywords", "suggestions"],
+  required: ["totalScore", "completenessScore", "matchScore", "keywordScore", "projectScore", "analysisResult", "keywords", "suggestions"],
   properties: {
+    totalScore: { type: "integer", minimum: 0, maximum: 100 },
+    completenessScore: { type: "integer", minimum: 0, maximum: 100 },
+    matchScore: { type: "integer", minimum: 0, maximum: 100 },
+    keywordScore: { type: "integer", minimum: 0, maximum: 100 },
+    projectScore: { type: "integer", minimum: 0, maximum: 100 },
     analysisResult: { type: "string" },
-    dimensions: { type: "array", minItems: ANALYSIS_DIMENSIONS.length, maxItems: ANALYSIS_DIMENSIONS.length, items: analysisDimensionSchema },
     keywords: { type: "array", items: { type: "string" }, minItems: 5, maxItems: 10 },
     suggestions: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 6 },
   },
@@ -904,58 +880,34 @@ const interviewReportSchema = {
   },
 };
 
-function getResumeAnalysisContext(resume = {}) {
-  const sectionContent = Object.entries(resume.sectionContent || {})
-    .map(([label, lines]) => `${label}: ${Array.isArray(lines) ? lines.join("；") : String(lines || "")}`)
-    .filter((item) => !item.endsWith(": "));
-  const structuredContent = Object.entries(resume.sectionDetails || {})
-    .map(([label, entries]) => `${label}: ${JSON.stringify(entries || [])}`)
-    .filter((item) => !item.endsWith("[]"));
-  const legacyContent = [
-    `专业技能: ${(resume.sections?.skills || []).join("；")}`,
-    `项目经历: ${JSON.stringify(resume.sections?.projects || [])}`,
-    `工作经历: ${(resume.sections?.work || []).join("；")}`,
-  ].filter((item) => !item.endsWith(": ") && !item.endsWith("[]"));
-  const profileFields = (resume.profileFields || [])
-    .map((item) => `${String(item.label || "").trim()}: ${String(item.value || "").trim()}`)
-    .filter((item) => !item.endsWith(": "));
-
-  return [
-    `当前职位: ${resume.currentPosition || ""}`,
-    `目标岗位: ${resume.targetPosition || ""}`,
-    `个人简介: ${resume.selfEvaluation || ""}`,
-    ...profileFields,
-    ...sectionContent,
-    ...structuredContent,
-    ...legacyContent,
-  ].filter((item) => !item.endsWith(": ")).join("\n");
-}
-
 async function generateAiAnalysis(store, userId, resume, position) {
   const ai = await runAiJson(store, userId, {
     schemaName: "resume_analysis",
     schema: analysisSchema,
-    system: "You are a senior resume coach for Chinese job seekers. Evaluate only the supplied resume against the target role. Do not invent skills, projects, employers, education, or metrics. When information is absent, lower the relevant score and state the missing information as evidence. Suggestions may ask the user to add verifiable facts, but must never ask them to fabricate experience or numbers. Return JSON only. Keep all strings non-empty and write Chinese.",
+    system: "You are a senior resume coach for Chinese job seekers. Evaluate the resume against the target role. Return JSON only. Keep all string fields non-empty and write Chinese suggestions.",
     user: [
       `Target role: ${position.positionName}`,
       `Reference keywords for this role, if available: ${(position.keywords || []).join(", ") || "None; infer them from the role."}`,
-      "Resume content:",
-      getResumeAnalysisContext(resume) || "(resume is blank)",
-      `Return exactly six dimensions in this order: ${ANALYSIS_DIMENSIONS.map((item) => `${item.key} (${item.label}, ${item.weight}%)`).join(", ")}.`,
-      'Return exactly this JSON shape: {"analysisResult":"非空中文总体评价","dimensions":[{"key":"completeness","label":"内容完整度","score":0,"weight":15,"summary":"非空中文评价","evidence":["基于简历的证据"],"suggestions":["仅补充可核实事实的建议"]}],"keywords":["关键词一","关键词二","关键词三","关键词四","关键词五"],"suggestions":["建议一","建议二","建议三"]}. Do not return totalScore; the server calculates it from the fixed weights. Every dimension must include at least one evidence item and one suggestion.',
+      `Resume title: ${resume.title || ""}`,
+      `Candidate: ${resume.realName || ""}`,
+      `Summary: ${resume.selfEvaluation || ""}`,
+      `Skills: ${(resume.sections?.skills || []).join("；")}`,
+      `Projects: ${JSON.stringify(resume.sections?.projects || [])}`,
+      `Work: ${(resume.sections?.work || []).join("；")}`,
+      'Return exactly this JSON shape: {"totalScore":0,"completenessScore":0,"matchScore":0,"keywordScore":0,"projectScore":0,"analysisResult":"非空中文结论","keywords":["关键词一","关键词二","关键词三","关键词四","关键词五"],"suggestions":["建议一","建议二","建议三"]}. Scores must be integers from 0 to 100. Generate 5-10 specific Chinese or technical role keywords that should naturally appear in this resume, and 3-6 specific Chinese suggestions.',
     ].join("\n"),
   });
   if (!ai.ok) throw new HttpError(ai.status || 502, "AI 诊断失败", ai.error);
-  const dimensions = normalizeAnalysisDimensions(ai.data.dimensions);
   return {
-    totalScore: calculateAnalysisTotalScore(dimensions),
-    dimensions,
+    totalScore: normalizeScore(ai.data.totalScore, "totalScore"),
+    completenessScore: normalizeScore(ai.data.completenessScore, "completenessScore"),
+    matchScore: normalizeScore(ai.data.matchScore, "matchScore"),
+    keywordScore: normalizeScore(ai.data.keywordScore, "keywordScore"),
+    projectScore: normalizeScore(ai.data.projectScore, "projectScore"),
     analysisResult: requireNonEmptyText(ai.data.analysisResult, "analysisResult"),
     keywords: normalizeTextList(ai.data.keywords, "keywords", 5, 10),
     suggestions: normalizeTextList(ai.data.suggestions, "suggestions", 3, 6),
     aiMode: ai.mode,
-    modelProvider: ai.modelProvider,
-    modelId: ai.modelId,
   };
 }
 
@@ -1389,7 +1341,6 @@ async function handleApi(req, res) {
       id: nextId(store.analysisRecords),
       userId: user.id,
       resumeId: resume.id,
-      resumeVersion: Number(resume.version || 1),
       targetPositionId,
       targetPosition,
       ...result,
