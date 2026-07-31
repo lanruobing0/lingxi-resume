@@ -41,6 +41,7 @@ import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, us
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAnimatedNumber } from "./hooks/useAnimatedNumber";
 import { useInViewOnce } from "./hooks/useInViewOnce";
 import { usePresence } from "./hooks/usePresence";
 
@@ -858,7 +859,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           {active === "history" && <HistoryPage notify={notify} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
-          {active === "analysis" && <AnalysisPanel notify={notify} go={go} />}
+          {active === "analysis" && <AnalysisPanel notify={notify} go={go} resumeId={activeResumeId} />}
           {active === "optimize" && <OptimizePanel notify={notify} />}
         </section>
       </main>
@@ -2611,6 +2612,7 @@ function HistoryPage({ notify }) {
   const [optimize, setOptimize] = useState([]);
   const [grammar, setGrammar] = useState([]);
   const [interviews, setInterviews] = useState([]);
+  const [selectedAnalysis, setSelectedAnalysis] = useState(null);
 
   const loadHistory = async () => {
     try {
@@ -2626,6 +2628,7 @@ function HistoryPage({ notify }) {
       setOptimize(optimizeRecords.items || []);
       setGrammar(grammarRecords.items || []);
       setInterviews(interviewRecords.items || []);
+      setSelectedAnalysis(null);
       notify("历史记录已刷新");
     } catch (error) {
       notify(`历史记录加载失败: ${error.message}`);
@@ -2647,11 +2650,12 @@ function HistoryPage({ notify }) {
       </div>
       <div className="records-grid">
         <RecordColumn title="简历版本" items={history.map((item) => `v${item.version} · ${item.summary}`)} />
-        <RecordColumn title="诊断记录" items={analysis.map((item) => `${item.totalScore} 分 · ${item.analysisResult}`)} />
+        <AnalysisRecordColumn records={analysis} onSelect={setSelectedAnalysis} />
         <RecordColumn title="润色记录" items={optimize.map((item) => item.optimizedContent)} />
         <RecordColumn title="语法检查" items={grammar.map((item) => `${item.score} 分 · ${(item.issues || []).length} 个问题`)} />
         <RecordColumn title="模拟面试" items={interviews.map((item) => `${item.targetPosition || item.title} · ${item.totalScore ?? "进行中"} 分 · ${item.overallFeedback || `${item.answerCount || 0} 题已完成`}`)} />
       </div>
+      {selectedAnalysis && <AnalysisHistoryDetail record={selectedAnalysis} onClose={() => setSelectedAnalysis(null)} />}
     </section>
   );
 }
@@ -2661,6 +2665,39 @@ function RecordColumn({ title, items }) {
     <section className="record-column">
       <h3>{title}</h3>
       {items.length ? items.map((item, index) => <p key={`${title}-${index}`}>{item}</p>) : <p>暂无记录</p>}
+    </section>
+  );
+}
+
+function AnalysisRecordColumn({ records, onSelect }) {
+  return (
+    <section className="record-column analysis-record-column">
+      <h3>诊断记录</h3>
+      {records.length ? records.map((record) => (
+        <button type="button" key={record.id} onClick={() => onSelect(record)}>
+          <strong>{record.totalScore} 分 · {record.targetPosition || "目标岗位"}</strong>
+          <span>{record.analysisResult}</span>
+          <small>{Array.isArray(record.dimensions) ? "查看完整维度" : "旧版记录仅保留摘要"}</small>
+        </button>
+      )) : <p>暂无记录</p>}
+    </section>
+  );
+}
+
+function AnalysisHistoryDetail({ record, onClose }) {
+  const [expandedKey, setExpandedKey] = useState(null);
+  const hasDimensions = Array.isArray(record.dimensions) && record.dimensions.length === 6;
+  return (
+    <section className="analysis-history-detail">
+      <div className="mini-heading">
+        <div>
+          <strong>{record.targetPosition || "目标岗位"}诊断详情</strong>
+          <span>简历 v{record.resumeVersion || "-"} · {record.modelProvider || "历史记录"}{record.modelId ? ` / ${record.modelId}` : ""}</span>
+        </div>
+        <button type="button" className="plain-icon" onClick={onClose} aria-label="关闭诊断详情" title="关闭诊断详情"><X size={18} /></button>
+      </div>
+      <p>{record.analysisResult}</p>
+      {hasDimensions ? <AnalysisDimensionList dimensions={record.dimensions} expandedKey={expandedKey} onToggle={setExpandedKey} /> : <div className="analysis-empty-state"><Gauge size={22} /><span>这是一条旧版诊断记录，未保存可展开的维度详情。</span></div>}
     </section>
   );
 }
@@ -2713,7 +2750,7 @@ function AdminPanel({ notify }) {
   );
 }
 
-function AnalysisPanel({ notify, go }) {
+function AnalysisPanel({ notify, go, resumeId }) {
   const [targetPosition, setTargetPosition] = useState(() => {
     if (typeof window === "undefined") return resume.title;
     return readWorkspaceValue("lingxi-target-position", resume.title);
@@ -2722,12 +2759,10 @@ function AnalysisPanel({ notify, go }) {
   const [hasLiveResult, setHasLiveResult] = useState(false);
   const [needsAiConfig, setNeedsAiConfig] = useState(false);
   const [applyingKeyword, setApplyingKeyword] = useState("");
-  const [analysis, setAnalysis] = useState({
-    totalScore: 86,
-    analysisResult: "简历基础完整，项目经历与目标岗位相关，但还需要补充量化成果和技术决策过程。",
-    keywords: [],
-    suggestions: ["补充量化结果", "突出 React 与 TypeScript 项目", "准备项目追问案例"],
-  });
+  const [analysis, setAnalysis] = useState(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [expandedDimension, setExpandedDimension] = useState(null);
+  const displayScore = useAnimatedNumber(analysis?.totalScore, hasLiveResult);
 
   const runAnalysis = useCallback(async (requestedTargetPosition = targetPosition) => {
     const nextTargetPosition = requestedTargetPosition.trim();
@@ -2737,11 +2772,19 @@ function AnalysisPanel({ notify, go }) {
     }
 
     setIsLoading(true);
+    setAnalysis(null);
+    setHasLiveResult(false);
+    setErrorMessage("");
+    setExpandedDimension(null);
     try {
-      const data = await apiRequest("/api/resumes/current/analyze", {
+      const analysisResumeId = Number.isInteger(Number(resumeId)) && Number(resumeId) > 0 ? resumeId : "current";
+      const data = await apiRequest(`/api/resumes/${analysisResumeId}/analyze`, {
         method: "POST",
         body: JSON.stringify({ targetPosition: nextTargetPosition }),
       });
+      if (!Array.isArray(data.item?.dimensions) || data.item.dimensions.length !== 6 || !Number.isFinite(Number(data.item.totalScore))) {
+        throw new Error("AI 返回的诊断维度不完整，请稍后重试");
+      }
       setAnalysis(data.item);
       setHasLiveResult(true);
       setTargetPosition(data.item.targetPosition || nextTargetPosition);
@@ -2750,11 +2793,13 @@ function AnalysisPanel({ notify, go }) {
     } catch (error) {
       const isAiNotConfigured = error.message.includes("AI 服务未配置") || error.message.includes("API Key");
       setNeedsAiConfig(isAiNotConfigured);
+      setAnalysis(null);
+      setErrorMessage(isAiNotConfigured ? "尚未配置可用的 AI 服务，暂时无法生成真实诊断。" : error.message);
       notify(isAiNotConfigured ? "AI 尚未配置，请先配置服务商 API Key" : `诊断失败: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
-  }, [notify, targetPosition]);
+  }, [notify, resumeId, targetPosition]);
 
   useEffect(() => {
     const analysisRequestKey = workspaceStorageKey("lingxi-analysis-request");
@@ -2794,16 +2839,27 @@ function AnalysisPanel({ notify, go }) {
 
   return (
     <section className={`simple-panel analysis-panel ${isLoading ? "is-loading" : ""} ${hasLiveResult ? "has-live-result" : ""}`} aria-busy={isLoading}>
-      <div className={`score-circle ${isLoading ? "is-loading" : ""}`}>
-        {isLoading ? <LoaderCircle size={44} /> : analysis.totalScore}
-      </div>
-      <h2>{isLoading ? "正在生成岗位匹配结果" : `${analysis.targetPosition || targetPosition}匹配度${analysis.totalScore >= 85 ? "较高" : "待提升"}`}</h2>
-      <div className="analysis-target">
-        <span>岗位方向</span>
-        <strong>{analysis.targetPosition || targetPosition}</strong>
-      </div>
-      {isLoading ? <div className="ai-skeleton-stack analysis-skeleton" aria-label="AI 正在生成岗位匹配结果"><i /><i /><i /></div> : <p>{analysis.analysisResult}</p>}
-      {needsAiConfig && (
+      {isLoading && <>
+        <div className="score-circle is-loading"><LoaderCircle size={44} /></div>
+        <h2>正在生成岗位匹配结果</h2>
+        <div className="ai-skeleton-stack analysis-skeleton" aria-label="AI 正在生成岗位匹配结果"><i /><i /><i /><i /></div>
+      </>}
+      {!isLoading && !analysis && <div className={`analysis-empty-state ${errorMessage ? "is-error" : ""}`} role={errorMessage ? "alert" : undefined}>
+        <Gauge size={26} />
+        <strong>{errorMessage ? "本次诊断未完成" : "尚未生成 AI 诊断"}</strong>
+        <span>{errorMessage || "填写并保存简历内容后，基于当前简历和目标岗位生成六项真实诊断维度。"}</span>
+      </div>}
+      {!isLoading && analysis && <>
+        <div className="score-circle">{displayScore}</div>
+        <h2>{`${analysis.targetPosition || targetPosition}匹配度${analysis.totalScore >= 85 ? "较高" : "待提升"}`}</h2>
+        <div className="analysis-target">
+          <span>岗位方向</span>
+          <strong>{analysis.targetPosition || targetPosition}</strong>
+        </div>
+        <p>{analysis.analysisResult}</p>
+        <AnalysisDimensionList dimensions={analysis.dimensions} expandedKey={expandedDimension} onToggle={setExpandedDimension} animate />
+      </>}
+      {needsAiConfig && !isLoading && (
         <div className="ai-config-callout">
           <span>尚未配置可用的 AI 服务，无法生成真实关键词和匹配度。</span>
           <button className="white-small" onClick={() => go("providers")}>去配置 AI 服务商</button>
@@ -2812,7 +2868,7 @@ function AnalysisPanel({ notify, go }) {
       <div className="analysis-keywords">
         <span>AI 生成的岗位关键词，点击加入个人简介</span>
         <div className="simple-list">
-          {(analysis.keywords || []).map((item) => (
+          {(analysis?.keywords || []).map((item) => (
             <button
               className="keyword-chip"
               key={item}
@@ -2823,17 +2879,42 @@ function AnalysisPanel({ notify, go }) {
               {applyingKeyword === item ? "正在加入" : item}
             </button>
           ))}
-          {!isLoading && !analysis.keywords?.length && <span>点击生成岗位关键词后显示</span>}
+          {!isLoading && !analysis?.keywords?.length && <span>完成诊断后显示</span>}
         </div>
       </div>
       <div className="simple-list">
-        {(analysis.suggestions || []).map((item) => <span key={item}>{item}</span>)}
+        {(analysis?.suggestions || []).map((item) => <span key={item}>{item}</span>)}
       </div>
       <button className="black-small" onClick={() => runAnalysis()} disabled={isLoading}>
         {isLoading ? <LoaderCircle className="spin" size={16} /> : <Gauge size={16} />}
-        {isLoading ? "AI 正在诊断" : "重新诊断"}
+        {isLoading ? "AI 正在诊断" : analysis ? "重新诊断" : "开始 AI 诊断"}
       </button>
     </section>
+  );
+}
+
+function AnalysisDimensionList({ dimensions, expandedKey, onToggle, animate = false }) {
+  return (
+    <div className={`analysis-dimensions ${animate ? "is-animated" : ""}`}>
+      {dimensions.map((dimension, index) => {
+        const isExpanded = expandedKey === dimension.key;
+        return (
+          <article className="analysis-dimension-card" key={dimension.key} style={{ "--index": index, "--score-scale": String(Number(dimension.score || 0) / 100) }}>
+            <button type="button" className="analysis-dimension-summary" onClick={() => onToggle(isExpanded ? null : dimension.key)} aria-expanded={isExpanded}>
+              <span><strong>{dimension.label}</strong><small>{dimension.weight}% 权重</small></span>
+              <b>{dimension.score}</b>
+              <span className="dimension-progress" aria-label={`${dimension.label} ${dimension.score} 分`}><i /></span>
+              <p>{dimension.summary}</p>
+              <ChevronDown className={isExpanded ? "is-open" : ""} size={16} />
+            </button>
+            {isExpanded && <div className="analysis-dimension-detail">
+              <div><strong>评分依据</strong><ul>{dimension.evidence.map((item) => <li key={item}>{item}</li>)}</ul></div>
+              <div><strong>修改建议</strong><ul>{dimension.suggestions.map((item) => <li key={item}>{item}</li>)}</ul></div>
+            </div>}
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
