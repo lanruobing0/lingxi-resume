@@ -41,6 +41,8 @@ import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, us
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useInViewOnce } from "./hooks/useInViewOnce";
+import { usePresence } from "./hooks/usePresence";
 
 const appNav = [
   { id: "resume", label: "我的简历", icon: FileText },
@@ -391,14 +393,22 @@ function Brand({ compact = false }) {
 }
 
 function Toast({ message }) {
-  if (!message) return null;
-  return <div className="app-toast">{message}</div>;
+  const [displayedMessage, setDisplayedMessage] = useState(message);
+  const { isMounted, isExiting } = usePresence(Boolean(message));
+
+  useEffect(() => {
+    if (message) setDisplayedMessage(message);
+  }, [message]);
+
+  if (!isMounted || !displayedMessage) return null;
+  return <div className={`app-toast ${isExiting ? "is-exiting" : ""}`} role="status" aria-live="polite">{displayedMessage}</div>;
 }
 
 function LoginRequiredDialog({ open, onClose, onLogin }) {
-  if (!open) return null;
+  const { isMounted, isExiting } = usePresence(open);
+  if (!isMounted) return null;
   return (
-    <div className="login-required-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className={`login-required-backdrop modal-backdrop ${isExiting ? "is-exiting" : ""}`} role="presentation" onMouseDown={onClose}>
       <section className="login-required-dialog" role="dialog" aria-modal="true" aria-labelledby="login-required-title" onMouseDown={(event) => event.stopPropagation()}>
         <span className="section-kicker">需要登录</span>
         <h2 id="login-required-title">登录后即可使用此功能</h2>
@@ -504,10 +514,13 @@ function exportResumePdf(previewContainer, fileName, notify) {
 
 function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
   const isDarkAppearance = appearance === "dark";
+  const [featuresRef, areFeaturesVisible] = useInViewOnce();
+  const [progressRef, isProgressVisible] = useInViewOnce();
+  const [ctaRef, isCtaVisible] = useInViewOnce();
 
   return (
     <main className={`landing ${isDarkAppearance ? "landing--dark" : ""}`}>
-      <header className="landing-nav">
+      <header className="landing-nav landing-nav-enter">
         <Brand />
         <div className="landing-actions">
           <button
@@ -525,14 +538,14 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
         </div>
       </header>
 
-      <section className="landing-hero">
-        <span className="hero-badge">
+      <section className="landing-hero landing-hero-enter">
+        <span className="hero-badge fade-up" style={{ "--stagger": 0 }}>
           <Sparkles size={16} />
           AI 求职准备工作台
         </span>
-        <h1>简历、岗位、面试，在一张工作台准备</h1>
-        <p>从简历编辑、AI 诊断、岗位匹配到模拟面试，帮你把求职准备变成可保存、可追踪、可优化的完整流程。</p>
-        <div className="hero-buttons">
+        <h1 className="fade-up" style={{ "--stagger": 1 }}>简历、岗位、面试，在一张工作台准备</h1>
+        <p className="fade-up" style={{ "--stagger": 2 }}>从简历编辑、AI 诊断、岗位匹配到模拟面试，帮你把求职准备变成可保存、可追踪、可优化的完整流程。</p>
+        <div className="hero-buttons fade-up" style={{ "--stagger": 3 }}>
           <button className="black-cta" onClick={() => go("templates")}>
             浏览简历模板
             <span>→</span>
@@ -542,17 +555,17 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
             浏览模板
           </button>
         </div>
-        <FluxHeroWorkbench go={go} currentUser={currentUser} />
+        <div className="hero-workbench-enter"><FluxHeroWorkbench go={go} currentUser={currentUser} /></div>
       </section>
 
-      <section className="landing-section">
+      <section ref={featuresRef} className={`landing-section reveal-on-scroll ${areFeaturesVisible ? "is-visible" : ""}`}>
         <h2>为什么选择灵犀简历?</h2>
         <div className="section-rule" />
         <p className="section-subtitle">一站式求职解决方案，让简历制作、AI 优化和面试训练连成完整闭环。</p>
         <FeatureShowcase />
       </section>
 
-      <section className="landing-split">
+      <section ref={progressRef} className={`landing-split reveal-on-scroll ${isProgressVisible ? "is-visible" : ""}`}>
         <div className="progress-card">
           <div className="report-preview">
             <div className="report-head">
@@ -606,7 +619,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
         </div>
       </section>
 
-      <section className="final-cta">
+      <section ref={ctaRef} className={`final-cta reveal-on-scroll ${isCtaVisible ? "is-visible" : ""}`}>
         <span className="final-cta-wordmark">MAGIC RESUME</span>
         <h2>开启你的新职业篇章</h2>
         <p>创建一份能展示能力、匹配岗位、支撑面试表达的智能简历。</p>
@@ -834,7 +847,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           </div>
         </header>
 
-        <section className="workspace-content" onPointerDownCapture={requestGuestLogin} onClickCapture={requestGuestLogin} onKeyDownCapture={requestGuestLogin}>
+        <section key={active} className="workspace-content page-enter" onPointerDownCapture={requestGuestLogin} onClickCapture={requestGuestLogin} onKeyDownCapture={requestGuestLogin}>
           {active === "auth" && <AuthPage go={go} notify={notify} onLogin={onLogin} />}
           {active === "resume" && currentUser && <ResumeLibrary go={go} notify={notify} onOpenResume={onOpenResume} onApplyTemplate={onApplyTemplate} />}
           {active === "resume-edit" && activeResumeId && <ResumeEditor key={`${currentUser?.id || "guest"}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
@@ -1103,10 +1116,11 @@ function formatResumeDate(value) {
 }
 
 function CreateResumeDialog({ open, onClose, onCreateBlank, onCreateFromTemplate, creating }) {
-  if (!open) return null;
+  const { isMounted, isExiting } = usePresence(open);
+  if (!isMounted) return null;
   const isCreating = Boolean(creating);
   return (
-    <div className="create-resume-backdrop" role="presentation" onMouseDown={() => !isCreating && onClose()}>
+    <div className={`create-resume-backdrop modal-backdrop ${isExiting ? "is-exiting" : ""}`} role="presentation" onMouseDown={() => !isCreating && onClose()}>
       <section className="create-resume-dialog" role="dialog" aria-modal="true" aria-labelledby="create-resume-title" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -1203,6 +1217,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
   const themeColorTouchedRef = useRef(false);
   const moduleStateTouchedRef = useRef(false);
   const profileFieldsTouchedRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [targetPosition, setTargetPosition] = useState(() => {
     if (typeof window === "undefined") return resume.title;
     return readWorkspaceValue("lingxi-target-position", resume.title);
@@ -1316,6 +1331,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
   }, [notify, resumeId]);
 
   const saveResume = async (historySummary = "自动保存简历修改", changes = {}) => {
+    setIsSaving(true);
     try {
       const nextPhotoDataUrl = Object.hasOwn(changes, "photoDataUrl") ? changes.photoDataUrl : photoDataUrl;
       const nextSelfEvaluation = Object.hasOwn(changes, "selfEvaluation") ? changes.selfEvaluation : selfEvaluation;
@@ -1350,6 +1366,8 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
     } catch (error) {
       notify(`保存失败: ${error.message}`);
       return false;
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1598,9 +1616,9 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
             <strong>{activeSection}</strong>
             <div className="form-heading-actions">
               {activeSection === "基本信息" && <button type="button" className="link-button" onClick={addProfileField}><Plus size={14} />添加信息</button>}
-              <button className="link-button" onClick={() => saveResume()}>
-                <Save size={14} />
-                自动保存
+              <button className={`link-button ${isSaving ? "is-loading" : ""}`} disabled={isSaving} onClick={() => saveResume()}>
+                {isSaving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}
+                {isSaving ? "正在保存" : "自动保存"}
               </button>
             </div>
           </div>
@@ -1785,14 +1803,15 @@ function StructuredSectionEditor({ section, entries, onChange }) {
 
 function SortableModuleRow({ item, isActive, isVisible, onSelect, onToggle, onRemove }) {
   const Icon = item.icon;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.label });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({ id: item.label });
+  const transformValue = `${CSS.Transform.toString(transform) || ""}${isDragging ? " scale(1.01)" : ""}`.trim();
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: transformValue || undefined,
     transition,
   };
 
   return (
-    <div ref={setNodeRef} style={style} className={`module-row ${isActive ? "active" : ""} ${!isVisible ? "muted" : ""} ${isDragging ? "is-dragging" : ""}`}>
+    <div ref={setNodeRef} style={style} className={`module-row ${isActive ? "active" : ""} ${!isVisible ? "muted" : ""} ${isDragging ? "is-dragging" : ""} ${isOver && !isDragging ? "is-drop-target" : ""}`}>
       <button
         type="button"
         className="module-drag-handle"
@@ -2064,9 +2083,10 @@ function ResumeTemplatePreview({ template, color, featured = false, compact = fa
 }
 
 function TemplatePreviewDialog({ open, template, color, onClose, onApply }) {
-  if (!open) return null;
+  const { isMounted, isExiting } = usePresence(open);
+  if (!isMounted) return null;
   return (
-    <div className="template-preview-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className={`template-preview-backdrop modal-backdrop ${isExiting ? "is-exiting" : ""}`} role="presentation" onMouseDown={onClose}>
       <section className="template-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="template-preview-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="template-preview-dialog-head">
           <div>
@@ -2127,6 +2147,7 @@ function AiToolsPanel({ notify, go }) {
 function GrammarPanel({ notify }) {
   const [content, setContent] = useState("负责招聘平台页面开发，完成筛选和面试排期功能，Thier 页面响应比较快。");
   const [checking, setChecking] = useState(false);
+  const [hasChecked, setHasChecked] = useState(false);
   const [result, setResult] = useState({
     score: 82,
     issues: [
@@ -2143,6 +2164,7 @@ function GrammarPanel({ notify }) {
         body: JSON.stringify({ content }),
       });
       setResult(data.item);
+      setHasChecked(true);
       notify("语法检查完成，记录已归档");
     } catch (error) {
       notify(`语法检查失败: ${error.message}`);
@@ -2152,7 +2174,7 @@ function GrammarPanel({ notify }) {
   };
 
   return (
-    <section className="grammar-page">
+    <section className={`grammar-page ${checking ? "is-loading" : ""} ${hasChecked ? "has-live-result" : ""}`}>
       <div className="grammar-input">
         <h2>AI 语法检查</h2>
         <p>检查错别字、英文拼写、标点和简历表达问题。</p>
@@ -2162,7 +2184,12 @@ function GrammarPanel({ notify }) {
           {checking ? "检查中..." : "开始检查"}
         </button>
       </div>
-      <div className="grammar-result">
+      <div className="grammar-result" aria-busy={checking}>
+        {checking ? (
+          <div className="ai-skeleton-stack" aria-label="AI 正在检查文本">
+            <i /><i /><i /><i />
+          </div>
+        ) : <>
         <span>{Number.isFinite(Number(result.score)) ? Number(result.score) : "--"} 分</span>
         <h3>检查结果</h3>
         {(result.issues || []).length === 0 && (
@@ -2179,6 +2206,7 @@ function GrammarPanel({ notify }) {
             <small>{issue.reason}</small>
           </article>
         ))}
+        </>}
       </div>
     </section>
   );
@@ -2491,7 +2519,7 @@ function InterviewPractice({ notify, go }) {
           </button>
         )}
       </div>
-      <div className="feedback-card">
+      <div className={`feedback-card ${feedback ? "has-live-feedback" : ""}`}>
         {feedback ? (
           <>
             <span>{feedback.score} 分</span>
@@ -2691,6 +2719,7 @@ function AnalysisPanel({ notify, go }) {
     return readWorkspaceValue("lingxi-target-position", resume.title);
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [hasLiveResult, setHasLiveResult] = useState(false);
   const [needsAiConfig, setNeedsAiConfig] = useState(false);
   const [applyingKeyword, setApplyingKeyword] = useState("");
   const [analysis, setAnalysis] = useState({
@@ -2714,6 +2743,7 @@ function AnalysisPanel({ notify, go }) {
         body: JSON.stringify({ targetPosition: nextTargetPosition }),
       });
       setAnalysis(data.item);
+      setHasLiveResult(true);
       setTargetPosition(data.item.targetPosition || nextTargetPosition);
       setNeedsAiConfig(false);
       notify("AI 诊断已完成并保存记录");
@@ -2763,7 +2793,7 @@ function AnalysisPanel({ notify, go }) {
   };
 
   return (
-    <section className="simple-panel">
+    <section className={`simple-panel analysis-panel ${isLoading ? "is-loading" : ""} ${hasLiveResult ? "has-live-result" : ""}`} aria-busy={isLoading}>
       <div className={`score-circle ${isLoading ? "is-loading" : ""}`}>
         {isLoading ? <LoaderCircle size={44} /> : analysis.totalScore}
       </div>
@@ -2772,7 +2802,7 @@ function AnalysisPanel({ notify, go }) {
         <span>岗位方向</span>
         <strong>{analysis.targetPosition || targetPosition}</strong>
       </div>
-      <p>{analysis.analysisResult}</p>
+      {isLoading ? <div className="ai-skeleton-stack analysis-skeleton" aria-label="AI 正在生成岗位匹配结果"><i /><i /><i /></div> : <p>{analysis.analysisResult}</p>}
       {needsAiConfig && (
         <div className="ai-config-callout">
           <span>尚未配置可用的 AI 服务，无法生成真实关键词和匹配度。</span>
@@ -2810,29 +2840,35 @@ function AnalysisPanel({ notify, go }) {
 function OptimizePanel({ notify }) {
   const [content, setContent] = useState("负责招聘平台页面开发，完成筛选和面试排期功能。");
   const [optimized, setOptimized] = useState("将项目经历改为结果导向表达，补充性能提升、组件复用和接口联调等关键词。");
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [hasLiveResult, setHasLiveResult] = useState(false);
 
   const runOptimize = async () => {
+    setIsOptimizing(true);
     try {
       const data = await apiRequest("/api/resumes/current/optimize", {
         method: "POST",
         body: JSON.stringify({ optimizeType: "project_experience", content }),
       });
       setOptimized(data.item.optimizedContent);
+      setHasLiveResult(true);
       notify("AI 润色已完成并保存记录");
     } catch (error) {
       notify(`润色失败: ${error.message}`);
+    } finally {
+      setIsOptimizing(false);
     }
   };
 
   return (
-    <section className="simple-panel">
+    <section className={`simple-panel optimize-panel ${isOptimizing ? "is-loading" : ""} ${hasLiveResult ? "has-live-result" : ""}`} aria-busy={isOptimizing}>
       <Sparkles size={42} />
       <h2>AI 优化建议</h2>
       <textarea value={content} onChange={(event) => setContent(event.target.value)} />
-      <p>{optimized}</p>
-      <button className="black-small" onClick={runOptimize}>
-        <Sparkles size={16} />
-        生成润色
+      {isOptimizing ? <div className="ai-skeleton-stack analysis-skeleton" aria-label="AI 正在生成润色建议"><i /><i /><i /></div> : <p className="ai-result-copy">{optimized}</p>}
+      <button className="black-small" disabled={isOptimizing} onClick={runOptimize}>
+        {isOptimizing ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
+        {isOptimizing ? "AI 正在润色" : "生成润色"}
       </button>
     </section>
   );

@@ -18,6 +18,11 @@
   --radius-sm: 10px;
   --shadow: 0 18px 50px rgb(30 30 25 / 0.1);
   --shadow-sm: 0 2px 10px rgb(30 30 25 / 0.06);
+  --motion-fast: 160ms;
+  --motion-normal: 220ms;
+  --motion-slow: 560ms;
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -49,6 +54,22 @@ textarea {
 
 button {
   cursor: pointer;
+  transition: transform var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+}
+
+input,
+select,
+textarea {
+  transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard);
 }
 
 button:focus-visible,
@@ -74,6 +95,12 @@ textarea:focus {
   color: var(--ink);
   font-size: 14px;
   font-weight: 750;
+  animation: toast-enter var(--motion-normal) var(--ease-emphasized) both;
+}
+
+.app-toast.is-exiting {
+  pointer-events: none;
+  animation: toast-exit var(--motion-fast) var(--ease-standard) both;
 }
 
 .brand {
@@ -130,6 +157,10 @@ textarea:focus {
   min-height: 76px;
   margin: 0 auto;
   background: rgb(255 255 255 / 0.86);
+}
+
+.landing-nav-enter {
+  animation: page-fade-in 420ms var(--ease-standard) both;
 }
 
 .landing-actions {
@@ -1043,6 +1074,7 @@ textarea:focus {
   grid-template-columns: 240px minmax(0, 1fr);
   min-height: 100dvh;
   background: var(--page);
+  transition: grid-template-columns var(--motion-normal) var(--ease-standard);
 }
 
 .studio.sidebar-collapsed {
@@ -1055,6 +1087,7 @@ textarea:focus {
   height: 100dvh;
   border-right: 1px solid var(--line);
   background: var(--panel);
+  overflow: hidden;
 }
 
 .sidebar-logo {
@@ -1072,6 +1105,7 @@ textarea:focus {
   display: grid;
   gap: 10px;
   padding: 30px 20px;
+  transition: padding var(--motion-normal) var(--ease-standard);
 }
 
 .studio-nav button {
@@ -1086,6 +1120,30 @@ textarea:focus {
   color: #595752;
   text-align: left;
   font-size: 16px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.studio-nav button svg {
+  flex: 0 0 auto;
+  transition: transform var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+
+.studio-nav button span,
+.sidebar-logo .brand strong {
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+  transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), max-width var(--motion-normal) var(--ease-standard);
+}
+
+.studio-nav button:hover:not(:disabled) {
+  background: rgb(52 120 246 / 0.07);
+  color: var(--ink);
+}
+
+.studio-nav button:hover:not(:disabled) svg {
+  transform: translateX(2px);
 }
 
 .studio-nav button.active {
@@ -1101,7 +1159,11 @@ textarea:focus {
 
 .studio.sidebar-collapsed .sidebar-logo .brand strong,
 .studio.sidebar-collapsed .studio-nav button span {
-  display: none;
+  display: block;
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-4px);
+  pointer-events: none;
 }
 
 .studio.sidebar-collapsed .studio-nav {
@@ -1109,8 +1171,8 @@ textarea:focus {
 }
 
 .studio.sidebar-collapsed .studio-nav button {
-  justify-content: center;
-  padding-inline: 0;
+  justify-content: flex-start;
+  padding-inline: 12px;
 }
 
 .studio-main {
@@ -1620,6 +1682,7 @@ textarea:focus {
   background: white;
   color: var(--muted);
   overflow: hidden;
+  transition: transform var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .module-main {
@@ -1694,6 +1757,7 @@ textarea:focus {
 .module-row:hover {
   border-color: rgb(15 23 42 / 0.22);
   background: var(--panel);
+  transform: translateY(-1px);
 }
 
 .module-row.active {
@@ -1704,8 +1768,15 @@ textarea:focus {
 .module-row.is-dragging {
   z-index: 2;
   border-color: var(--blue);
-  box-shadow: 0 8px 18px rgb(47 125 225 / 0.16);
-  opacity: 0.92;
+  box-shadow: 0 8px 14px rgb(47 125 225 / 0.16);
+  opacity: 0.86;
+  transform: scale(1.01);
+}
+
+.module-row.is-drop-target {
+  border-color: rgb(52 120 246 / 0.7);
+  background: rgb(52 120 246 / 0.05);
+  box-shadow: inset 0 -2px 0 var(--blue);
 }
 
 .module-row.muted {
@@ -2197,6 +2268,14 @@ textarea {
   padding: 34px;
   border: 1px solid var(--line-strong);
   background: white;
+  transition: border-color var(--motion-normal) var(--ease-standard), background-color var(--motion-normal) var(--ease-standard), color var(--motion-normal) var(--ease-standard);
+}
+
+.resume-preview .resume-paper-modern header,
+.resume-preview .resume-paper-modern h2,
+.resume-preview .resume-paper-modern h3,
+.resume-preview .resume-paper-modern section {
+  transition: color var(--motion-normal) var(--ease-standard), background-color var(--motion-normal) var(--ease-standard), border-color var(--motion-normal) var(--ease-standard);
 }
 
 .resume-paper-modern header {
@@ -4214,6 +4293,152 @@ textarea {
   to { transform: rotate(360deg); }
 }
 
+@keyframes page-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-up-enter {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes modal-surface-enter {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes modal-surface-exit {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(4px) scale(0.99); }
+}
+
+@keyframes toast-enter {
+  from { opacity: 0; transform: translate3d(12px, -8px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes toast-exit {
+  to { opacity: 0; transform: translate3d(8px, -4px, 0); }
+}
+
+@keyframes skeleton-pulse {
+  50% { opacity: 0.54; }
+}
+
+.page-enter {
+  animation: page-fade-in 420ms var(--ease-standard) both;
+}
+
+.fade-up {
+  animation: fade-up-enter var(--motion-slow) var(--ease-emphasized) both;
+  animation-delay: calc(var(--stagger, 0) * 80ms);
+}
+
+.hero-workbench-enter {
+  animation: fade-up-enter 620ms var(--ease-emphasized) 280ms both;
+}
+
+.reveal-on-scroll.is-visible {
+  animation: fade-up-enter 460ms var(--ease-standard) both;
+}
+
+.flux-hero-stage {
+  transition: transform var(--motion-normal) var(--ease-standard);
+}
+
+.flux-workbench-card {
+  transition: transform var(--motion-normal) var(--ease-standard), box-shadow var(--motion-normal) var(--ease-standard);
+}
+
+.flux-hero-stage:hover .flux-workbench-card {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 14px rgb(30 30 25 / 0.1);
+}
+
+.modal-backdrop {
+  animation: page-fade-in var(--motion-normal) var(--ease-standard) both;
+}
+
+.modal-backdrop > :is(.login-required-dialog, .create-resume-dialog, .template-preview-dialog) {
+  animation: modal-surface-enter 300ms var(--ease-emphasized) both;
+}
+
+.modal-backdrop.is-exiting {
+  pointer-events: none;
+  animation: toast-exit var(--motion-fast) var(--ease-standard) both;
+}
+
+.modal-backdrop.is-exiting > :is(.login-required-dialog, .create-resume-dialog, .template-preview-dialog) {
+  animation: modal-surface-exit var(--motion-fast) var(--ease-standard) both;
+}
+
+.ai-skeleton-stack {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 520px);
+  padding: 4px 0;
+}
+
+.ai-skeleton-stack i {
+  display: block;
+  height: 14px;
+  border-radius: 5px;
+  background: var(--panel-strong);
+  animation: skeleton-pulse 1.15s ease-in-out infinite;
+}
+
+.ai-skeleton-stack i:nth-child(2) { width: 86%; animation-delay: 100ms; }
+.ai-skeleton-stack i:nth-child(3) { width: 68%; animation-delay: 180ms; }
+.ai-skeleton-stack i:nth-child(4) { width: 76%; animation-delay: 240ms; }
+
+.grammar-page.is-loading .grammar-result {
+  min-height: 240px;
+}
+
+.grammar-page.has-live-result .grammar-result > :not(.ai-skeleton-stack),
+.analysis-panel.has-live-result > :not(.ai-skeleton-stack),
+.optimize-panel.has-live-result .ai-result-copy {
+  animation: fade-up-enter var(--motion-normal) var(--ease-standard) both;
+}
+
+.grammar-page.has-live-result .grammar-result article:nth-of-type(2),
+.analysis-panel.has-live-result .simple-list:nth-of-type(2) {
+  animation-delay: 60ms;
+}
+
+.feedback-card.has-live-feedback > * {
+  animation: fade-up-enter var(--motion-normal) var(--ease-standard) both;
+}
+
+.feedback-card.has-live-feedback > :nth-child(2) { animation-delay: 45ms; }
+.feedback-card.has-live-feedback > :nth-child(3) { animation-delay: 90ms; }
+
+.analysis-skeleton {
+  justify-self: center;
+}
+
+.link-button.is-loading {
+  min-width: 102px;
+}
+
+@media (hover: none) {
+  .flux-hero-stage:hover .flux-workbench-card,
+  .module-row:hover {
+    transform: none;
+    box-shadow: none;
+  }
+}
+
+@media print {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 .simple-panel p {
   max-width: 560px;
   color: var(--muted);
@@ -4425,6 +4650,10 @@ textarea {
   .studio.sidebar-collapsed .sidebar-logo .brand strong,
   .studio.sidebar-collapsed .studio-nav button span {
     display: inline;
+    max-width: none;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
   }
 
   .studio.sidebar-collapsed .studio-nav {
@@ -4639,5 +4868,17 @@ textarea {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  .fade-up,
+  .hero-workbench-enter,
+  .reveal-on-scroll.is-visible,
+  .page-enter,
+  .landing-nav-enter,
+  .app-toast,
+  .modal-backdrop,
+  .modal-backdrop > :is(.login-required-dialog, .create-resume-dialog, .template-preview-dialog) {
+    animation: none !important;
+    transform: none !important;
   }
 }
