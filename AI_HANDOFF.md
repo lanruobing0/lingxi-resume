@@ -168,6 +168,17 @@ Avoid touching unless necessary:
 
 ## Final Reminder
 
+## RAG Phase 1-2 Handoff
+
+- Keep `backend/server.js` as the current API boundary; do not introduce RAG infrastructure until its approved phase.
+- AI prompts must receive `buildAiResumeContext(resume)`, never a raw resume object. The AI context excludes real name, email, phone, website, city, and profile fields.
+- ResumeDTO is retained locally for version history and new interview snapshots; snapshots intentionally omit `photoDataUrl` and editor-only fields.
+- JobDescription, parse result, and application records are all scoped by `userId`. An application requires a successful current JD parse result.
+- `GET /api/records/{analysis,optimize,grammar,interviews}` accepts no `resumeId` or a positive integer only. Preserve this 400-vs-unfiltered contract.
+- `database.sql` remains a production MySQL migration reference. The local Node runtime uses JSON persistence.
+- Completed: phases 1 and 2. Pending: non-RAG matching, knowledge documents/chunking, retrieval, RAG reports, suggestion/version loop, RAG interview, agentic workflow, and production evaluation.
+- Verification: run `node --check backend/server.js`, `pnpm build`, and `pnpm test`; integration tests use isolated mock AI servers and temporary data directories.
+
 Before final response after any change, report:
 
 - files changed,

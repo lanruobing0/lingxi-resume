@@ -41,9 +41,13 @@ import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, us
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCountUp } from "./hooks/useCountUp";
+import { useInViewOnce } from "./hooks/useInViewOnce";
+import { usePresence } from "./hooks/usePresence";
 
 const appNav = [
   { id: "resume", label: "我的简历", icon: FileText },
+  { id: "jobs", label: "岗位 JD", icon: BriefcaseBusiness },
   { id: "templates", label: "简历模板", icon: LayoutTemplate },
   { id: "ai-tools", label: "AI 工具", icon: Sparkles },
   { id: "providers", label: "AI 服务商", icon: Bot },
@@ -391,14 +395,22 @@ function Brand({ compact = false }) {
 }
 
 function Toast({ message }) {
-  if (!message) return null;
-  return <div className="app-toast">{message}</div>;
+  const { isMounted, isLeaving } = usePresence(Boolean(message));
+  const [announcedMessage, setAnnouncedMessage] = useState(message);
+
+  useEffect(() => {
+    if (message) setAnnouncedMessage(message);
+  }, [message]);
+
+  if (!isMounted) return null;
+  return <div className={`app-toast ${isLeaving ? "is-leaving" : ""}`} role="status" aria-live="polite">{announcedMessage}</div>;
 }
 
 function LoginRequiredDialog({ open, onClose, onLogin }) {
-  if (!open) return null;
+  const { isMounted, isLeaving } = usePresence(open);
+  if (!isMounted) return null;
   return (
-    <div className="login-required-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className={`login-required-backdrop ${isLeaving ? "is-leaving" : ""}`} role="presentation" onMouseDown={onClose}>
       <section className="login-required-dialog" role="dialog" aria-modal="true" aria-labelledby="login-required-title" onMouseDown={(event) => event.stopPropagation()}>
         <span className="section-kicker">需要登录</span>
         <h2 id="login-required-title">登录后即可使用此功能</h2>
@@ -410,6 +422,24 @@ function LoginRequiredDialog({ open, onClose, onLogin }) {
       </section>
     </div>
   );
+}
+
+function RevealSection({ as: Tag = "section", className = "", children }) {
+  const { ref, isReady, hasEntered } = useInViewOnce();
+  return (
+    <Tag
+      ref={ref}
+      className={`${className} reveal-on-scroll ${isReady ? "is-observing" : ""} ${hasEntered ? "is-revealed" : ""}`}
+    >
+      {children}
+    </Tag>
+  );
+}
+
+function AnimatedScore({ value, shouldAnimate = false, className = "" }) {
+  const numericValue = Number(value);
+  const displayedValue = useCountUp(Number.isFinite(numericValue) ? numericValue : 0, shouldAnimate);
+  return <span className={className}>{Number.isFinite(numericValue) ? displayedValue : "--"}</span>;
 }
 
 async function apiRequest(path, options = {}) {
@@ -507,7 +537,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
 
   return (
     <main className={`landing ${isDarkAppearance ? "landing--dark" : ""}`}>
-      <header className="landing-nav">
+      <header className="landing-nav landing-nav-enter">
         <Brand />
         <div className="landing-actions">
           <button
@@ -526,13 +556,13 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
       </header>
 
       <section className="landing-hero">
-        <span className="hero-badge">
+        <span className="hero-badge fade-up" style={{ "--enter-delay": "80ms" }}>
           <Sparkles size={16} />
           AI 求职准备工作台
         </span>
-        <h1>简历、岗位、面试，在一张工作台准备</h1>
-        <p>从简历编辑、AI 诊断、岗位匹配到模拟面试，帮你把求职准备变成可保存、可追踪、可优化的完整流程。</p>
-        <div className="hero-buttons">
+        <h1 className="fade-up" style={{ "--enter-delay": "140ms" }}>简历、岗位、面试，在一张工作台准备</h1>
+        <p className="fade-up" style={{ "--enter-delay": "210ms" }}>从简历编辑、AI 诊断、岗位匹配到模拟面试，帮你把求职准备变成可保存、可追踪、可优化的完整流程。</p>
+        <div className="hero-buttons fade-up" style={{ "--enter-delay": "280ms" }}>
           <button className="black-cta" onClick={() => go("templates")}>
             浏览简历模板
             <span>→</span>
@@ -542,17 +572,17 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
             浏览模板
           </button>
         </div>
-        <FluxHeroWorkbench go={go} currentUser={currentUser} />
+        <div className="fade-up hero-workbench-enter" style={{ "--enter-delay": "360ms" }}><FluxHeroWorkbench go={go} currentUser={currentUser} /></div>
       </section>
 
-      <section className="landing-section">
+      <RevealSection className="landing-section">
         <h2>为什么选择灵犀简历?</h2>
         <div className="section-rule" />
         <p className="section-subtitle">一站式求职解决方案，让简历制作、AI 优化和面试训练连成完整闭环。</p>
         <FeatureShowcase />
-      </section>
+      </RevealSection>
 
-      <section className="landing-split">
+      <RevealSection className="landing-split">
         <div className="progress-card">
           <div className="report-preview">
             <div className="report-head">
@@ -604,9 +634,9 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
             <ChevronDown size={16} />
           </div>
         </div>
-      </section>
+      </RevealSection>
 
-      <section className="final-cta">
+      <RevealSection className="final-cta">
         <span className="final-cta-wordmark">MAGIC RESUME</span>
         <h2>开启你的新职业篇章</h2>
         <p>创建一份能展示能力、匹配岗位、支撑面试表达的智能简历。</p>
@@ -614,7 +644,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
           创建我的简历
           <span>→</span>
         </button>
-      </section>
+      </RevealSection>
     </main>
   );
 }
@@ -678,10 +708,10 @@ function FluxHeroWorkbench({ go, currentUser }) {
           </section>
 
           <aside className="flux-insights">
-            {insights.map((item) => {
+            {insights.map((item, index) => {
               const Icon = item.icon;
               return (
-                <article key={item.title}>
+                <article key={item.title} style={{ "--stagger-index": index }}>
                   <Icon size={16} />
                   <span>{item.title}</span>
                   <strong>{item.value}</strong>
@@ -834,19 +864,20 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           </div>
         </header>
 
-        <section className="workspace-content" onPointerDownCapture={requestGuestLogin} onClickCapture={requestGuestLogin} onKeyDownCapture={requestGuestLogin}>
+        <section key={active} className="workspace-content page-enter" onPointerDownCapture={requestGuestLogin} onClickCapture={requestGuestLogin} onKeyDownCapture={requestGuestLogin}>
           {active === "auth" && <AuthPage go={go} notify={notify} onLogin={onLogin} />}
           {active === "resume" && currentUser && <ResumeLibrary go={go} notify={notify} onOpenResume={onOpenResume} onApplyTemplate={onApplyTemplate} />}
+          {active === "jobs" && currentUser && <JobDescriptionWorkspace notify={notify} activeResumeId={activeResumeId} onOpenResume={onOpenResume} go={go} />}
           {active === "resume-edit" && activeResumeId && <ResumeEditor key={`${currentUser?.id || "guest"}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
-          {active === "ai-tools" && <AiToolsPanel notify={notify} go={go} />}
+          {active === "ai-tools" && <AiToolsPanel notify={notify} go={go} resumeId={activeResumeId} />}
           {active === "providers" && <ProviderSettings notify={notify} />}
-          {active === "interview" && <InterviewPractice notify={notify} go={go} />}
-          {active === "history" && <HistoryPage notify={notify} />}
+          {active === "interview" && <InterviewPractice notify={notify} go={go} resumeId={activeResumeId} />}
+          {active === "history" && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
-          {active === "analysis" && <AnalysisPanel notify={notify} go={go} />}
-          {active === "optimize" && <OptimizePanel notify={notify} />}
+          {active === "analysis" && <AnalysisPanel notify={notify} go={go} resumeId={activeResumeId} />}
+          {active === "optimize" && <OptimizePanel notify={notify} resumeId={activeResumeId} />}
         </section>
       </main>
     </div>
@@ -942,6 +973,7 @@ function ResumeLibrary({ go, notify, onOpenResume, onApplyTemplate }) {
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
 
   const loadResumes = useCallback(async () => {
     try {
@@ -1031,7 +1063,6 @@ function ResumeLibrary({ go, notify, onOpenResume, onApplyTemplate }) {
   };
 
   const deleteResume = async (resumeItem) => {
-    if (!window.confirm(`确定删除“${resumeItem.title || "未命名简历"}”吗？此操作不能撤销。`)) return;
     try {
       setWorkingId(resumeItem.id);
       await apiRequest(`/api/resumes/${resumeItem.id}`, { method: "DELETE" });
@@ -1079,7 +1110,7 @@ function ResumeLibrary({ go, notify, onOpenResume, onApplyTemplate }) {
             <div className="resume-library-card-actions">
               <button type="button" onClick={() => onOpenResume(resumeItem.id)}><FileText size={15} />编辑</button>
               <button type="button" disabled={workingId === resumeItem.id} onClick={() => duplicateResume(resumeItem)}><Copy size={15} />复制</button>
-              <button type="button" className="danger" disabled={workingId === resumeItem.id} onClick={() => deleteResume(resumeItem)}><Trash2 size={15} />删除</button>
+              <button type="button" className="danger" disabled={workingId === resumeItem.id} onClick={() => setDeleteCandidate(resumeItem)}><Trash2 size={15} />删除</button>
             </div>
           </article>
         ))}
@@ -1090,6 +1121,19 @@ function ResumeLibrary({ go, notify, onOpenResume, onApplyTemplate }) {
         onCreateBlank={createBlankResume}
         onCreateFromTemplate={createFromTemplate}
         creating={workingId}
+      />
+      <ConfirmDialog
+        open={Boolean(deleteCandidate)}
+        title="删除这份简历？"
+        description={`“${deleteCandidate?.title || "未命名简历"}”将被永久删除，无法撤销。`}
+        confirmLabel="删除简历"
+        isWorking={Boolean(deleteCandidate && workingId === deleteCandidate.id)}
+        onClose={() => setDeleteCandidate(null)}
+        onConfirm={async () => {
+          if (!deleteCandidate) return;
+          await deleteResume(deleteCandidate);
+          setDeleteCandidate(null);
+        }}
       />
     </section>
   );
@@ -1103,10 +1147,11 @@ function formatResumeDate(value) {
 }
 
 function CreateResumeDialog({ open, onClose, onCreateBlank, onCreateFromTemplate, creating }) {
-  if (!open) return null;
+  const { isMounted, isLeaving } = usePresence(open);
+  if (!isMounted) return null;
   const isCreating = Boolean(creating);
   return (
-    <div className="create-resume-backdrop" role="presentation" onMouseDown={() => !isCreating && onClose()}>
+    <div className={`create-resume-backdrop ${isLeaving ? "is-leaving" : ""}`} role="presentation" onMouseDown={() => !isCreating && onClose()}>
       <section className="create-resume-dialog" role="dialog" aria-modal="true" aria-labelledby="create-resume-title" onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div>
@@ -1135,6 +1180,24 @@ function CreateResumeDialog({ open, onClose, onCreateBlank, onCreateFromTemplate
             ))}
           </div>
         </section>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmDialog({ open, title, description, confirmLabel, isWorking, onClose, onConfirm }) {
+  const { isMounted, isLeaving } = usePresence(open);
+  if (!isMounted) return null;
+  return (
+    <div className={`confirm-dialog-backdrop ${isLeaving ? "is-leaving" : ""}`} role="presentation" onMouseDown={() => !isWorking && onClose()}>
+      <section className="confirm-dialog modal-enter" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+        <span className="section-kicker">确认操作</span>
+        <h2 id="confirm-dialog-title">{title}</h2>
+        <p>{description}</p>
+        <div className="confirm-dialog-actions">
+          <button type="button" className="white-small" disabled={isWorking} onClick={onClose}>取消</button>
+          <button type="button" className="danger-action" disabled={isWorking} onClick={onConfirm}>{isWorking ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}{isWorking ? "正在删除" : confirmLabel}</button>
+        </div>
       </section>
     </div>
   );
@@ -1265,6 +1328,15 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
     个人主页: resume.website,
   });
   const [profileFields, setProfileFields] = useState([]);
+  const [saveState, setSaveState] = useState("idle");
+  const [previewRefreshing, setPreviewRefreshing] = useState(false);
+  const saveFeedbackTimerRef = useRef(null);
+  const previewFeedbackTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    window.clearTimeout(saveFeedbackTimerRef.current);
+    window.clearTimeout(previewFeedbackTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!appliedTemplate) return;
@@ -1316,6 +1388,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
   }, [notify, resumeId]);
 
   const saveResume = async (historySummary = "自动保存简历修改", changes = {}) => {
+    setSaveState("saving");
     try {
       const nextPhotoDataUrl = Object.hasOwn(changes, "photoDataUrl") ? changes.photoDataUrl : photoDataUrl;
       const nextSelfEvaluation = Object.hasOwn(changes, "selfEvaluation") ? changes.selfEvaluation : selfEvaluation;
@@ -1345,18 +1418,29 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
           summary: historySummary,
         }),
       });
+      setSaveState("saved");
+      window.clearTimeout(saveFeedbackTimerRef.current);
+      saveFeedbackTimerRef.current = window.setTimeout(() => setSaveState("idle"), 1600);
       notify("简历已保存到历史版本");
       return true;
     } catch (error) {
+      setSaveState("idle");
       notify(`保存失败: ${error.message}`);
       return false;
     }
+  };
+
+  const triggerPreviewRefresh = () => {
+    setPreviewRefreshing(true);
+    window.clearTimeout(previewFeedbackTimerRef.current);
+    previewFeedbackTimerRef.current = window.setTimeout(() => setPreviewRefreshing(false), 240);
   };
 
   const changeLayout = async (nextLayout) => {
     if (nextLayout === layout) return;
     layoutTouchedRef.current = true;
     setLayout(nextLayout);
+    triggerPreviewRefresh();
     notify(`预览布局已切换为 ${nextLayout}`);
     try {
       await apiRequest(`/api/resumes/${resumeId}`, {
@@ -1375,6 +1459,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
     if (nextColor === themeColor) return;
     themeColorTouchedRef.current = true;
     setThemeColor(nextColor);
+    triggerPreviewRefresh();
     notify("主题色已应用到简历预览");
     try {
       await apiRequest(`/api/resumes/${resumeId}`, {
@@ -1598,9 +1683,9 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
             <strong>{activeSection}</strong>
             <div className="form-heading-actions">
               {activeSection === "基本信息" && <button type="button" className="link-button" onClick={addProfileField}><Plus size={14} />添加信息</button>}
-              <button className="link-button" onClick={() => saveResume()}>
-                <Save size={14} />
-                自动保存
+              <button className={`link-button ${saveState === "saved" ? "is-saved" : ""}`} disabled={saveState === "saving"} onClick={() => saveResume()}>
+                {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : <Save size={14} />}
+                {saveState === "saving" ? "正在保存" : saveState === "saved" ? "已保存" : "自动保存"}
               </button>
             </div>
           </div>
@@ -1698,7 +1783,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
           <span>A4 实时预览</span>
           <button type="button" onClick={() => exportResumePdf(resumePreviewRef.current, form.姓名 ? `${form.姓名}的简历` : "简历", notify)} aria-label="导出简历 PDF" title="导出简历 PDF"><Download size={16} /></button>
         </div>
-        <ResumePaper form={form} selfEvaluation={selfEvaluation} photoDataUrl={photoDataUrl} layout={layout} themeColor={themeColor} templateTone={templateTone} visibleSections={visibleSections} sectionOrder={moduleOrder} sectionContent={sectionContent} sectionDetails={sectionDetails} profileFields={profileFields} />
+        <div className={previewRefreshing ? "resume-paper-update" : ""}><ResumePaper form={form} selfEvaluation={selfEvaluation} photoDataUrl={photoDataUrl} layout={layout} themeColor={themeColor} templateTone={templateTone} visibleSections={visibleSections} sectionOrder={moduleOrder} sectionContent={sectionContent} sectionDetails={sectionDetails} profileFields={profileFields} /></div>
       </section>
     </section>
     </div>
@@ -1787,7 +1872,7 @@ function SortableModuleRow({ item, isActive, isVisible, onSelect, onToggle, onRe
   const Icon = item.icon;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.label });
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: `${CSS.Transform.toString(transform) || ""}${isDragging ? " scale(1.01)" : ""}`,
     transition,
   };
 
@@ -2064,9 +2149,10 @@ function ResumeTemplatePreview({ template, color, featured = false, compact = fa
 }
 
 function TemplatePreviewDialog({ open, template, color, onClose, onApply }) {
-  if (!open) return null;
+  const { isMounted, isLeaving } = usePresence(open);
+  if (!isMounted) return null;
   return (
-    <div className="template-preview-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className={`template-preview-backdrop ${isLeaving ? "is-leaving" : ""}`} role="presentation" onMouseDown={onClose}>
       <section className="template-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="template-preview-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="template-preview-dialog-head">
           <div>
@@ -2099,10 +2185,8 @@ function TemplatePreviewDialog({ open, template, color, onClose, onApply }) {
   );
 }
 
-function AiToolsPanel({ notify, go }) {
+function AiToolsPanel({ notify, go, resumeId }) {
   const generatePositionKeywords = () => {
-    const targetPosition = readWorkspaceValue("lingxi-target-position", resume.title);
-    window.sessionStorage.setItem(workspaceStorageKey("lingxi-analysis-request"), targetPosition);
     go("analysis");
   };
 
@@ -2119,30 +2203,30 @@ function AiToolsPanel({ notify, go }) {
           <button className="black-small" onClick={() => go("interview")}>模拟面试</button>
         </div>
       </div>
-      <GrammarPanel notify={notify} />
+      <GrammarPanel notify={notify} resumeId={resumeId} />
     </section>
   );
 }
 
-function GrammarPanel({ notify }) {
-  const [content, setContent] = useState("负责招聘平台页面开发，完成筛选和面试排期功能，Thier 页面响应比较快。");
+function GrammarPanel({ notify, resumeId }) {
+  const [content, setContent] = useState("");
   const [checking, setChecking] = useState(false);
-  const [result, setResult] = useState({
-    score: 82,
-    issues: [
-      { type: "拼写", original: "Thier", suggestion: "Their", reason: "英文拼写错误" },
-      { type: "表达", original: "负责", suggestion: "主导", reason: "动词更有行动感" },
-    ],
-  });
+  const [resultVersion, setResultVersion] = useState(0);
+  const [result, setResult] = useState(null);
 
   const runCheck = async () => {
+    if (!resumeId) {
+      notify("请先在我的简历中选择一份简历");
+      return;
+    }
     setChecking(true);
     try {
-      const data = await apiRequest("/api/resumes/current/grammar-check", {
+      const data = await apiRequest(`/api/resumes/${resumeId}/grammar-check`, {
         method: "POST",
         body: JSON.stringify({ content }),
       });
       setResult(data.item);
+      setResultVersion((current) => current + 1);
       notify("语法检查完成，记录已归档");
     } catch (error) {
       notify(`语法检查失败: ${error.message}`);
@@ -2162,8 +2246,9 @@ function GrammarPanel({ notify }) {
           {checking ? "检查中..." : "开始检查"}
         </button>
       </div>
-      <div className="grammar-result">
-        <span>{Number.isFinite(Number(result.score)) ? Number(result.score) : "--"} 分</span>
+      <div className={`grammar-result ${resultVersion ? "ai-result-enter" : ""}`} key={resultVersion}>
+        {checking ? <ResultSkeleton lines={3} /> : result ? <>
+        <span><AnimatedScore value={result.score} shouldAnimate={resultVersion > 0} /> 分</span>
         <h3>检查结果</h3>
         {(result.issues || []).length === 0 && (
           <article>
@@ -2173,15 +2258,184 @@ function GrammarPanel({ notify }) {
           </article>
         )}
         {(result.issues || []).map((issue, index) => (
-          <article key={`${issue.original}-${index}`}>
+          <article className={resultVersion ? "card-stagger" : ""} style={{ "--stagger-index": index }} key={`${issue.original}-${index}`}>
             <strong>{issue.type}</strong>
             <p>{issue.original} → {issue.suggestion}</p>
             <small>{issue.reason}</small>
           </article>
         ))}
+        </> : <article><strong>尚未开始检查</strong><p>输入需要检查的简历段落后开始检查，结果会绑定当前选中的简历。</p></article>}
       </div>
     </section>
   );
+}
+
+function ResultSkeleton({ lines = 3 }) {
+  return <div className="result-skeleton" aria-label="正在加载结果">{Array.from({ length: lines }, (_, index) => <span className="skeleton" key={index} style={{ "--skeleton-width": `${92 - index * 12}%` }} />)}</div>;
+}
+
+function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
+  const [mode, setMode] = useState("list");
+  const [jobs, setJobs] = useState([]);
+  const [detail, setDetail] = useState(null);
+  const [resumes, setResumes] = useState([]);
+  const [applications, setApplications] = useState([]);
+  const [selectedResumeId, setSelectedResumeId] = useState(activeResumeId || "");
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
+  const [editingId, setEditingId] = useState(null);
+
+  const loadJobs = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await apiRequest("/api/job-descriptions");
+      setJobs(data.items || []);
+    } catch (error) {
+      notify(`读取岗位 JD 失败: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [notify]);
+
+  const loadDetail = useCallback(async (jobId) => {
+    try {
+      setLoading(true);
+      const [jobData, resumeData, applicationData] = await Promise.all([
+        apiRequest(`/api/job-descriptions/${jobId}`),
+        apiRequest("/api/resumes"),
+        apiRequest("/api/job-applications"),
+      ]);
+      setDetail(jobData);
+      setResumes(resumeData.items || []);
+      setApplications((applicationData.items || []).filter((item) => item.jobDescriptionId === Number(jobId)));
+      setSelectedResumeId((current) => current || activeResumeId || resumeData.items?.[0]?.id || "");
+      setMode("detail");
+    } catch (error) {
+      notify(`读取岗位详情失败: ${error.message}`);
+      setMode("list");
+    } finally {
+      setLoading(false);
+    }
+  }, [activeResumeId, notify]);
+
+  useEffect(() => { loadJobs(); }, [loadJobs]);
+  useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
+
+  const saveJob = async () => {
+    if (!form.rawText.trim()) {
+      notify("请粘贴完整岗位 JD 原文");
+      return;
+    }
+    setWorking(true);
+    try {
+      const data = await apiRequest(editingId ? `/api/job-descriptions/${editingId}` : "/api/job-descriptions", { method: editingId ? "PUT" : "POST", body: JSON.stringify(form) });
+      notify(editingId ? "岗位 JD 已更新，请重新解析" : "岗位 JD 已保存，可开始 AI 解析");
+      await loadJobs();
+      await loadDetail(data.item.id);
+      setForm({ title: "", companyName: "", sourceUrl: "", rawText: "" });
+      setEditingId(null);
+    } catch (error) {
+      notify(`保存岗位 JD 失败: ${error.message}`);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const parseJob = async () => {
+    if (!detail?.item?.id) return;
+    setWorking(true);
+    try {
+      await apiRequest(`/api/job-descriptions/${detail.item.id}/parse`, { method: "POST" });
+      notify("JD 已解析，所有结论均附带原文依据");
+      await loadJobs();
+      await loadDetail(detail.item.id);
+    } catch (error) {
+      notify(`JD 解析失败，已保留原始 JD，可修改后重试: ${error.message}`);
+      await loadDetail(detail.item.id);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const createApplication = async () => {
+    if (!detail?.item?.id || !selectedResumeId) {
+      notify("请先选择一份简历");
+      return;
+    }
+    setWorking(true);
+    try {
+      await apiRequest("/api/job-applications", {
+        method: "POST",
+        body: JSON.stringify({ resumeId: Number(selectedResumeId), jobDescriptionId: detail.item.id }),
+      });
+      notify("求职分析任务已建立，已锁定简历版本与 JD 解析结果");
+      await loadDetail(detail.item.id);
+    } catch (error) {
+      notify(`创建分析任务失败: ${error.message}`);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  if (mode === "create") {
+    return (
+      <section className="job-page job-editor-page">
+        <div className="job-page-head">
+          <div><span className="section-kicker">{editingId ? "编辑岗位 JD" : "新建岗位 JD"}</span><h2>{editingId ? "更新真实招聘信息" : "保存真实招聘信息"}</h2><p>原始 JD 会被完整保留，AI 解析失败后也可以修改并重新解析。</p></div>
+          <button className="white-small" onClick={() => { setEditingId(null); setMode("list"); }}>返回岗位列表</button>
+        </div>
+        <div className="job-editor-form">
+          <label>岗位名称<input value={form.title} placeholder="例如：Java 后端开发工程师" onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} /></label>
+          <label>公司名称<input value={form.companyName} placeholder="例如：灵犀科技" onChange={(event) => setForm((current) => ({ ...current, companyName: event.target.value }))} /></label>
+          <label className="job-form-wide">来源链接<input type="url" value={form.sourceUrl} placeholder="https://..." onChange={(event) => setForm((current) => ({ ...current, sourceUrl: event.target.value }))} /></label>
+          <label className="job-form-wide">完整 JD 原文<textarea value={form.rawText} placeholder="粘贴职位职责、任职要求、加分项等完整招聘信息" onChange={(event) => setForm((current) => ({ ...current, rawText: event.target.value }))} /></label>
+          <div className="job-editor-actions"><button className="black-small" disabled={working} onClick={saveJob}>{working ? "正在保存" : editingId ? "保存修改" : "保存岗位 JD"}</button></div>
+        </div>
+      </section>
+    );
+  }
+
+  if (mode === "detail" && detail?.item) {
+    const job = detail.item;
+    const parsed = detail.currentParseResult?.parsedData;
+    return (
+      <section className="job-page job-detail-page">
+        <div className="job-page-head">
+          <div><span className="section-kicker">岗位详情</span><h2>{job.title}</h2><p>{job.companyName || "未填写公司名称"} · {job.parseStatus === "SUCCEEDED" ? "已完成结构化解析" : job.parseStatus === "FAILED" ? "上次解析失败" : "尚未解析"}</p></div>
+          <div className="job-page-actions"><button className="white-small" onClick={() => setMode("list")}>岗位列表</button><button className="white-small" onClick={() => { setEditingId(job.id); setForm({ title: job.title || "", companyName: job.companyName || "", sourceUrl: job.sourceUrl || "", rawText: job.rawText || "" }); setMode("create"); }}>编辑 JD</button><button className="black-small" disabled={working} onClick={parseJob}>{working ? "AI 正在解析" : parsed ? "重新解析" : "开始 AI 解析"}</button></div>
+        </div>
+        <div className="job-detail-grid">
+          <section className="job-source-panel"><h3>原始 JD</h3>{job.sourceUrl && <a href={job.sourceUrl} target="_blank" rel="noreferrer">打开来源链接</a>}<pre>{job.rawText}</pre>{job.lastParseError && <p className="job-error">上次失败：{job.lastParseError}</p>}</section>
+          <section className="job-parse-panel">
+            <h3>结构化解析</h3>
+            {parsed ? <JobParseResult parsed={parsed} /> : <div className="job-empty"><strong>尚未生成解析结果</strong><p>先保存原始 JD，再使用 AI 提取职责、必需条件和加分项。</p></div>}
+          </section>
+        </div>
+        <section className="job-application-panel">
+          <div><h3>建立求职分析任务</h3><p>任务会锁定所选简历的当前版本和当前 JD 解析结果。</p></div>
+          <div className="job-application-controls"><select value={selectedResumeId} onChange={(event) => setSelectedResumeId(event.target.value)}><option value="">选择简历</option>{resumes.map((resumeItem) => <option key={resumeItem.id} value={resumeItem.id}>{resumeItem.title || `简历 #${resumeItem.id}`}</option>)}</select><button className="black-small" disabled={working || !parsed || !selectedResumeId} onClick={createApplication}>创建分析任务</button></div>
+          {activeResumeId && <button className="link-button" onClick={() => onOpenResume?.(activeResumeId)}>打开当前简历</button>}
+          {!resumes.length && <button className="link-button" onClick={() => go?.("resume")}>先创建简历</button>}
+          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <p key={item.id}>简历 #{item.resumeId} · v{item.resumeVersion} · {item.status}</p>)}</div>}
+        </section>
+      </section>
+    );
+  }
+
+  return (
+    <section className="job-page">
+      <div className="job-page-head"><div><span className="section-kicker">岗位 JD</span><h2>针对真实招聘信息准备简历</h2><p>保存原文、解析明确要求，再与具体简历建立分析任务。</p></div><button className="black-small" onClick={() => { setEditingId(null); setForm({ title: "", companyName: "", sourceUrl: "", rawText: "" }); setMode("create"); }}>新建岗位 JD</button></div>
+      {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <button className="job-list-item" key={job.id} onClick={() => loadDetail(job.id)}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
+    </section>
+  );
+}
+
+function JobParseResult({ parsed }) {
+  const groups = [
+    ["岗位名称", [parsed.jobTitle]], ["公司名称", [parsed.companyName]], ["职责", parsed.responsibilities], ["必需技能", parsed.requiredSkills], ["加分技能", parsed.preferredSkills], ["学历要求", parsed.educationRequirements], ["经验要求", parsed.experienceRequirements], ["技术关键词", parsed.technicalKeywords], ["软技能", parsed.softSkills], ["级别", [parsed.seniority]], ["不确定项", parsed.uncertainties],
+  ];
+  return <div className="job-parse-groups">{groups.map(([label, items]) => <section key={label}><h4>{label}</h4>{items?.length ? <ul>{items.map((item, index) => <li key={`${label}-${index}`}><strong>{item.text}</strong>{item.evidence && <small>原文：{item.evidence}</small>}</li>)}</ul> : <p>JD 未明确说明</p>}</section>)}</div>;
 }
 
 function ProviderSettings({ notify }) {
@@ -2282,11 +2536,8 @@ function ProviderSettings({ notify }) {
   );
 }
 
-function InterviewPractice({ notify, go }) {
-  const [targetPosition, setTargetPosition] = useState(() => {
-    if (typeof window === "undefined") return resume.title;
-    return readWorkspaceValue("lingxi-target-position", resume.title);
-  });
+function InterviewPractice({ notify, go, resumeId }) {
+  const [targetPosition, setTargetPosition] = useState("");
   const [questionCount, setQuestionCount] = useState(4);
   const [interview, setInterview] = useState(null);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
@@ -2298,6 +2549,22 @@ function InterviewPractice({ notify, go }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isReporting, setIsReporting] = useState(false);
   const [needsAiConfig, setNeedsAiConfig] = useState(false);
+  const [feedbackVersion, setFeedbackVersion] = useState(0);
+  const [reportVersion, setReportVersion] = useState(0);
+
+  useEffect(() => {
+    if (!resumeId) {
+      setTargetPosition("");
+      return undefined;
+    }
+    let disposed = false;
+    apiRequest(`/api/resumes/${resumeId}`)
+      .then(({ item }) => {
+        if (!disposed) setTargetPosition(item.targetPosition || item.currentPosition || "");
+      })
+      .catch((error) => !disposed && notify(`读取当前简历失败: ${error.message}`));
+    return () => { disposed = true; };
+  }, [notify, resumeId]);
 
   const currentQuestion = interview?.questions?.[activeQuestionIndex];
   const progress = interview ? Math.round((answers.length / interview.questionCount) * 100) : 0;
@@ -2311,6 +2578,10 @@ function InterviewPractice({ notify, go }) {
   };
 
   const startInterview = async () => {
+    if (!resumeId) {
+      notify("请先在我的简历中选择一份简历");
+      return;
+    }
     const nextTargetPosition = targetPosition.trim();
     if (!nextTargetPosition) {
       notify("请先填写目标岗位");
@@ -2320,7 +2591,7 @@ function InterviewPractice({ notify, go }) {
     try {
       const data = await apiRequest("/api/interviews", {
         method: "POST",
-        body: JSON.stringify({ resumeId: 1, targetPosition: nextTargetPosition, questionCount }),
+        body: JSON.stringify({ resumeId, targetPosition: nextTargetPosition, questionCount }),
       });
       writeWorkspaceValue("lingxi-target-position", nextTargetPosition);
       setInterview(data.item);
@@ -2352,6 +2623,7 @@ function InterviewPractice({ notify, go }) {
       setInterview(data.interview);
       setAnswers((current) => [...current, data.item]);
       setFeedback(data.item);
+      setFeedbackVersion((current) => current + 1);
       setNeedsAiConfig(false);
       notify(data.nextQuestion ? "AI 已评分并生成追问" : "本轮回答已评分，可以生成面试报告");
     } catch (error) {
@@ -2375,6 +2647,7 @@ function InterviewPractice({ notify, go }) {
       const data = await apiRequest(`/api/interviews/${interview.id}/report`, { method: "POST" });
       setInterview(data.item);
       setReport(data.report);
+      setReportVersion((current) => current + 1);
       setNeedsAiConfig(false);
       notify("AI 面试报告已生成并保存到历史记录");
     } catch (error) {
@@ -2427,7 +2700,7 @@ function InterviewPractice({ notify, go }) {
   if (report) {
     return (
       <section className="interview-report">
-        <div className="report-score">{report.totalScore}</div>
+        <div className="report-score"><AnimatedScore value={report.totalScore} shouldAnimate={reportVersion > 0} /></div>
         <span className="section-kicker">{interview.targetPosition} 面试报告</span>
         <h2>本次模拟面试已完成</h2>
         <p>{report.summary}</p>
@@ -2491,10 +2764,10 @@ function InterviewPractice({ notify, go }) {
           </button>
         )}
       </div>
-      <div className="feedback-card">
+      <div className={`feedback-card ${feedbackVersion ? "ai-result-enter" : ""}`} key={feedbackVersion}>
         {feedback ? (
           <>
-            <span>{feedback.score} 分</span>
+            <span><AnimatedScore value={feedback.score} shouldAnimate={feedbackVersion > 0} /> 分</span>
             <h3>AI 反馈</h3>
             <p>{feedback.feedback}</p>
             <h4>改进后的回答思路</h4>
@@ -2577,7 +2850,7 @@ function GeneralSettings({ notify, currentUser, onUserUpdated }) {
   );
 }
 
-function HistoryPage({ notify }) {
+function HistoryPage({ notify, resumeId }) {
   const [history, setHistory] = useState([]);
   const [analysis, setAnalysis] = useState([]);
   const [optimize, setOptimize] = useState([]);
@@ -2585,13 +2858,21 @@ function HistoryPage({ notify }) {
   const [interviews, setInterviews] = useState([]);
 
   const loadHistory = async () => {
+    if (!resumeId) {
+      setHistory([]);
+      setAnalysis([]);
+      setOptimize([]);
+      setGrammar([]);
+      setInterviews([]);
+      return;
+    }
     try {
       const [resumeHistory, analysisRecords, optimizeRecords, grammarRecords, interviewRecords] = await Promise.all([
-        apiRequest("/api/resumes/current/history"),
-        apiRequest("/api/records/analysis"),
-        apiRequest("/api/records/optimize"),
-        apiRequest("/api/records/grammar"),
-        apiRequest("/api/records/interviews"),
+        apiRequest(`/api/resumes/${resumeId}/history`),
+        apiRequest(`/api/records/analysis?resumeId=${resumeId}`),
+        apiRequest(`/api/records/optimize?resumeId=${resumeId}`),
+        apiRequest(`/api/records/grammar?resumeId=${resumeId}`),
+        apiRequest(`/api/records/interviews?resumeId=${resumeId}`),
       ]);
       setHistory(resumeHistory.items || []);
       setAnalysis(analysisRecords.items || []);
@@ -2606,14 +2887,14 @@ function HistoryPage({ notify }) {
 
   useEffect(() => {
     loadHistory();
-  }, []);
+  }, [resumeId]);
 
   return (
     <section className="records-page">
       <div className="records-head">
         <div>
           <span className="section-kicker">记录归档</span>
-          <p>保存简历版本、AI 诊断、润色和面试反馈归档。</p>
+          <p>{resumeId ? `展示简历 #${resumeId} 的版本、AI 诊断、润色和面试反馈。` : "请先在我的简历中选择一份简历。"}</p>
         </div>
         <button className="black-small" onClick={loadHistory}>刷新记录</button>
       </div>
@@ -2685,35 +2966,54 @@ function AdminPanel({ notify }) {
   );
 }
 
-function AnalysisPanel({ notify, go }) {
-  const [targetPosition, setTargetPosition] = useState(() => {
-    if (typeof window === "undefined") return resume.title;
-    return readWorkspaceValue("lingxi-target-position", resume.title);
-  });
+function AnalysisPanel({ notify, go, resumeId }) {
+  const [targetPosition, setTargetPosition] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [needsAiConfig, setNeedsAiConfig] = useState(false);
   const [applyingKeyword, setApplyingKeyword] = useState("");
-  const [analysis, setAnalysis] = useState({
-    totalScore: 86,
-    analysisResult: "简历基础完整，项目经历与目标岗位相关，但还需要补充量化成果和技术决策过程。",
-    keywords: [],
-    suggestions: ["补充量化结果", "突出 React 与 TypeScript 项目", "准备项目追问案例"],
-  });
+  const [appliedKeyword, setAppliedKeyword] = useState("");
+  const [resultVersion, setResultVersion] = useState(0);
+  const [analysis, setAnalysis] = useState(null);
+
+  useEffect(() => {
+    if (!resumeId) {
+      setTargetPosition("");
+      setAnalysis(null);
+      return undefined;
+    }
+    let disposed = false;
+    apiRequest(`/api/resumes/${resumeId}`)
+      .then(({ item }) => {
+        if (!disposed) setTargetPosition(item.targetPosition || item.currentPosition || "");
+      })
+      .catch((error) => !disposed && notify(`读取当前简历失败: ${error.message}`));
+    return () => { disposed = true; };
+  }, [notify, resumeId]);
 
   const runAnalysis = useCallback(async (requestedTargetPosition = targetPosition) => {
+    if (!resumeId) {
+      notify("请先在我的简历中选择一份简历");
+      return;
+    }
     const nextTargetPosition = requestedTargetPosition.trim();
     if (!nextTargetPosition) {
       notify("请先在我的简历中填写目标岗位");
       return;
     }
 
+    // A new request must never leave an older result visible if the provider
+    // rejects the new request.
+    setAnalysis(null);
+    setResultVersion(0);
+    setNeedsAiConfig(false);
     setIsLoading(true);
     try {
-      const data = await apiRequest("/api/resumes/current/analyze", {
+      const data = await apiRequest(`/api/resumes/${resumeId}/analyze`, {
         method: "POST",
         body: JSON.stringify({ targetPosition: nextTargetPosition }),
       });
       setAnalysis(data.item);
+      setResultVersion((current) => current + 1);
       setTargetPosition(data.item.targetPosition || nextTargetPosition);
       setNeedsAiConfig(false);
       notify("AI 诊断已完成并保存记录");
@@ -2724,36 +3024,32 @@ function AnalysisPanel({ notify, go }) {
     } finally {
       setIsLoading(false);
     }
-  }, [notify, targetPosition]);
-
-  useEffect(() => {
-    const analysisRequestKey = workspaceStorageKey("lingxi-analysis-request");
-    const requestedTargetPosition = window.sessionStorage.getItem(analysisRequestKey);
-    if (!requestedTargetPosition) return;
-    window.sessionStorage.removeItem(analysisRequestKey);
-    runAnalysis(requestedTargetPosition);
-  }, [runAnalysis]);
+  }, [notify, resumeId, targetPosition]);
 
   const applyKeyword = async (keyword) => {
     if (!keyword || applyingKeyword) return;
     setApplyingKeyword(keyword);
     try {
-      const resumeData = await apiRequest("/api/resumes/current");
-      const currentSummary = String(resumeData.item?.selfEvaluation || readWorkspaceValue("lingxi-resume-summary") || "").trim();
+      if (!resumeId) {
+        notify("请先在我的简历中选择一份简历");
+        return;
+      }
+      const resumeData = await apiRequest(`/api/resumes/${resumeId}`);
+      const currentSummary = String(resumeData.item?.selfEvaluation || "").trim();
       if (currentSummary.toLowerCase().includes(keyword.toLowerCase())) {
         notify(`个人简介已包含“${keyword}”`);
         return;
       }
 
       const nextSummary = currentSummary ? `${currentSummary}；${keyword}` : keyword;
-      await apiRequest("/api/resumes/current", {
+      await apiRequest(`/api/resumes/${resumeId}`, {
         method: "PUT",
         body: JSON.stringify({
           selfEvaluation: nextSummary,
           summary: `将 AI 关键词“${keyword}”加入个人简介`,
         }),
       });
-      writeWorkspaceValue("lingxi-resume-summary", nextSummary);
+      setAppliedKeyword(keyword);
       notify(`已将“${keyword}”加入个人简介`);
     } catch (error) {
       notify(`加入关键词失败: ${error.message}`);
@@ -2763,16 +3059,16 @@ function AnalysisPanel({ notify, go }) {
   };
 
   return (
-    <section className="simple-panel">
+    <section className={`simple-panel analysis-panel ${resultVersion ? "has-ai-result" : ""}`}>
       <div className={`score-circle ${isLoading ? "is-loading" : ""}`}>
-        {isLoading ? <LoaderCircle size={44} /> : analysis.totalScore}
+        {isLoading ? <LoaderCircle size={44} /> : <AnimatedScore value={analysis?.totalScore} shouldAnimate={resultVersion > 0} />}
       </div>
-      <h2>{isLoading ? "正在生成岗位匹配结果" : `${analysis.targetPosition || targetPosition}匹配度${analysis.totalScore >= 85 ? "较高" : "待提升"}`}</h2>
+      <h2>{isLoading ? "正在生成岗位匹配结果" : analysis ? `${analysis.targetPosition || targetPosition}匹配度${analysis.totalScore >= 85 ? "较高" : "待提升"}` : "尚未生成岗位匹配结果"}</h2>
       <div className="analysis-target">
         <span>岗位方向</span>
-        <strong>{analysis.targetPosition || targetPosition}</strong>
+        <strong>{analysis?.targetPosition || targetPosition || "请先选择简历"}</strong>
       </div>
-      <p>{analysis.analysisResult}</p>
+      {isLoading ? <ResultSkeleton lines={3} /> : <p>{analysis?.analysisResult || "选择简历后可生成真实 AI 诊断，不展示默认分数或建议。"}</p>}
       {needsAiConfig && (
         <div className="ai-config-callout">
           <span>尚未配置可用的 AI 服务，无法生成真实关键词和匹配度。</span>
@@ -2782,22 +3078,30 @@ function AnalysisPanel({ notify, go }) {
       <div className="analysis-keywords">
         <span>AI 生成的岗位关键词，点击加入个人简介</span>
         <div className="simple-list">
-          {(analysis.keywords || []).map((item) => (
+          {(analysis?.keywords || []).map((item, index) => (
             <button
-              className="keyword-chip"
+              className={`keyword-chip ${resultVersion ? "card-stagger" : ""} ${appliedKeyword === item ? "is-applied" : ""}`}
+              style={{ "--stagger-index": index }}
               key={item}
               type="button"
               disabled={Boolean(applyingKeyword)}
               onClick={() => applyKeyword(item)}
             >
-              {applyingKeyword === item ? "正在加入" : item}
+              {applyingKeyword === item ? "正在加入" : appliedKeyword === item ? "已加入" : item}
             </button>
           ))}
-          {!isLoading && !analysis.keywords?.length && <span>点击生成岗位关键词后显示</span>}
+          {!isLoading && !analysis?.keywords?.length && <span>生成诊断后显示岗位关键词</span>}
         </div>
       </div>
+      {analysis && resultVersion > 0 && <div className="analysis-metrics" aria-label="诊断维度">
+        {[["岗位匹配", "matchScore"], ["关键词覆盖", "keywordScore"], ["项目成果", "projectScore"], ["完整度", "completenessScore"]].map(([label, field], index) => {
+          const rawScore = analysis[field];
+          const score = typeof rawScore === "number" && Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : null;
+          return <div className="analysis-metric card-stagger" style={{ "--stagger-index": index }} key={field}><span>{label}</span><i>{score !== null && <b style={{ "--metric-value": `${score}%` }} />}</i><strong>{score === null ? "--" : `${score}%`}</strong></div>;
+        })}
+      </div>}
       <div className="simple-list">
-        {(analysis.suggestions || []).map((item) => <span key={item}>{item}</span>)}
+        {(analysis?.suggestions || []).map((item, index) => <span className={resultVersion ? "card-stagger" : ""} style={{ "--stagger-index": index }} key={item}>{item}</span>)}
       </div>
       <button className="black-small" onClick={() => runAnalysis()} disabled={isLoading}>
         {isLoading ? <LoaderCircle className="spin" size={16} /> : <Gauge size={16} />}
@@ -2807,20 +3111,30 @@ function AnalysisPanel({ notify, go }) {
   );
 }
 
-function OptimizePanel({ notify }) {
-  const [content, setContent] = useState("负责招聘平台页面开发，完成筛选和面试排期功能。");
-  const [optimized, setOptimized] = useState("将项目经历改为结果导向表达，补充性能提升、组件复用和接口联调等关键词。");
+function OptimizePanel({ notify, resumeId }) {
+  const [content, setContent] = useState("");
+  const [optimized, setOptimized] = useState("");
+  const [optimizing, setOptimizing] = useState(false);
+  const [resultVersion, setResultVersion] = useState(0);
 
   const runOptimize = async () => {
+    if (!resumeId) {
+      notify("请先在我的简历中选择一份简历");
+      return;
+    }
+    setOptimizing(true);
     try {
-      const data = await apiRequest("/api/resumes/current/optimize", {
+      const data = await apiRequest(`/api/resumes/${resumeId}/optimize`, {
         method: "POST",
         body: JSON.stringify({ optimizeType: "project_experience", content }),
       });
       setOptimized(data.item.optimizedContent);
+      setResultVersion((current) => current + 1);
       notify("AI 润色已完成并保存记录");
     } catch (error) {
       notify(`润色失败: ${error.message}`);
+    } finally {
+      setOptimizing(false);
     }
   };
 
@@ -2829,10 +3143,10 @@ function OptimizePanel({ notify }) {
       <Sparkles size={42} />
       <h2>AI 优化建议</h2>
       <textarea value={content} onChange={(event) => setContent(event.target.value)} />
-      <p>{optimized}</p>
-      <button className="black-small" onClick={runOptimize}>
-        <Sparkles size={16} />
-        生成润色
+      {optimizing ? <ResultSkeleton lines={3} /> : <p className={resultVersion ? "ai-result-enter" : ""} key={resultVersion}>{optimized || "输入简历内容后生成真实润色结果。"}</p>}
+      <button className="black-small" disabled={optimizing} onClick={runOptimize}>
+        {optimizing ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
+        {optimizing ? "AI 正在润色" : "生成润色"}
       </button>
     </section>
   );

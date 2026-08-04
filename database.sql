@@ -244,3 +244,55 @@ INSERT INTO interview_question (position_id, question_text, question_type, diffi
 
 INSERT INTO system_notice (title, content) VALUES
 ('系统上线提示', 'AI 简历诊断、简历优化和模拟面试功能已开放体验。');
+
+-- ---------------------------------------------------------------------------
+-- Incremental production migration reference (Phase 1 / Phase 2)
+-- ---------------------------------------------------------------------------
+-- The running development application still persists to backend/data/store.json.
+-- Apply this section only to an existing production MySQL database after backing
+-- it up. It intentionally contains no DROP statements. MySQL does not support
+-- portable ADD COLUMN IF NOT EXISTS on all supported versions, so check
+-- information_schema.COLUMNS / SHOW COLUMNS before each ALTER when rerunning it.
+--
+-- ALTER TABLE resume_version_history
+--   ADD COLUMN content_hash CHAR(64) NULL COMMENT 'SHA-256 of normalized ResumeDTO',
+--   ADD COLUMN resume_version INT NULL COMMENT 'ResumeDTO version at snapshot time';
+-- CREATE INDEX idx_resume_version_history_resume_version
+--   ON resume_version_history (resume_id, resume_version);
+--
+-- ALTER TABLE resume_analysis_record
+--   ADD COLUMN resume_version INT NULL,
+--   ADD COLUMN resume_content_hash CHAR(64) NULL;
+-- CREATE INDEX idx_resume_analysis_record_user_resume
+--   ON resume_analysis_record (user_id, resume_id, resume_version);
+--
+-- ALTER TABLE resume_optimize_record
+--   ADD COLUMN resume_version INT NULL,
+--   ADD COLUMN resume_content_hash CHAR(64) NULL;
+-- CREATE INDEX idx_resume_optimize_record_user_resume
+--   ON resume_optimize_record (user_id, resume_id, resume_version);
+--
+-- ALTER TABLE resume_grammar_check_record
+--   ADD COLUMN resume_version INT NULL,
+--   ADD COLUMN resume_content_hash CHAR(64) NULL;
+-- CREATE INDEX idx_resume_grammar_record_user_resume
+--   ON resume_grammar_check_record (user_id, resume_id, resume_version);
+--
+-- ALTER TABLE mock_interview
+--   ADD COLUMN resume_id BIGINT NULL,
+--   ADD COLUMN resume_version INT NULL,
+--   ADD COLUMN resume_content_hash CHAR(64) NULL,
+--   ADD COLUMN resume_snapshot_json JSON NULL COMMENT 'Normalized ResumeDTO only; no photo payload';
+-- CREATE INDEX idx_mock_interview_user_resume
+--   ON mock_interview (user_id, resume_id, resume_version);
+--
+-- Phase 2 production tables (create once; map field names to existing naming
+-- conventions if the database already contains an equivalent table):
+-- CREATE TABLE job_description (... user_id, title, company_name, source_url,
+-- raw_text, raw_text_hash, parse_status, current_parse_result_id, created_at,
+-- updated_at ...);
+-- CREATE TABLE job_description_parse_result (... user_id, job_description_id,
+-- status, parsed_data_json, error_message, created_at ...);
+-- CREATE TABLE job_application (... user_id, resume_id, resume_version,
+-- resume_content_hash, job_description_id, job_description_parse_result_id,
+-- job_description_raw_text_hash, status, created_at ...);

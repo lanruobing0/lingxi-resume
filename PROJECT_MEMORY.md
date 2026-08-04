@@ -159,6 +159,15 @@ It is ignored by Git and must remain uncommitted.
 - Mock interviews are real AI sessions: target role input, resume-based opening question, answer score and feedback, AI follow-up questions, final report, and persisted history records.
 - Interview endpoints: `POST /api/interviews`, `POST /api/interviews/:id/answers`, `POST /api/interviews/:id/report`, and `GET /api/records/interviews`.
 
+## RAG Upgrade Progress (Phases 1-2 complete)
+
+- Runtime persistence remains `backend/data/store.json`; `database.sql` is a production schema/migration reference only.
+- Phase 1 normalizes editor data into `buildResumeDTO`. Provider prompts use PII-filtered `buildAiResumeContext`, while history retains full DTO snapshots. AI records bind `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`.
+- New mock-interview snapshots use ResumeDTO and exclude `photoDataUrl`; legacy raw snapshots remain readable through the converter.
+- Phase 2 stores user-owned JobDescription records, raw JD hashes, evidence-backed parse results, and JobApplication links that lock resume/JD parse versions. No RAG infrastructure has been added.
+- Record endpoints accept an optional positive `resumeId`; invalid values return 400. `GET /api/resumes/:id/versions` lists owned snapshots and `GET /api/resumes/:id/versions/:versionId` returns one owned version.
+- Regression suite: `pnpm test` uses temporary JSON stores and local mock AI servers only.
+
 ## Design Memory
 
 Keep the app calm, tool-like, and professional.

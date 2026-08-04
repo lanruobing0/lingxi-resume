@@ -137,6 +137,15 @@ Model: deepseek-chat
 The backend should fail visibly when AI is not configured or returns invalid content.
 Do not silently substitute fake AI output as success.
 
+### Resume/JD data-chain rules (RAG phases 1-2)
+
+- Every AI call is resolved through an owned, explicit `resumeId`; never use a “current” or most-recent resume fallback.
+- `buildResumeDTO` is the normalized local/version shape. `buildAiResumeContext` is the provider-safe derivative and must exclude name, email, phone, website, city, and profile fields.
+- AI records carry `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`. New interview snapshots are ResumeDTO snapshots without photo payloads.
+- Job descriptions and parse results are user-owned. A job application may only be created after the saved JD has a successful current parse result.
+- Record list endpoints accept an optional positive-integer `resumeId`; absent means the requesting user's full list, invalid values return 400.
+- Run `pnpm test` for the isolated JD and data-isolation integration tests. They use a temporary JSON store and local mock AI server.
+
 ## Verification Expectations
 
 After behavior changes:

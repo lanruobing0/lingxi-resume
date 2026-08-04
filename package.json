@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:api": "node backend/server.js",
+    "test": "node tests/job-description.integration.mjs && node tests/isolation.integration.mjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"
   },

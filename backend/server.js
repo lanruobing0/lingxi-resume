@@ -7,7 +7,7 @@ import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSa
 import { promisify } from "node:util";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "data");
+const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
 const dataFile = path.join(dataDir, "store.json");
 const port = Number(process.env.API_PORT || 8787);
 const maxJsonBodyBytes = 9 * 1024 * 1024;
@@ -174,6 +174,9 @@ const seedData = {
       referenceAnswer: "可从资源体积、接口耗时、渲染阻塞、缓存策略和代码分割等角度回答。",
     },
   ],
+  jobDescriptions: [],
+  jobDescriptionParseResults: [],
+  jobApplications: [],
   mockInterviews: [],
   interviewAnswers: [],
   systemNotices: [
@@ -385,6 +388,178 @@ function nextId(items) {
   return items.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1;
 }
 
+function parseOptionalPositiveInteger(value, fieldName) {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const normalized = String(value).trim();
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new HttpError(400, `${fieldName} must be a positive integer`);
+  }
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed)) throw new HttpError(400, `${fieldName} must be a positive integer`);
+  return parsed;
+}
+
+function textItems(items = []) {
+  return Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
+}
+
+function normalizedStructuredEntries(entries = [], fallbackLines = []) {
+  if (Array.isArray(entries) && entries.length) {
+    return entries.map((entry, index) => ({
+      id: String(entry?.id || `entry-${index + 1}`),
+      name: String(entry?.name || "").trim(),
+      role: String(entry?.role || "").trim(),
+      startDate: String(entry?.startDate || "").trim(),
+      endDate: String(entry?.endDate || "").trim(),
+      isCurrent: Boolean(entry?.isCurrent),
+      highlights: textItems(entry?.highlights),
+    }));
+  }
+  if (Array.isArray(fallbackLines) && fallbackLines.some((item) => item && typeof item === "object")) {
+    return fallbackLines.filter((item) => item && typeof item === "object").map((entry, index) => ({
+      id: String(entry.id || `legacy-${index + 1}`),
+      name: String(entry.name || entry.projectName || entry.companyName || "").trim(),
+      role: String(entry.role || entry.roleName || entry.jobTitle || "").trim(),
+      startDate: String(entry.startDate || "").trim(),
+      endDate: String(entry.endDate || "").trim(),
+      isCurrent: Boolean(entry.isCurrent),
+      highlights: textItems([
+        entry.responsibility,
+        entry.resultDesc,
+        entry.projectDesc,
+        entry.workContent,
+        entry.description,
+      ]),
+    }));
+  }
+  return textItems(fallbackLines).map((text, index) => ({
+    id: `legacy-${index + 1}`,
+    name: "",
+    role: "",
+    startDate: "",
+    endDate: "",
+    isCurrent: false,
+    highlights: [text],
+  }));
+}
+
+// ResumeDTO is the single normalized shape used by AI features and version snapshots.
+// It preserves all editor content while keeping legacy `sections` data readable during migration.
+function buildResumeDTO(resume = {}) {
+  // Version snapshots are already in DTO form. Rebuild their hash from the
+  // supported fields so AI calls work for both new DTO snapshots and legacy
+  // raw resume snapshots without copying editor-only payloads.
+  if (Array.isArray(resume.sections) && resume.basicInfo && Object.hasOwn(resume, "resumeVersion")) {
+    const dto = {
+      id: Number(resume.id) || null,
+      userId: Number(resume.userId) || null,
+      resumeVersion: Number(resume.resumeVersion) || 1,
+      title: String(resume.title || "").trim(),
+      targetPosition: String(resume.targetPosition || "").trim(),
+      targetPositionId: Number(resume.targetPositionId) || null,
+      basicInfo: {
+        realName: String(resume.basicInfo.realName || "").trim(),
+        currentPosition: String(resume.basicInfo.currentPosition || resume.title || "").trim(),
+        email: String(resume.basicInfo.email || "").trim(),
+        phone: String(resume.basicInfo.phone || "").trim(),
+        city: String(resume.basicInfo.city || "").trim(),
+        website: String(resume.basicInfo.website || "").trim(),
+        profileFields: Array.isArray(resume.basicInfo.profileFields) ? resume.basicInfo.profileFields : [],
+      },
+      selfEvaluation: String(resume.selfEvaluation || "").trim(),
+      sections: resume.sections,
+    };
+    return { ...dto, contentHash: createHash("sha256").update(JSON.stringify(dto)).digest("hex") };
+  }
+  const sectionContent = resume.sectionContent && typeof resume.sectionContent === "object" ? resume.sectionContent : {};
+  const sectionDetails = resume.sectionDetails && typeof resume.sectionDetails === "object" ? resume.sectionDetails : {};
+  const legacySections = resume.sections && typeof resume.sections === "object" ? resume.sections : {};
+  const profileFields = Array.isArray(resume.profileFields)
+    ? resume.profileFields.map((field, index) => ({
+      id: String(field?.id || `profile-${index + 1}`),
+      label: String(field?.label || "").trim(),
+      value: String(field?.value || "").trim(),
+    })).filter((field) => field.label || field.value)
+    : [];
+  const labels = [...new Set([
+    ...(Array.isArray(resume.moduleOrder) ? resume.moduleOrder : []),
+    ...Object.keys(sectionContent),
+    ...Object.keys(sectionDetails),
+  ])];
+  const standard = [
+    { key: "skills", label: "\u4e13\u4e1a\u6280\u80fd", legacy: legacySections.skills },
+    { key: "work", label: "\u5de5\u4f5c\u7ecf\u5386", legacy: legacySections.work },
+    { key: "projects", label: "\u9879\u76ee\u7ecf\u5386", legacy: legacySections.projects },
+  ];
+  const standardLabels = new Set(standard.map((item) => item.label));
+  const sections = standard.map(({ key, label, legacy }) => ({
+    key,
+    label,
+    entries: normalizedStructuredEntries(sectionDetails[label], sectionContent[label] || legacy),
+  }));
+  labels.filter((label) => !standardLabels.has(label) && label !== "\u57fa\u672c\u4fe1\u606f").forEach((label) => {
+    sections.push({
+      key: `custom:${label}`,
+      label,
+      entries: normalizedStructuredEntries(sectionDetails[label], sectionContent[label]),
+    });
+  });
+  const dto = {
+    id: Number(resume.id) || null,
+    userId: Number(resume.userId) || null,
+    resumeVersion: Number(resume.version) || 1,
+    title: String(resume.title || "").trim(),
+    targetPosition: String(resume.targetPosition || "").trim(),
+    targetPositionId: Number(resume.targetPositionId) || null,
+    basicInfo: {
+      realName: String(resume.realName || "").trim(),
+      currentPosition: String(resume.currentPosition || resume.title || "").trim(),
+      email: String(resume.email || "").trim(),
+      phone: String(resume.phone || "").trim(),
+      city: String(resume.city || "").trim(),
+      website: String(resume.website || "").trim(),
+      profileFields,
+    },
+    selfEvaluation: String(resume.selfEvaluation || "").trim(),
+    sections,
+  };
+  return { ...dto, contentHash: createHash("sha256").update(JSON.stringify(dto)).digest("hex") };
+}
+
+function buildAiResumeContext(resume = {}) {
+  const dto = buildResumeDTO(resume);
+  return {
+    resumeId: dto.id,
+    resumeVersion: dto.resumeVersion,
+    resumeContentHash: dto.contentHash,
+    title: dto.title,
+    targetPosition: dto.targetPosition,
+    // Contact and profile fields stay in the local ResumeDTO/history only.
+    // AI providers receive only job-relevant resume content.
+    currentPosition: dto.basicInfo.currentPosition,
+    selfEvaluation: dto.selfEvaluation,
+    sections: dto.sections,
+  };
+}
+
+function createInterviewResumeSnapshot(resume = {}) {
+  return { ...buildResumeDTO(resume), snapshotCreatedAt: now() };
+}
+
+function createResumeHistoryRecord(store, resume, summary) {
+  const snapshot = buildResumeDTO(resume);
+  store.resumeHistories.push({
+    id: nextId(store.resumeHistories),
+    resumeId: resume.id,
+    resumeVersion: snapshot.resumeVersion,
+    version: snapshot.resumeVersion,
+    summary,
+    snapshot,
+    contentHash: snapshot.contentHash,
+    createdAt: now(),
+  });
+}
+
 function createStarterResume(store, user) {
   const resume = {
     id: nextId(store.resumes),
@@ -405,25 +580,28 @@ function createStarterResume(store, user) {
     sections: { skills: [], projects: [], work: [] },
   };
   store.resumes.push(resume);
-  store.resumeHistories.push({
-    id: nextId(store.resumeHistories),
-    resumeId: resume.id,
-    version: resume.version,
-    summary: "创建个人简历",
-    createdAt: now(),
-  });
+  createResumeHistoryRecord(store, resume, "创建个人简历");
   return resume;
 }
 
 function getOwnedResume(store, user, requestedId, { createIfMissing = false } = {}) {
   const ownedResumes = store.resumes.filter((item) => item.userId === user.id);
-  if (requestedId === "current") {
-    if (ownedResumes.length) return ownedResumes.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
-    return createIfMissing ? createStarterResume(store, user) : null;
-  }
+  // `current` used to mean the most recently updated resume and could silently
+  // select a different document than the one open in the workspace.
+  if (requestedId === "current") return null;
   const resumeId = Number(requestedId);
   if (!Number.isInteger(resumeId) || resumeId < 1) return null;
   return ownedResumes.find((item) => item.id === resumeId) || null;
+}
+
+function getOwnedJobDescription(store, user, requestedId) {
+  const jobDescriptionId = Number(requestedId);
+  if (!Number.isInteger(jobDescriptionId) || jobDescriptionId < 1) return null;
+  return store.jobDescriptions.find((item) => item.id === jobDescriptionId && item.userId === user.id) || null;
+}
+
+function contentHash(value) {
+  return createHash("sha256").update(String(value || "")).digest("hex");
 }
 
 async function ensureStore() {
@@ -448,6 +626,9 @@ async function readStore() {
     optimizeRecords: store.optimizeRecords || seedData.optimizeRecords,
     grammarRecords: store.grammarRecords || seedData.grammarRecords,
     interviewQuestions: store.interviewQuestions || seedData.interviewQuestions,
+    jobDescriptions: store.jobDescriptions || [],
+    jobDescriptionParseResults: store.jobDescriptionParseResults || [],
+    jobApplications: store.jobApplications || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     systemNotices: store.systemNotices || seedData.systemNotices,
@@ -880,20 +1061,82 @@ const interviewReportSchema = {
   },
 };
 
+const jobDescriptionParseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["jobTitle", "companyName", "responsibilities", "requiredSkills", "preferredSkills", "educationRequirements", "experienceRequirements", "technicalKeywords", "softSkills", "seniority", "uncertainties"],
+  properties: {
+    jobTitle: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } },
+    companyName: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } },
+    responsibilities: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    requiredSkills: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    preferredSkills: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    educationRequirements: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    experienceRequirements: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    technicalKeywords: { type: "array", maxItems: 30, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    softSkills: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+    seniority: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } },
+    uncertainties: { type: "array", maxItems: 12, items: { type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: { type: "string" } } } },
+  },
+};
+
+function normalizeEvidenceItem(value = {}, fieldName, rawText, { allowEmptyEvidence = false } = {}) {
+  const evidence = String(value.evidence || "").trim();
+  if (!allowEmptyEvidence && !evidence) throw new Error(`AI returned ${fieldName} without JD evidence`);
+  if (evidence && !String(rawText || "").includes(evidence)) {
+    throw new Error(`AI returned ${fieldName} evidence that is not present in the JD`);
+  }
+  return {
+    text: requireNonEmptyText(value.text, `${fieldName}.text`),
+    evidence,
+  };
+}
+
+function normalizeEvidenceList(value, fieldName, maxItems, rawText) {
+  if (!Array.isArray(value)) throw new Error(`AI returned invalid ${fieldName}`);
+  return value.slice(0, maxItems).map((item) => normalizeEvidenceItem(item, fieldName, rawText));
+}
+
+async function generateAiJobDescriptionParse(store, userId, jobDescription) {
+  const ai = await runAiJson(store, userId, {
+    schemaName: "job_description_parse",
+    schema: jobDescriptionParseSchema,
+    system: "You extract structured requirements from a job description for Chinese job seekers. Only state requirements explicitly present in the supplied JD. Never infer missing requirements. Keep required and preferred qualifications strictly separate. Every item must include a short verbatim evidence excerpt from the JD; if the JD does not state a field, return an empty list or an object with text '未明确' and empty evidence. Return JSON only.",
+    user: [
+      `Saved title: ${jobDescription.title || ""}`,
+      `Saved company: ${jobDescription.companyName || ""}`,
+      "Raw job description:",
+      jobDescription.rawText,
+    ].join("\n"),
+  });
+  if (!ai.ok) throw new HttpError(ai.status || 502, "JD parsing failed", ai.error);
+  const data = ai.data;
+  return {
+    jobTitle: normalizeEvidenceItem(data.jobTitle, "jobTitle", jobDescription.rawText, { allowEmptyEvidence: true }),
+    companyName: normalizeEvidenceItem(data.companyName, "companyName", jobDescription.rawText, { allowEmptyEvidence: true }),
+    responsibilities: normalizeEvidenceList(data.responsibilities, "responsibilities", 12, jobDescription.rawText),
+    requiredSkills: normalizeEvidenceList(data.requiredSkills, "requiredSkills", 20, jobDescription.rawText),
+    preferredSkills: normalizeEvidenceList(data.preferredSkills, "preferredSkills", 20, jobDescription.rawText),
+    educationRequirements: normalizeEvidenceList(data.educationRequirements, "educationRequirements", 8, jobDescription.rawText),
+    experienceRequirements: normalizeEvidenceList(data.experienceRequirements, "experienceRequirements", 8, jobDescription.rawText),
+    technicalKeywords: normalizeEvidenceList(data.technicalKeywords, "technicalKeywords", 30, jobDescription.rawText),
+    softSkills: normalizeEvidenceList(data.softSkills, "softSkills", 12, jobDescription.rawText),
+    seniority: normalizeEvidenceItem(data.seniority, "seniority", jobDescription.rawText, { allowEmptyEvidence: true }),
+    uncertainties: normalizeEvidenceList(data.uncertainties, "uncertainties", 12, jobDescription.rawText),
+    aiMode: ai.mode,
+  };
+}
+
 async function generateAiAnalysis(store, userId, resume, position) {
+  const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
     schemaName: "resume_analysis",
     schema: analysisSchema,
     system: "You are a senior resume coach for Chinese job seekers. Evaluate the resume against the target role. Return JSON only. Keep all string fields non-empty and write Chinese suggestions.",
     user: [
+      `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
       `Target role: ${position.positionName}`,
       `Reference keywords for this role, if available: ${(position.keywords || []).join(", ") || "None; infer them from the role."}`,
-      `Resume title: ${resume.title || ""}`,
-      `Candidate: ${resume.realName || ""}`,
-      `Summary: ${resume.selfEvaluation || ""}`,
-      `Skills: ${(resume.sections?.skills || []).join("；")}`,
-      `Projects: ${JSON.stringify(resume.sections?.projects || [])}`,
-      `Work: ${(resume.sections?.work || []).join("；")}`,
       'Return exactly this JSON shape: {"totalScore":0,"completenessScore":0,"matchScore":0,"keywordScore":0,"projectScore":0,"analysisResult":"非空中文结论","keywords":["关键词一","关键词二","关键词三","关键词四","关键词五"],"suggestions":["建议一","建议二","建议三"]}. Scores must be integers from 0 to 100. Generate 5-10 specific Chinese or technical role keywords that should naturally appear in this resume, and 3-6 specific Chinese suggestions.',
     ].join("\n"),
   });
@@ -911,12 +1154,14 @@ async function generateAiAnalysis(store, userId, resume, position) {
   };
 }
 
-async function generateAiOptimize(store, userId, content, optimizeType = "general") {
+async function generateAiOptimize(store, userId, resume, content, optimizeType = "general") {
+  const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
     schemaName: "resume_optimize",
     schema: optimizeSchema,
     system: "You are a professional Chinese resume editor. Rewrite the user input into one concise, professional, result-oriented Chinese resume bullet. Preserve facts. Do not invent company names, numbers, or project details. Return JSON only and keep optimizedContent non-empty.",
     user: [
+      `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
       `Optimize type: ${optimizeType}`,
       "Original resume text:",
       content || "",
@@ -927,12 +1172,14 @@ async function generateAiOptimize(store, userId, content, optimizeType = "genera
   return { optimizedContent: requireNonEmptyText(ai.data.optimizedContent, "optimizedContent"), aiMode: ai.mode };
 }
 
-async function generateAiGrammar(store, userId, content) {
+async function generateAiGrammar(store, userId, resume, content) {
+  const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
     schemaName: "resume_grammar_check",
     schema: grammarSchema,
     system: "You are a Chinese resume proofreading expert. Check typos, English spelling, punctuation, grammar, clarity, and resume wording. Return JSON only. Write issue reasons in Chinese.",
     user: [
+      `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
       "Resume text to proofread:",
       content || "",
       "Return score and an issues array. If there are no issues, return an empty issues array.",
@@ -947,13 +1194,7 @@ async function generateAiGrammar(store, userId, content) {
 }
 
 function getInterviewResumeContext(resume = {}) {
-  return [
-    `Resume title: ${resume.title || ""}`,
-    `Summary: ${resume.selfEvaluation || ""}`,
-    `Skills: ${(resume.sections?.skills || []).join("；")}`,
-    `Projects: ${JSON.stringify(resume.sections?.projects || [])}`,
-    `Work: ${(resume.sections?.work || []).join("；")}`,
-  ].join("\n");
+  return `Resume context: ${JSON.stringify(buildAiResumeContext(resume))}`;
 }
 
 async function generateAiInterviewOpening(store, userId, { resume, targetPosition }) {
@@ -1236,6 +1477,144 @@ async function handleApi(req, res) {
     return send(res, 200, { items: store.jobPositions.filter((item) => item.status === 1) });
   }
 
+  if (key === "GET /api/job-descriptions") {
+    const user = requireUser(store, req);
+    const items = store.jobDescriptions
+      .filter((item) => item.userId === user.id)
+      .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))
+      .map((item) => ({
+        ...item,
+        currentParseResult: store.jobDescriptionParseResults.find((result) => result.id === item.currentParseResultId) || null,
+      }));
+    return send(res, 200, { items });
+  }
+
+  if (key === "POST /api/job-descriptions") {
+    const user = requireUser(store, req);
+    const body = await readJson(req);
+    const rawText = requireNonEmptyText(body.rawText, "rawText");
+    const jobDescription = {
+      id: nextId(store.jobDescriptions),
+      userId: user.id,
+      title: String(body.title || "").trim() || "未命名岗位 JD",
+      companyName: String(body.companyName || "").trim(),
+      sourceUrl: String(body.sourceUrl || "").trim(),
+      rawText,
+      rawTextHash: contentHash(rawText),
+      currentParseResultId: null,
+      parseStatus: "NOT_PARSED",
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    store.jobDescriptions.push(jobDescription);
+    await writeStore(store);
+    return send(res, 201, { item: jobDescription });
+  }
+
+  const jobDescriptionMatch = pathname.match(/^\/api\/job-descriptions\/(\d+)$/);
+  if (method === "GET" && jobDescriptionMatch) {
+    const user = requireUser(store, req);
+    const item = getOwnedJobDescription(store, user, jobDescriptionMatch[1]);
+    if (!item) return send(res, 404, { message: "岗位 JD 不存在" });
+    const parseResults = store.jobDescriptionParseResults
+      .filter((result) => result.jobDescriptionId === item.id && result.userId === user.id)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+    return send(res, 200, { item, parseResults, currentParseResult: parseResults.find((result) => result.id === item.currentParseResultId) || null });
+  }
+
+  if (method === "PUT" && jobDescriptionMatch) {
+    const user = requireUser(store, req);
+    const current = getOwnedJobDescription(store, user, jobDescriptionMatch[1]);
+    if (!current) return send(res, 404, { message: "岗位 JD 不存在" });
+    const body = await readJson(req);
+    const rawText = Object.hasOwn(body, "rawText") ? requireNonEmptyText(body.rawText, "rawText") : current.rawText;
+    const rawTextHash = contentHash(rawText);
+    const sourceChanged = rawTextHash !== current.rawTextHash;
+    const item = {
+      ...current,
+      title: Object.hasOwn(body, "title") ? String(body.title || "").trim() || current.title : current.title,
+      companyName: Object.hasOwn(body, "companyName") ? String(body.companyName || "").trim() : current.companyName,
+      sourceUrl: Object.hasOwn(body, "sourceUrl") ? String(body.sourceUrl || "").trim() : current.sourceUrl,
+      rawText,
+      rawTextHash,
+      currentParseResultId: sourceChanged ? null : current.currentParseResultId,
+      parseStatus: sourceChanged ? "NOT_PARSED" : current.parseStatus,
+      updatedAt: now(),
+    };
+    const index = store.jobDescriptions.findIndex((candidate) => candidate.id === current.id);
+    store.jobDescriptions[index] = item;
+    await writeStore(store);
+    return send(res, 200, { item });
+  }
+
+  const jobDescriptionParseMatch = pathname.match(/^\/api\/job-descriptions\/(\d+)\/parse$/);
+  if (method === "POST" && jobDescriptionParseMatch) {
+    const user = requireUser(store, req);
+    const jobDescription = getOwnedJobDescription(store, user, jobDescriptionParseMatch[1]);
+    if (!jobDescription) return send(res, 404, { message: "岗位 JD 不存在" });
+    try {
+      const parsedData = await generateAiJobDescriptionParse(store, user.id, jobDescription);
+      const result = {
+        id: nextId(store.jobDescriptionParseResults),
+        userId: user.id,
+        jobDescriptionId: jobDescription.id,
+        rawTextHash: jobDescription.rawTextHash,
+        parserVersion: "jd-parser-v1",
+        status: "SUCCEEDED",
+        parsedData,
+        createdAt: now(),
+      };
+      store.jobDescriptionParseResults.push(result);
+      jobDescription.currentParseResultId = result.id;
+      jobDescription.parseStatus = "SUCCEEDED";
+      jobDescription.updatedAt = now();
+      await writeStore(store);
+      return send(res, 201, { item: result, jobDescription });
+    } catch (error) {
+      jobDescription.parseStatus = "FAILED";
+      jobDescription.lastParseError = error.message || "JD parsing failed";
+      jobDescription.updatedAt = now();
+      await writeStore(store);
+      throw error instanceof HttpError ? error : new HttpError(422, "JD parsing failed", jobDescription.lastParseError);
+    }
+  }
+
+  if (key === "GET /api/job-applications") {
+    const user = requireUser(store, req);
+    const items = store.jobApplications.filter((item) => item.userId === user.id).map((item) => ({
+      ...item,
+      resume: store.resumes.find((resume) => resume.id === item.resumeId && resume.userId === user.id) || null,
+      jobDescription: store.jobDescriptions.find((jobDescription) => jobDescription.id === item.jobDescriptionId && jobDescription.userId === user.id) || null,
+    }));
+    return send(res, 200, { items });
+  }
+
+  if (key === "POST /api/job-applications") {
+    const user = requireUser(store, req);
+    const body = await readJson(req);
+    const resume = getOwnedResume(store, user, body.resumeId);
+    const jobDescription = getOwnedJobDescription(store, user, body.jobDescriptionId);
+    if (!resume) return send(res, 404, { message: "简历不存在" });
+    if (!jobDescription) return send(res, 404, { message: "岗位 JD 不存在" });
+    const parseResult = store.jobDescriptionParseResults.find((result) => result.id === jobDescription.currentParseResultId && result.jobDescriptionId === jobDescription.id && result.userId === user.id && result.status === "SUCCEEDED");
+    if (!parseResult) return send(res, 409, { message: "请先成功解析该岗位 JD 后再创建求职分析任务" });
+    const application = {
+      id: nextId(store.jobApplications),
+      userId: user.id,
+      resumeId: resume.id,
+      resumeVersion: Number(resume.version) || 1,
+      resumeContentHash: buildResumeDTO(resume).contentHash,
+      jobDescriptionId: jobDescription.id,
+      jobDescriptionParseResultId: parseResult.id,
+      jobDescriptionRawTextHash: jobDescription.rawTextHash,
+      status: "READY_FOR_MATCH",
+      createdAt: now(),
+    };
+    store.jobApplications.push(application);
+    await writeStore(store);
+    return send(res, 201, { item: application });
+  }
+
   if (key === "GET /api/resumes") {
     const user = requireUser(store, req);
     return send(res, 200, { items: store.resumes.filter((item) => item.userId === user.id) });
@@ -1247,7 +1626,7 @@ async function handleApi(req, res) {
     const resume = getOwnedResume(store, user, resumeMatch[1], { createIfMissing: true });
     if (!resume) return send(res, 404, { message: "简历不存在" });
     await writeStore(store);
-    return send(res, 200, { item: resume });
+    return send(res, 200, { item: { ...resume, resumeDTO: buildResumeDTO(resume) } });
   }
 
   if (method === "POST" && pathname === "/api/resumes") {
@@ -1264,15 +1643,9 @@ async function handleApi(req, res) {
       ...body,
     };
     store.resumes.push(resume);
-    store.resumeHistories.push({
-      id: nextId(store.resumeHistories),
-      resumeId: resume.id,
-      version: resume.version,
-      summary: "创建新简历",
-      createdAt: now(),
-    });
+    createResumeHistoryRecord(store, resume, "创建新简历");
     await writeStore(store);
-    return send(res, 201, { item: resume });
+    return send(res, 201, { item: { ...resume, resumeDTO: buildResumeDTO(resume) } });
   }
 
   if (method === "PUT" && resumeMatch) {
@@ -1284,15 +1657,9 @@ async function handleApi(req, res) {
     const nextVersion = Number(oldResume.version || 1) + 1;
     const resume = { ...oldResume, ...body, id: oldResume.id, userId: user.id, version: nextVersion, updatedAt: now() };
     store.resumes[resumeIndex] = resume;
-    store.resumeHistories.push({
-      id: nextId(store.resumeHistories),
-      resumeId: oldResume.id,
-      version: nextVersion,
-      summary: body.summary || "自动保存简历修改",
-      createdAt: now(),
-    });
+    createResumeHistoryRecord(store, resume, body.summary || "自动保存简历修改");
     await writeStore(store);
-    return send(res, 200, { item: resume });
+    return send(res, 200, { item: { ...resume, resumeDTO: buildResumeDTO(resume) } });
   }
 
   if (method === "DELETE" && resumeMatch) {
@@ -1307,6 +1674,7 @@ async function handleApi(req, res) {
     store.grammarRecords = store.grammarRecords.filter((item) => item.resumeId !== resume.id);
     store.mockInterviews = store.mockInterviews.filter((item) => item.resumeId !== resume.id);
     store.interviewAnswers = store.interviewAnswers.filter((item) => item.resumeId !== resume.id);
+    store.jobApplications = store.jobApplications.filter((item) => item.resumeId !== resume.id);
     await writeStore(store);
     return send(res, 204, {});
   }
@@ -1317,6 +1685,28 @@ async function handleApi(req, res) {
     const resume = getOwnedResume(store, user, historyMatch[1]);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     return send(res, 200, { items: store.resumeHistories.filter((item) => item.resumeId === resume.id) });
+  }
+
+  const versionsMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/versions$/);
+  if (method === "GET" && versionsMatch) {
+    const user = requireUser(store, req);
+    const resume = getOwnedResume(store, user, versionsMatch[1]);
+    if (!resume) return send(res, 404, { message: "简历不存在" });
+    const items = store.resumeHistories
+      .filter((item) => item.resumeId === resume.id)
+      .map(({ snapshot, ...item }) => ({ ...item, hasSnapshot: Boolean(snapshot) }));
+    return send(res, 200, { items });
+  }
+
+  const versionMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/versions\/(\d+)$/);
+  if (method === "GET" && versionMatch) {
+    const user = requireUser(store, req);
+    const resume = getOwnedResume(store, user, versionMatch[1]);
+    if (!resume) return send(res, 404, { message: "简历不存在" });
+    const versionId = Number(versionMatch[2]);
+    const item = store.resumeHistories.find((history) => history.id === versionId && history.resumeId === resume.id);
+    if (!item) return send(res, 404, { message: "简历版本不存在" });
+    return send(res, 200, { item });
   }
 
   const analysisMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/analyze$/);
@@ -1341,6 +1731,8 @@ async function handleApi(req, res) {
       id: nextId(store.analysisRecords),
       userId: user.id,
       resumeId: resume.id,
+      resumeVersion: Number(resume.version) || 1,
+      resumeContentHash: buildResumeDTO(resume).contentHash,
       targetPositionId,
       targetPosition,
       ...result,
@@ -1357,11 +1749,13 @@ async function handleApi(req, res) {
     const body = await readJson(req);
     const resume = getOwnedResume(store, user, optimizeMatch[1], { createIfMissing: true });
     if (!resume) return send(res, 404, { message: "简历不存在" });
-    const result = await generateAiOptimize(store, user.id, body.content || "", body.optimizeType || "general");
+    const result = await generateAiOptimize(store, user.id, resume, body.content || "", body.optimizeType || "general");
     const record = {
       id: nextId(store.optimizeRecords),
       userId: user.id,
       resumeId: resume.id,
+      resumeVersion: Number(resume.version) || 1,
+      resumeContentHash: buildResumeDTO(resume).contentHash,
       optimizeType: body.optimizeType || "general",
       originalContent: body.content || "",
       optimizedContent: result.optimizedContent,
@@ -1380,11 +1774,13 @@ async function handleApi(req, res) {
     const body = await readJson(req);
     const resume = getOwnedResume(store, user, grammarMatch[1], { createIfMissing: true });
     if (!resume) return send(res, 404, { message: "简历不存在" });
-    const result = await generateAiGrammar(store, user.id, body.content || "");
+    const result = await generateAiGrammar(store, user.id, resume, body.content || "");
     const record = {
       id: nextId(store.grammarRecords),
       userId: user.id,
       resumeId: resume.id,
+      resumeVersion: Number(resume.version) || 1,
+      resumeContentHash: buildResumeDTO(resume).contentHash,
       content: body.content || "",
       ...result,
       createdAt: now(),
@@ -1396,23 +1792,30 @@ async function handleApi(req, res) {
 
   if (key === "GET /api/records/analysis") {
     const user = requireUser(store, req);
-    return send(res, 200, { items: store.analysisRecords.filter((item) => item.userId === user.id) });
+    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
+    const items = store.analysisRecords.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId));
+    return send(res, 200, { items });
   }
 
   if (key === "GET /api/records/optimize") {
     const user = requireUser(store, req);
-    return send(res, 200, { items: store.optimizeRecords.filter((item) => item.userId === user.id) });
+    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
+    const items = store.optimizeRecords.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId));
+    return send(res, 200, { items });
   }
 
   if (key === "GET /api/records/grammar") {
     const user = requireUser(store, req);
-    return send(res, 200, { items: store.grammarRecords.filter((item) => item.userId === user.id) });
+    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
+    const items = store.grammarRecords.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId));
+    return send(res, 200, { items });
   }
 
   if (key === "GET /api/records/interviews") {
     const user = requireUser(store, req);
+    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
     return send(res, 200, {
-      items: store.mockInterviews.filter((item) => item.userId === user.id).map((item) => ({
+      items: store.mockInterviews.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId)).map((item) => ({
         ...item,
         answerCount: store.interviewAnswers.filter((answer) => answer.interviewId === item.id).length,
       })),
@@ -1427,11 +1830,28 @@ async function handleApi(req, res) {
   if (key === "POST /api/interviews") {
     const user = requireUser(store, req);
     const body = await readJson(req);
-    const resume = getOwnedResume(store, user, body.resumeId || 1, { createIfMissing: true });
+    let requestedResumeId;
+    try {
+      requestedResumeId = parseOptionalPositiveInteger(body.resumeId, "resumeId");
+    } catch (error) {
+      if (error instanceof HttpError) return send(res, error.status, { message: error.message });
+      throw error;
+    }
+    if (!requestedResumeId) {
+      return send(res, 400, { message: "resumeId is required" });
+    }
+    const resume = getOwnedResume(store, user, requestedResumeId);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     const requestedTargetPosition = typeof body.targetPosition === "string" ? body.targetPosition.trim() : "";
     const savedTargetPosition = typeof resume.targetPosition === "string" ? resume.targetPosition.trim() : "";
     const matchingPosition = store.jobPositions.find((item) => item.positionName === requestedTargetPosition || item.positionName === savedTargetPosition);
+    let requestedPositionId;
+    try {
+      requestedPositionId = parseOptionalPositiveInteger(body.positionId, "positionId");
+    } catch (error) {
+      if (error instanceof HttpError) return send(res, error.status, { message: error.message });
+      throw error;
+    }
     const targetPosition = requestedTargetPosition || savedTargetPosition || matchingPosition?.positionName || "目标岗位";
     const questionCount = Math.max(2, Math.min(6, Number(body.questionCount) || 4));
     const opening = await generateAiInterviewOpening(store, user.id, { resume, targetPosition });
@@ -1439,7 +1859,10 @@ async function handleApi(req, res) {
       id: nextId(store.mockInterviews),
       userId: user.id,
       resumeId: resume.id,
-      positionId: matchingPosition?.id || body.positionId || resume.targetPositionId || 1,
+      resumeVersion: Number(resume.version) || 1,
+      resumeContentHash: buildResumeDTO(resume).contentHash,
+      resumeSnapshot: createInterviewResumeSnapshot(resume),
+      positionId: requestedPositionId || matchingPosition?.id || resume.targetPositionId || null,
       targetPosition,
       title: body.title || `${targetPosition}模拟面试`,
       questionCount,
@@ -1468,7 +1891,7 @@ async function handleApi(req, res) {
     const interview = store.mockInterviews.find((item) => item.id === interviewId && item.userId === user.id);
     if (!interview) return send(res, 404, { message: "模拟面试不存在" });
     if (interview.status !== "IN_PROGRESS") return send(res, 409, { message: "当前面试已完成，请查看报告或重新开始" });
-    const resume = getOwnedResume(store, user, interview.resumeId);
+    const resume = interview.resumeSnapshot || getOwnedResume(store, user, interview.resumeId);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     const answerText = requireNonEmptyText(body.answerText, "answerText");
     const question = interview.questions?.find((item) => item.id === body.questionId) || interview.questions?.at(-1);
@@ -1483,6 +1906,9 @@ async function handleApi(req, res) {
     const answer = {
       id: nextId(store.interviewAnswers),
       interviewId,
+      resumeId: interview.resumeId,
+      resumeVersion: interview.resumeVersion || Number(resume.version) || 1,
+      resumeContentHash: interview.resumeContentHash || buildResumeDTO(resume).contentHash,
       questionId: question.id,
       questionText: question.questionText,
       answerText,
@@ -1519,7 +1945,7 @@ async function handleApi(req, res) {
     const interviewId = Number(reportMatch[1]);
     const interview = store.mockInterviews.find((item) => item.id === interviewId && item.userId === user.id);
     if (!interview) return send(res, 404, { message: "模拟面试不存在" });
-    const resume = getOwnedResume(store, user, interview.resumeId);
+    const resume = interview.resumeSnapshot || getOwnedResume(store, user, interview.resumeId);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     const answers = store.interviewAnswers.filter((item) => item.interviewId === interviewId);
     if (answers.length < interview.questionCount) return send(res, 409, { message: "请先完成全部面试题" });

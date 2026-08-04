@@ -73,6 +73,7 @@ pnpm dev:api
 - `GET /api/admin/overview`：后台统计概览
 
 ## 数据库
+开发运行时使用 `backend/data/store.json`；`database.sql` 是生产 MySQL 的结构与增量迁移参考，不会被 Node 服务在本地自动执行。文件末尾的“Incremental production migration reference”只包含非破坏性迁移建议，执行前应先备份并按目标 MySQL 版本检查列/索引是否已存在。
 
 `database.sql` 包含课程设计所需的 MySQL 建库、建表和示例数据。
 
