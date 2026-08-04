@@ -7,10 +7,13 @@ This is the quick continuation note for the next AI/Codex session.
 ## Read First
 
 1. `AGENTS.md`
-2. `PROJECT_MEMORY.md`
-3. `PRODUCT.md`
-4. `DESIGN.md`
-5. `README.md`
+2. `docs/CONTEXT_INDEX.md`
+3. `docs/PROJECT_STATUS.md`
+4. `docs/CURRENT_TASK.md`
+5. `docs/DECISIONS.md`
+6. current stage file under `docs/tasks/`
+7. latest Claude review under `docs/reviews/`
+8. `PROJECT_MEMORY.md`, `PRODUCT.md`, `DESIGN.md`, and `README.md`
 
 Then inspect the current dirty tree before editing:
 
@@ -178,6 +181,13 @@ Avoid touching unless necessary:
 - `database.sql` remains a production MySQL migration reference. The local Node runtime uses JSON persistence.
 - Completed: phases 1 and 2. Pending: non-RAG matching, knowledge documents/chunking, retrieval, RAG reports, suggestion/version loop, RAG interview, agentic workflow, and production evaluation.
 - Verification: run `node --check backend/server.js`, `pnpm build`, and `pnpm test`; integration tests use isolated mock AI servers and temporary data directories.
+
+## Repository Memory System
+
+- `docs/PROJECT_STATUS.md` is the code-verified status summary.
+- `docs/CURRENT_TASK.md` only records the active phase boundary; read its linked task file for requirements.
+- `docs/DECISIONS.md` records stable architecture choices. Do not silently reverse one during an unrelated task.
+- Stage 1-2 acceptance is summarized in `docs/reviews/STAGE_01_02_FINAL_REVIEW.md`; its original Claude report still needs user-provided archival text.
 
 Before final response after any change, report:
 

@@ -1,0 +1,12 @@
+# 架构决策
+
+| 决定 | 原因 | 影响 | 日期/阶段 |
+| --- | --- | --- | --- |
+| RAG MVP 完成前不迁移 Spring Boot | 当前 Node HTTP API 已承载现有功能，迁移会扩大风险 | 继续以 `backend/server.js` 为 API 边界 | 阶段 1-3 |
+| 阶段 3 不使用 RAG | 先建立可复算、可审计的基础匹配基线 | 不引入 Qdrant、Embedding、Reranker、知识库或 Agent | 阶段 3 |
+| AI 负责语义判断与证据提取，后端负责最终评分 | 防止不可解释的模型总分 | 使用固定权重重新计算并校验证据 | 阶段 3 |
+| 第三方 AI 不接收联系方式和照片 | 保护求职者隐私 | 只使用 `buildAiResumeContext` 的岗位相关字段 | 阶段 1 起 |
+| 运行时数据继续使用本地 JSON | 当前实现与测试均围绕 JSON 隔离存储 | `backend/data/store.json` 不提交；MySQL 仅作参考 | 当前 |
+| `database.sql` 是生产迁移参考 | 当前未接入 MySQL 运行时 | 禁止把它误当作本地服务的实际数据层 | 阶段 1 起 |
+| Codex 开发，Claude 独立只读验收 | 分离实现与验收职责 | 每阶段完成后停止，等待验收 | 当前流程 |
+| 阶段通过验收后单独提交并打标签 | 保留可回溯的交付基线 | 建议阶段 2 标签 `rag-stage-2-passed`；阶段 3 通过后再建 `rag-stage-3-passed` | 当前流程 |

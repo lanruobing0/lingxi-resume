@@ -8,6 +8,31 @@ Read it before making changes.
 Lingxi Resume is a real product, not a course-demo prototype.
 It is an AI resume optimization and mock interview app for job seekers.
 
+Product name: 灵犀简历
+
+Technical project name: 基于 Agentic RAG 的 AI 简历优化与岗位智能匹配平台
+
+## Persistent Workflow
+
+Before every new task, read, in order:
+
+1. `docs/CONTEXT_INDEX.md`
+2. `docs/PROJECT_STATUS.md`
+3. `docs/CURRENT_TASK.md`
+4. `docs/DECISIONS.md`
+5. the active file in `docs/tasks/`
+6. the most recent Claude acceptance report in `docs/reviews/`
+
+Then inspect `git status --short`, `git log --oneline -10`, and the relevant `git diff` before editing.
+
+- Develop incrementally from the existing project; never replace the app or restart it as a new project.
+- Implement exactly one approved phase at a time. Do not start the next phase before Claude's independent acceptance.
+- Do not use hard-coded, random, sample, or default output to represent a successful AI result.
+- Every AI task must bind owned `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`. Job-related tasks must also bind `jobDescriptionId` and `jobDescriptionParseResultId`.
+- Never send real name, email, phone, website, photo data, sessions, API keys, or unrelated private profile fields to a third-party AI provider.
+- After changes, run the relevant real build and tests. Never claim a command passed when it was not run.
+- When the approved task is complete, stop and wait for Claude's independent review; do not continue into another phase.
+
 Core product flows:
 
 - Resume editor with live A4 preview.

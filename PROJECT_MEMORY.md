@@ -214,3 +214,7 @@ The user has previously pasted a DeepSeek API key into chat.
 Do not repeat it back.
 Do not place it in source code.
 Recommend rotating it before public deployment or sharing the repository.
+
+## Repository Memory System
+
+The durable task workflow is now documented in `docs/CONTEXT_INDEX.md`, `docs/PROJECT_STATUS.md`, `docs/CURRENT_TASK.md`, `docs/DECISIONS.md`, `docs/tasks/`, and `docs/reviews/`. Read these before relying on this historical summary. Stage 1 and 2 are accepted; stage 3 remains pending implementation and must stop for Claude review when complete.
