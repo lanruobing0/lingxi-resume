@@ -2279,8 +2279,13 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [jobs, setJobs] = useState([]);
   const [detail, setDetail] = useState(null);
   const [resumes, setResumes] = useState([]);
+  const [resumeVersions, setResumeVersions] = useState([]);
   const [applications, setApplications] = useState([]);
   const [selectedResumeId, setSelectedResumeId] = useState(activeResumeId || "");
+  const [selectedResumeVersionId, setSelectedResumeVersionId] = useState("");
+  const [selectedApplicationId, setSelectedApplicationId] = useState("");
+  const [matches, setMatches] = useState([]);
+  const [selectedMatch, setSelectedMatch] = useState(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
@@ -2308,8 +2313,32 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       ]);
       setDetail(jobData);
       setResumes(resumeData.items || []);
-      setApplications((applicationData.items || []).filter((item) => item.jobDescriptionId === Number(jobId)));
-      setSelectedResumeId((current) => current || activeResumeId || resumeData.items?.[0]?.id || "");
+      const nextApplications = (applicationData.items || []).filter((item) => item.jobDescriptionId === Number(jobId));
+      setApplications(nextApplications);
+      const nextResumeId = String(activeResumeId || resumeData.items?.[0]?.id || "");
+      setSelectedResumeId(nextResumeId);
+      if (nextResumeId) {
+        const versionData = await apiRequest(`/api/resumes/${nextResumeId}/versions`);
+        setResumeVersions(versionData.items || []);
+        setSelectedResumeVersionId(String(versionData.items?.[0]?.id || ""));
+      } else {
+        setResumeVersions([]);
+        setSelectedResumeVersionId("");
+      }
+      const nextApplication = nextApplications.find((item) => item.resumeVersionId) || nextApplications[0];
+      setSelectedApplicationId(String(nextApplication?.id || ""));
+      setMatches([]);
+      setSelectedMatch(null);
+      if (nextApplication?.id) {
+        const matchData = await apiRequest(`/api/job-applications/${nextApplication.id}/matches`);
+        const nextMatches = matchData.items || [];
+        setMatches(nextMatches);
+        const latest = nextMatches.find((item) => item.status === "COMPLETED");
+        if (latest) {
+          const report = await apiRequest(`/api/resume-job-matches/${latest.id}`);
+          setSelectedMatch(report.item);
+        }
+      }
       setMode("detail");
     } catch (error) {
       notify(`读取岗位详情失败: ${error.message}`);
@@ -2321,6 +2350,34 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
   useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
+
+  const selectResume = async (resumeId) => {
+    setSelectedResumeId(resumeId);
+    setSelectedResumeVersionId("");
+    setResumeVersions([]);
+    try {
+      const data = await apiRequest(`/api/resumes/${resumeId}/versions`);
+      setResumeVersions(data.items || []);
+      setSelectedResumeVersionId(String(data.items?.[0]?.id || ""));
+    } catch (error) {
+      notify(`读取简历版本失败: ${error.message}`);
+    }
+  };
+
+  const selectApplication = async (applicationId) => {
+    setSelectedApplicationId(applicationId);
+    setSelectedMatch(null);
+    setMatches([]);
+    if (!applicationId) return;
+    try {
+      const data = await apiRequest(`/api/job-applications/${applicationId}/matches`);
+      setMatches(data.items || []);
+      const latest = (data.items || []).find((item) => item.status === "COMPLETED");
+      if (latest) setSelectedMatch((await apiRequest(`/api/resume-job-matches/${latest.id}`)).item);
+    } catch (error) {
+      notify(`读取匹配历史失败: ${error.message}`);
+    }
+  };
 
   const saveJob = async () => {
     if (!form.rawText.trim()) {
@@ -2359,23 +2416,47 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   };
 
   const createApplication = async () => {
-    if (!detail?.item?.id || !selectedResumeId) {
-      notify("请先选择一份简历");
+    if (!detail?.item?.id || !selectedResumeId || !selectedResumeVersionId) {
+      notify("请先选择一份简历及其明确版本");
       return;
     }
     setWorking(true);
     try {
-      await apiRequest("/api/job-applications", {
+      const data = await apiRequest("/api/job-applications", {
         method: "POST",
-        body: JSON.stringify({ resumeId: Number(selectedResumeId), jobDescriptionId: detail.item.id }),
+        body: JSON.stringify({ resumeId: Number(selectedResumeId), resumeVersionId: Number(selectedResumeVersionId), jobDescriptionId: detail.item.id }),
       });
       notify("求职分析任务已建立，已锁定简历版本与 JD 解析结果");
       await loadDetail(detail.item.id);
+      await selectApplication(String(data.item.id));
     } catch (error) {
       notify(`创建分析任务失败: ${error.message}`);
     } finally {
       setWorking(false);
     }
+  };
+
+  const openMatch = async (matchId) => {
+    try { setSelectedMatch((await apiRequest(`/api/resume-job-matches/${matchId}`)).item); } catch (error) { notify(`读取匹配报告失败: ${error.message}`); }
+  };
+
+  const createMatch = async (retryMatchId = "") => {
+    const application = applications.find((item) => item.id === Number(selectedApplicationId));
+    if (!application) { notify("请先选择一个已锁定版本的求职分析任务"); return; }
+    setWorking(true);
+    setSelectedMatch(null);
+    try {
+      const path = retryMatchId ? `/api/resume-job-matches/${retryMatchId}/retry` : `/api/job-applications/${application.id}/matches`;
+      const data = await apiRequest(path, { method: "POST" });
+      setSelectedMatch(data.item);
+      notify("基础岗位匹配报告已生成并保存");
+      await selectApplication(String(application.id));
+      await openMatch(data.item.id);
+    } catch (error) {
+      setSelectedMatch(null);
+      notify(`岗位匹配失败: ${error.message}`);
+      await selectApplication(String(application.id));
+    } finally { setWorking(false); }
   };
 
   if (mode === "create") {
@@ -2413,11 +2494,20 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           </section>
         </div>
         <section className="job-application-panel">
-          <div><h3>建立求职分析任务</h3><p>任务会锁定所选简历的当前版本和当前 JD 解析结果。</p></div>
-          <div className="job-application-controls"><select value={selectedResumeId} onChange={(event) => setSelectedResumeId(event.target.value)}><option value="">选择简历</option>{resumes.map((resumeItem) => <option key={resumeItem.id} value={resumeItem.id}>{resumeItem.title || `简历 #${resumeItem.id}`}</option>)}</select><button className="black-small" disabled={working || !parsed || !selectedResumeId} onClick={createApplication}>创建分析任务</button></div>
+          <div><h3>建立求职分析任务</h3><p>选择明确的简历版本；任务会锁定该快照与当前有效的 JD 解析结果。</p></div>
+          <div className="job-application-controls"><select value={selectedResumeId} onChange={(event) => selectResume(event.target.value)}><option value="">选择简历</option>{resumes.map((resumeItem) => <option key={resumeItem.id} value={resumeItem.id}>{resumeItem.title || `简历 #${resumeItem.id}`}</option>)}</select><select value={selectedResumeVersionId} onChange={(event) => setSelectedResumeVersionId(event.target.value)} disabled={!selectedResumeId}><option value="">选择明确版本</option>{resumeVersions.map((version) => <option key={version.id} value={version.id}>v{version.resumeVersion || version.version} · {formatResumeDate(version.createdAt)}</option>)}</select><button className="black-small" disabled={working || !parsed || !selectedResumeId || !selectedResumeVersionId} onClick={createApplication}>创建分析任务</button></div>
           {activeResumeId && <button className="link-button" onClick={() => onOpenResume?.(activeResumeId)}>打开当前简历</button>}
           {!resumes.length && <button className="link-button" onClick={() => go?.("resume")}>先创建简历</button>}
-          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <p key={item.id}>简历 #{item.resumeId} · v{item.resumeVersion} · {item.status}</p>)}</div>}
+          {selectedResumeId && !resumeVersions.length && <p className="job-error">该简历暂无可选版本，请先保存简历后再创建任务。</p>}
+          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <button className={String(item.id) === String(selectedApplicationId) ? "active" : ""} key={item.id} onClick={() => selectApplication(String(item.id))}>简历 #{item.resumeId} · v{item.resumeVersion} · {item.status}{item.resumeVersionId ? "" : " · 旧任务不可匹配"}</button>)}</div>}
+        </section>
+        <section className="job-match-panel">
+          <div className="job-match-head"><div><h3>基础岗位匹配</h3><p>{selectedApplicationId ? "基于已锁定的简历版本与 JD 解析结果生成，不会修改你的简历。" : "先创建并选择一个求职分析任务。"}</p></div><button className="black-small" disabled={working || !selectedApplicationId} onClick={() => createMatch()}>{working ? <><LoaderCircle className="spin" size={16} />正在生成报告</> : <><Gauge size={16} />生成匹配报告</>}</button></div>
+          {working && <ResultSkeleton lines={5} />}
+          {!working && selectedMatch?.status === "COMPLETED" && <ResumeJobMatchReport match={selectedMatch} />}
+          {!working && selectedMatch?.status === "FAILED" && <p className="job-error">上次匹配失败：{selectedMatch.failureMessage}</p>}
+          {matches.length > 0 && <div className="job-match-history"><strong>匹配历史</strong>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? setSelectedMatch(item) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</div>}
+          {!working && !selectedMatch && !matches.length && <div className="job-empty"><strong>尚未生成匹配报告</strong><p>报告仅会在真实 AI 返回并通过证据校验后显示分数与建议。</p></div>}
         </section>
       </section>
     );
@@ -2429,6 +2519,16 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <button className="job-list-item" key={job.id} onClick={() => loadDetail(job.id)}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
     </section>
   );
+}
+
+function ResumeJobMatchReport({ match }) {
+  const report = match.report;
+  if (!report) return null;
+  return <div className="job-match-report"><div className="job-match-score"><strong>{match.totalScore}</strong><span>综合匹配度</span></div><div><h4>匹配结论</h4><p>{report.summary}</p></div><div className="job-match-dimensions">{(report.dimensions || []).map((dimension) => <article key={dimension.key}><div><strong>{dimension.label}</strong><span>{dimension.score} 分 · 权重 {dimension.weight}%</span></div><i><b style={{ "--match-score": `${dimension.score}%` }} /></i><p>{dimension.summary}</p>{dimension.resumeEvidence?.length > 0 && <small>简历证据：{dimension.resumeEvidence.join("；")}</small>}{dimension.jdEvidence?.length > 0 && <small>JD 证据：{dimension.jdEvidence.join("；")}</small>}{dimension.missingEvidence?.length > 0 && <small>缺失：{dimension.missingEvidence.join("；")}</small>}</article>)}</div><div className="job-match-evidence"><MatchEvidenceGroup title="已证实必备项" items={report.matchedRequiredSkills} /><MatchEvidenceGroup title="部分匹配" items={report.partiallyMatchedRequiredSkills} /><MatchEvidenceGroup title="当前简历未找到的必备项" items={report.missingRequiredSkills} /><MatchEvidenceGroup title="关键词覆盖" items={report.matchedKeywords} /></div><div className="job-match-suggestions"><div><h4>最有力的简历证据</h4><ul>{report.strongestResumeEvidence?.map((item) => <li key={item}>{item}</li>)}</ul></div><div><h4>优先修改建议</h4><ul>{report.prioritizedSuggestions?.map((item) => <li key={item}>{item}</li>)}</ul></div></div></div>;
+}
+
+function MatchEvidenceGroup({ title, items = [] }) {
+  return <section><h4>{title}</h4>{items.length ? <ul>{items.map((item, index) => <li key={`${item.skillName}-${index}`}><strong>{item.skillName}</strong><span>{item.explanation}</span>{item.resumeEvidence?.length > 0 && <small>简历：{item.resumeEvidence.join("；")}</small>}{item.jdEvidence?.length > 0 && <small>JD：{item.jdEvidence.join("；")}</small>}</li>)}</ul> : <p>无</p>}</section>;
 }
 
 function JobParseResult({ parsed }) {

@@ -72,6 +72,19 @@ pnpm dev:api
 - `POST /api/interviews/:id/answers`：提交面试回答并生成反馈
 - `GET /api/admin/overview`：后台统计概览
 
+### 基础岗位匹配（阶段 3）
+
+岗位匹配基于用户显式选择的 ResumeVersion 和已成功解析、仍有效的 JD。创建 JobApplication 时必须同时提交 `resumeId`、`resumeVersionId` 和 `jobDescriptionId`；不会以“当前简历”“最近版本”或“最新 JD”补全输入。
+
+- `POST /api/job-applications/:id/matches`：为已锁定的申请创建一次新的基础匹配报告
+- `GET /api/job-applications/:id/matches`：读取该申请的匹配历史摘要
+- `GET /api/resume-job-matches/:matchId`：读取完整六维报告
+- `POST /api/resume-job-matches/:matchId/retry`：只重试失败记录，且产生新的历史记录
+
+报告的六个固定权重为：必备技能 30、项目相关性 25、关键词覆盖 15、经验 10、教育背景 10、表达质量 10。AI 只负责语义判断、双方证据与解释；后端验证证据后重新计算总分，绝不直接采用模型返回的总分。简历中没有证据时，界面和记录统一使用“当前简历中未找到相关证据”，不推断用户是否具备该能力。
+
+匹配提示仅发送去隐私的 `buildAiResumeContext` 和锁定的 JD 材料；姓名、邮箱、电话、网站、照片、Session、API Key 和无关个人资料不会发送给第三方 AI。匹配不会修改简历，也不会覆盖历史报告。
+
 ## 数据库
 开发运行时使用 `backend/data/store.json`；`database.sql` 是生产 MySQL 的结构与增量迁移参考，不会被 Node 服务在本地自动执行。文件末尾的“Incremental production migration reference”只包含非破坏性迁移建议，执行前应先备份并按目标 MySQL 版本检查列/索引是否已存在。
 

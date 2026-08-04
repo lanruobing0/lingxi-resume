@@ -1,6 +1,6 @@
 # AI_HANDOFF.md
 
-Last updated: 2026-07-27
+Last updated: 2026-08-04
 
 This is the quick continuation note for the next AI/Codex session.
 
@@ -103,6 +103,17 @@ Verified:
 
 - `pnpm build` passes.
 - `node --check backend/server.js` passes.
+
+## Stage 3 delivery — waiting for Claude acceptance
+
+- Branch: `feat/rag-stage-3-base-matching`, created from `master` at `a14d449`; no merge, tag, or push was performed.
+- `ResumeJobMatch` is immutable per run and binds `userId`, `jobApplicationId`, `resumeId`, `resumeVersionId`, `resumeVersion`, `resumeContentHash`, `jobDescriptionId`, and `jobDescriptionParseResultId`.
+- Creating an application now requires an explicit `resumeVersionId`; matching reads its locked snapshot, never a current/recent resume, and rejects an invalidated JD parse.
+- The six fixed weights are server-calculated. AI contributes semantic matching, evidence and explanation only; any AI `totalScore` is ignored. Unverifiable evidence fails, and `NOT_FOUND` is normalized to `当前简历中未找到相关证据`.
+- Added matching APIs, JD-workspace loading/error/report/history states, MySQL reference comment, and `tests/resume-job-match.integration.mjs`.
+- Verified locally: `node --check backend/server.js`, `corepack pnpm test`, and `corepack pnpm build` all passed.
+
+Do not begin Stage 4 until Claude independently accepts Stage 3.
 
 ## Suggested Next Work
 

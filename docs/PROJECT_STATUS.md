@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | 1 | 简历数据链修复与 ResumeDTO/版本绑定 | 已通过 Claude 二次验收（既有交接记录） |
 | 2 | 真实 JD 管理、解析与 JobApplication | 已通过 Claude 二次验收（既有交接记录） |
-| 3 | 基于真实简历与真实 JD 的基础岗位匹配 | 允许开始，尚未实施 |
+| 3 | 基于真实简历与真实 JD 的基础岗位匹配 | 已完成开发，等待 Claude 独立验收 |
 
 当前尚未接入 Qdrant、Embedding、Reranker、知识库检索或 RAG。
 
@@ -32,17 +32,19 @@
 - 简历：`/api/resumes`、`/api/resumes/:id`、`/api/resumes/:id/versions/*`
 - AI：`/api/resumes/:id/{analyze,optimize,grammar-check}`、`/api/ai-config`
 - JD 与申请：`/api/job-descriptions`、`/api/job-descriptions/:id/parse`、`/api/job-applications`
+- 基础匹配：`POST/GET /api/job-applications/:id/matches`、`GET /api/resume-job-matches/:matchId`、`POST /api/resume-job-matches/:matchId/retry`
 - 面试与记录：`/api/interviews`、`/api/records/*`
 
 ## 已有测试与验证命令
 
 - `tests/job-description.integration.mjs`：隔离的本地 mock AI 与临时 JSON 数据目录。
 - `tests/isolation.integration.mjs`：用户隔离、简历绑定、隐私过滤和删除级联。
+- `tests/resume-job-match.integration.mjs`：固定加权评分、快照/哈希绑定、证据校验、失败记录与匹配隔离。
 - `corepack pnpm test`、`node --check backend/server.js`、`corepack pnpm build`。
 
 ## 尚未实现与技术债务
 
-- 阶段 3 的基础岗位匹配报告及其测试。
+- 阶段 3 已开发完成，等待 Claude 独立验收；未开始下一阶段。
 - RAG 知识库、切片、向量检索、重排、Agent 工作流和生产级异步任务。
 - `src/App.jsx` 与 `src/styles.css` 较大，应在已批准任务中渐进拆分。
 - JSON 单文件存储不适用于生产并发；迁移 MySQL/worker 需单独批准。

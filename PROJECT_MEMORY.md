@@ -1,6 +1,6 @@
 # PROJECT_MEMORY.md
 
-Last updated: 2026-07-27
+Last updated: 2026-08-04
 
 ## Product Summary
 
@@ -159,7 +159,7 @@ It is ignored by Git and must remain uncommitted.
 - Mock interviews are real AI sessions: target role input, resume-based opening question, answer score and feedback, AI follow-up questions, final report, and persisted history records.
 - Interview endpoints: `POST /api/interviews`, `POST /api/interviews/:id/answers`, `POST /api/interviews/:id/report`, and `GET /api/records/interviews`.
 
-## RAG Upgrade Progress (Phases 1-2 complete)
+## RAG Upgrade Progress (Stage 3 awaiting acceptance)
 
 - Runtime persistence remains `backend/data/store.json`; `database.sql` is a production schema/migration reference only.
 - Phase 1 normalizes editor data into `buildResumeDTO`. Provider prompts use PII-filtered `buildAiResumeContext`, while history retains full DTO snapshots. AI records bind `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`.
@@ -167,6 +167,10 @@ It is ignored by Git and must remain uncommitted.
 - Phase 2 stores user-owned JobDescription records, raw JD hashes, evidence-backed parse results, and JobApplication links that lock resume/JD parse versions. No RAG infrastructure has been added.
 - Record endpoints accept an optional positive `resumeId`; invalid values return 400. `GET /api/resumes/:id/versions` lists owned snapshots and `GET /api/resumes/:id/versions/:versionId` returns one owned version.
 - Regression suite: `pnpm test` uses temporary JSON stores and local mock AI servers only.
+- Stage 3 adds immutable `resumeJobMatches`: every record binds the owner, explicit JobApplication, ResumeVersion snapshot/hash, JD, and successful current JD parse result. It never resolves a current/recent resume or JD.
+- Backend fixed weights are required skills 30, project relevance 25, keyword coverage 15, experience 10, education 10, and expression 10. It recomputes the total and ignores AI-provided totals.
+- AI uses provider-safe `buildAiResumeContext`; evidence is validated against the locked resume snapshot and JD materials. Invalid evidence becomes a `FAILED` history record with no report. `NOT_FOUND` is normalized to `当前简历中未找到相关证据`.
+- Branch `feat/rag-stage-3-base-matching` passed local checks but is waiting for Claude independent acceptance. Do not start Stage 4, merge, tag, or push.
 
 ## Design Memory
 

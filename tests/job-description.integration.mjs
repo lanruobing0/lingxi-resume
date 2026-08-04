@@ -81,6 +81,9 @@ async function main() {
     for (let attempt = 0; attempt < 40; attempt += 1) {
       try { await request("/api/health"); break; } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
     }
+    await request("/api/resumes/11", { method: "PUT", body: JSON.stringify({ summary: "为 JD 测试创建锁定版本" }) });
+    const resumeVersions = await request("/api/resumes/11/versions");
+    const resumeVersionId = resumeVersions.items[0].id;
     const samples = [
       { title: "前端开发工程师", companyName: "星云科技", rawText: "岗位职责：负责 Web 前端页面开发。任职要求：本科及以上学历，2 年及以上经验，熟悉 React 和 TypeScript。加分项：有性能优化经验。具备良好的沟通协作能力。" },
       { title: "Java 后端开发工程师", companyName: "远航软件", rawText: "岗位职责：负责后端服务开发。任职要求：本科及以上学历，2 年及以上经验，熟悉 Java 与 Spring Boot。加分项：有 Redis 使用经验。具备良好的沟通协作能力。" },
@@ -95,7 +98,7 @@ async function main() {
       assert.ok(parsed.item.parsedData.requiredSkills.length);
       assert.ok(parsed.item.parsedData.preferredSkills.length);
       assert.equal(parsed.item.parsedData.requiredSkills[0].evidence.length > 0, true);
-      const application = await request("/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, jobDescriptionId: created.item.id }) });
+      const application = await request("/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, resumeVersionId, jobDescriptionId: created.item.id }) });
       assert.equal(application.item.resumeId, 11);
       assert.equal(application.item.jobDescriptionId, created.item.id);
       assert.equal(application.item.jobDescriptionParseResultId, parsed.item.id);

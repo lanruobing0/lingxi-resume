@@ -70,6 +70,7 @@ async function main() {
     }
     const updatedResume = await request(tokenA, "/api/resumes/11", { method: "PUT", body: JSON.stringify({ selfEvaluation: "负责订单服务与性能优化", summary: "test version snapshot" }) });
     assert.equal(updatedResume.item.version, 4);
+    const lockedVersionId = (await request(tokenA, "/api/resumes/11/versions")).items[0].id;
     const analysis = await request(tokenA, "/api/resumes/11/analyze", { method: "POST", body: JSON.stringify({ targetPosition: "Java 工程师" }) }, 201);
     const analysisA2 = await request(tokenA, "/api/resumes/12/analyze", { method: "POST", body: JSON.stringify({ targetPosition: "前端工程师" }) }, 201);
     assert.deepEqual([analysis.item.matchScore, analysis.item.keywordScore, analysis.item.projectScore, analysis.item.completenessScore], [10, 92, 0, 47]);
@@ -123,13 +124,13 @@ async function main() {
     const jd = await request(tokenA, "/api/job-descriptions", { method: "POST", body: JSON.stringify({ title: "Java 工程师", rawText: "负责服务开发，熟悉 Java。" }) }, 201);
     await request(tokenB, `/api/job-descriptions/${jd.item.id}`, {}, 404);
     await request(tokenB, `/api/job-descriptions/${jd.item.id}`, { method: "PUT", body: JSON.stringify({ title: "unauthorized" }) }, 404);
-    await request(tokenB, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, jobDescriptionId: jd.item.id }) }, 404);
-    await request(tokenA, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, jobDescriptionId: jd.item.id }) }, 409);
+    await request(tokenB, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, resumeVersionId: lockedVersionId, jobDescriptionId: jd.item.id }) }, 404);
+    await request(tokenA, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, resumeVersionId: lockedVersionId, jobDescriptionId: jd.item.id }) }, 409);
     await request(tokenA, `/api/job-descriptions/${jd.item.id}/parse`, { method: "POST" }, 201);
-    const application = await request(tokenA, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, jobDescriptionId: jd.item.id }) }, 201);
+    const application = await request(tokenA, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, resumeVersionId: lockedVersionId, jobDescriptionId: jd.item.id }) }, 201);
     assert.equal(application.item.resumeId, 11);
     await request(tokenA, `/api/job-descriptions/${jd.item.id}`, { method: "PUT", body: JSON.stringify({ rawText: "负责服务开发，熟悉 Java 和 Spring。" }) });
-    await request(tokenA, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, jobDescriptionId: jd.item.id }) }, 409);
+    await request(tokenA, "/api/job-applications", { method: "POST", body: JSON.stringify({ resumeId: 11, resumeVersionId: lockedVersionId, jobDescriptionId: jd.item.id }) }, 409);
     const versions = await request(tokenA, "/api/resumes/11/versions");
     assert.ok(versions.items.length >= 1);
     assert.equal(versions.items[0].hasSnapshot, true);
