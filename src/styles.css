@@ -5098,6 +5098,57 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 .job-application-controls select { min-width: 220px; }
 .job-application-list { display: grid; gap: 4px; width: 100%; }
 .job-application-list p { margin: 0; color: var(--muted); font-size: 13px; }
+.job-application-list button {
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  font-size: 13px;
+}
+.job-application-list button:hover,
+.job-application-list button.active { border-color: var(--line); background: var(--canvas); color: var(--ink); }
+
+.job-match-panel {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.job-match-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.job-match-head h3, .job-match-head p, .job-match-report h4, .job-match-report p { margin: 0; }
+.job-match-head p, .job-match-report > div > p { margin-top: 6px; color: var(--muted); line-height: 1.6; }
+.job-match-report { display: grid; gap: 16px; }
+.job-match-score { display: flex; align-items: baseline; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.job-match-score strong { color: var(--blue); font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.job-match-score span { color: var(--muted); font-size: 13px; font-weight: 750; }
+.job-match-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.job-match-dimensions article { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.job-match-dimensions article > div { display: flex; justify-content: space-between; gap: 8px; }
+.job-match-dimensions article span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.job-match-dimensions i { display: block; height: 6px; overflow: hidden; border-radius: 999px; background: #e8edf4; }
+.job-match-dimensions b { display: block; width: var(--match-score); height: 100%; border-radius: inherit; background: var(--blue); }
+.job-match-dimensions p { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.job-match-dimensions small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.job-match-evidence, .job-match-suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.job-match-evidence section, .job-match-suggestions > div { padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.job-match-evidence h4, .job-match-suggestions h4 { margin: 0 0 8px; font-size: 13px; }
+.job-match-evidence ul, .job-match-suggestions ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.job-match-evidence li { display: grid; gap: 3px; font-size: 13px; line-height: 1.45; }
+.job-match-evidence li span, .job-match-evidence li small { color: var(--muted); }
+.job-match-evidence .match-evidence-meta { font-size: 12px; }
+.job-match-evidence p { color: var(--muted); font-size: 13px; }
+.job-match-suggestions li { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.job-match-history { display: grid; gap: 5px; padding-top: 4px; border-top: 1px solid var(--line); }
+.job-match-history > strong { margin-top: 10px; font-size: 13px; }
+.job-match-history > div { display: flex; align-items: center; gap: 8px; }
+.job-match-history button { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); text-align: left; }
+.job-match-history button:hover, .job-match-history button.active { border-color: var(--line); background: var(--canvas); color: var(--ink); }
+.job-match-history small { font-size: 12px; }
+.job-match-history .link-button { min-height: 34px; padding: 0 8px; }
 
 @media (max-width: 760px) {
   .job-page-head,
@@ -5110,6 +5161,8 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
   .job-page-actions,
   .job-application-controls { flex-wrap: wrap; }
   .job-application-controls select { min-width: 0; }
+  .job-match-head { align-items: stretch; flex-direction: column; }
+  .job-match-dimensions, .job-match-evidence, .job-match-suggestions { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

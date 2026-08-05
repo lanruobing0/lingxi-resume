@@ -14,8 +14,8 @@
 | ResumeVersion | `id`; `resume_id -> Resume.id` | version_no、`snapshot_json`、`normalized_text`、`content_hash`、source、summary、created_at | `(resume_id, version_no)` 唯一；每次用户保存和建议应用生成不可变完整快照。 |
 | JobDescription | `id`; `user_id -> user.id` | title、company_name、source_url、`raw_text`、`normalized_text`、status、current_parse_id、content_hash | 用户真实粘贴 JD 的聚合根；保存原文、不能只留岗位名。 |
 | JobDescriptionParseResult | `id`; `job_description_id` | parser_version、status、structured_json、requirements JSON、source_spans JSON、confidence、model/provider、input_hash | 同一 JD 可多次解析；`raw_text` 改变后不得覆盖旧结果。 |
-| JobApplication | `id`; `user_id/resume_id/resume_version_id/job_description_id/job_description_parse_result_id` | status、label、created_at | 固化“一版简历申请一版 JD”的业务上下文；后续 report/interview 都从这里开始。 |
-| ResumeJobMatch | `id`; `job_application_id` | algorithm_version、overall_score、status、summary、input_hash、report_id | 一次基础/RAG 匹配执行；与 Application 的版本绑定，不能漂移到当前简历。 |
+| JobApplication | `id`; `user_id/resume_id/resume_version_id/job_description_id/job_description_parse_result_id` | `resume_version`、`resume_content_hash`、`job_description_raw_text_hash`、status、created_at | 固化“一版简历申请一版 JD”的业务上下文；阶段 3 必须显式选择 `resumeVersionId`，不能推断当前版本。 |
+| ResumeJobMatch | `id`; `job_application_id` | 输入绑定、algorithm_version、六维报告、total_score、status、provider/model、failure code/message、created/updated_at | 一次基础匹配执行；与 Application 的版本绑定，不能漂移到当前简历，失败不复用旧成功报告。 |
 | MatchDimension | `id`; `match_id` | code、label、weight、score、status、resume_evidence JSON、jd_evidence JSON、rationale | 如 hard_requirements、skills、experience、impact、education、keywords；总分可重算。 |
 | ResumeSuggestion | `id`; `match_id/resume_version_id` | target_path、target_entry_id、before_json、after_json、reason、citations JSON、status、decision_reason、applied_version_id | 状态：PENDING/ACCEPTED/REJECTED/STALE/FAILED；不能自动改 Resume。 |
 | KnowledgeDocument | `id`; `created_by` | title、document_type、source_url、license、raw_content、clean_content、metadata JSON、status、version、content_hash | 只允许 DRAFT/APPROVED/RETIRED；来源/授权审计。 |

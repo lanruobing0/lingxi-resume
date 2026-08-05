@@ -296,3 +296,12 @@ INSERT INTO system_notice (title, content) VALUES
 -- CREATE TABLE job_application (... user_id, resume_id, resume_version,
 -- resume_content_hash, job_description_id, job_description_parse_result_id,
 -- job_description_raw_text_hash, status, created_at ...);
+--
+-- Phase 3 reference table (do not execute as a local runtime migration):
+-- CREATE TABLE resume_job_match (... user_id, job_application_id, resume_id,
+-- resume_version_id, resume_version, resume_content_hash, job_description_id,
+-- job_description_parse_result_id, job_description_raw_text_hash,
+-- algorithm_version, status, total_score, report_json, model_provider, model_id,
+-- failure_code, failure_message, created_at, updated_at ...);
+-- CREATE INDEX idx_resume_job_match_user_application
+--   ON resume_job_match (user_id, job_application_id, created_at);

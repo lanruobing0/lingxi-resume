@@ -177,6 +177,7 @@ const seedData = {
   jobDescriptions: [],
   jobDescriptionParseResults: [],
   jobApplications: [],
+  resumeJobMatches: [],
   mockInterviews: [],
   interviewAnswers: [],
   systemNotices: [
@@ -600,6 +601,27 @@ function getOwnedJobDescription(store, user, requestedId) {
   return store.jobDescriptions.find((item) => item.id === jobDescriptionId && item.userId === user.id) || null;
 }
 
+function getOwnedJobApplication(store, user, requestedId) {
+  const applicationId = Number(requestedId);
+  if (!Number.isInteger(applicationId) || applicationId < 1) return null;
+  return store.jobApplications.find((item) => item.id === applicationId && item.userId === user.id) || null;
+}
+
+function getOwnedResumeJobMatch(store, user, requestedId) {
+  const matchId = Number(requestedId);
+  if (!Number.isInteger(matchId) || matchId < 1) return null;
+  return store.resumeJobMatches.find((item) => item.id === matchId && item.userId === user.id) || null;
+}
+
+function getResumeSnapshotForApplication(store, application) {
+  const history = store.resumeHistories.find((item) => item.id === application.resumeVersionId
+    && item.resumeId === application.resumeId
+    && item.resumeVersion === application.resumeVersion
+    && item.contentHash === application.resumeContentHash
+    && item.snapshot);
+  return history?.snapshot || null;
+}
+
 function contentHash(value) {
   return createHash("sha256").update(String(value || "")).digest("hex");
 }
@@ -629,6 +651,7 @@ async function readStore() {
     jobDescriptions: store.jobDescriptions || [],
     jobDescriptionParseResults: store.jobDescriptionParseResults || [],
     jobApplications: store.jobApplications || [],
+    resumeJobMatches: store.resumeJobMatches || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     systemNotices: store.systemNotices || seedData.systemNotices,
@@ -1127,6 +1150,196 @@ async function generateAiJobDescriptionParse(store, userId, jobDescription) {
   };
 }
 
+const matchDimensionDefinitions = [
+  ["required_skills", "必备技能", 30],
+  ["project_relevance", "项目相关性", 25],
+  ["keyword_coverage", "关键词覆盖", 15],
+  ["experience", "经验匹配", 10],
+  ["education", "教育背景", 10],
+  ["expression", "表达质量", 10],
+];
+const matchStatusValues = new Set(["MATCHED", "PARTIALLY_MATCHED", "NOT_FOUND", "NOT_APPLICABLE"]);
+const missingResumeEvidenceText = "当前简历中未找到相关证据";
+
+const matchSkillSchema = {
+  type: "object", additionalProperties: false,
+  required: ["skillName", "matchStatus", "resumeEvidence", "jdEvidence", "explanation", "confidence"],
+  properties: {
+    skillName: { type: "string" }, matchStatus: { type: "string", enum: [...matchStatusValues] },
+    resumeEvidence: { type: "array", items: { type: "string" } }, jdEvidence: { type: "array", items: { type: "string" } },
+    explanation: { type: "string" }, confidence: { type: "integer", minimum: 0, maximum: 100 },
+  },
+};
+const matchDimensionSchema = {
+  type: "object", additionalProperties: false,
+  required: ["key", "label", "score", "summary", "resumeEvidence", "jdEvidence", "missingEvidence", "suggestions"],
+  properties: {
+    key: { type: "string" }, label: { type: "string" }, score: { type: "integer", minimum: 0, maximum: 100 }, summary: { type: "string" },
+    resumeEvidence: { type: "array", items: { type: "string" } }, jdEvidence: { type: "array", items: { type: "string" } },
+    missingEvidence: { type: "array", items: { type: "string" } }, suggestions: { type: "array", items: { type: "string" } },
+  },
+};
+const matchSchema = {
+  type: "object", additionalProperties: false,
+  required: ["totalScore", "summary", "dimensions", "matchedRequiredSkills", "partiallyMatchedRequiredSkills", "missingRequiredSkills", "matchedPreferredSkills", "missingPreferredSkills", "matchedKeywords", "missingKeywords", "strongestResumeEvidence", "risks", "prioritizedSuggestions"],
+  properties: {
+    totalScore: { type: "integer", minimum: 0, maximum: 100 }, summary: { type: "string" }, dimensions: { type: "array", items: matchDimensionSchema },
+    matchedRequiredSkills: { type: "array", items: matchSkillSchema }, partiallyMatchedRequiredSkills: { type: "array", items: matchSkillSchema }, missingRequiredSkills: { type: "array", items: matchSkillSchema },
+    matchedPreferredSkills: { type: "array", items: matchSkillSchema }, missingPreferredSkills: { type: "array", items: matchSkillSchema },
+    matchedKeywords: { type: "array", items: matchSkillSchema }, missingKeywords: { type: "array", items: matchSkillSchema },
+    strongestResumeEvidence: { type: "array", items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, prioritizedSuggestions: { type: "array", items: { type: "string" } },
+  },
+};
+
+function strictMatchScore(value, fieldName) {
+  const score = Number(value);
+  if (!Number.isInteger(score) || score < 0 || score > 100) throw new Error(`AI 返回字段 ${fieldName} 必须是 0 到 100 的整数`);
+  return score;
+}
+
+function normalizeMatchEvidence(value, fieldName, sourceText, { required = false } = {}) {
+  if (!Array.isArray(value)) throw new Error(`AI 返回字段 ${fieldName} 不是数组`);
+  const items = [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  if (required && !items.length) throw new Error(`AI 返回字段 ${fieldName} 缺少证据`);
+  for (const item of items) if (!sourceText.includes(item)) throw new Error(`AI 返回字段 ${fieldName} 包含无法验证的证据`);
+  return items;
+}
+
+function normalizeMatchTextList(value, fieldName, { required = false } = {}) {
+  if (!Array.isArray(value)) throw new Error(`AI 返回字段 ${fieldName} 不是数组`);
+  const items = [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  if (required && !items.length) throw new Error(`AI 返回字段 ${fieldName} 不能为空`);
+  return items;
+}
+
+function normalizeMatchSkillList(value, fieldName, expectedStatuses, resumeText, jdText) {
+  if (!Array.isArray(value)) throw new Error(`AI 返回字段 ${fieldName} 不是数组`);
+  return value.map((item, index) => {
+    const status = String(item?.matchStatus || "").trim();
+    if (!matchStatusValues.has(status) || !expectedStatuses.includes(status)) throw new Error(`AI 返回字段 ${fieldName}[${index}].matchStatus 不合法`);
+    const resumeEvidence = normalizeMatchEvidence(item?.resumeEvidence, `${fieldName}[${index}].resumeEvidence`, resumeText, { required: status !== "NOT_FOUND" && status !== "NOT_APPLICABLE" });
+    const jdEvidence = normalizeMatchEvidence(item?.jdEvidence, `${fieldName}[${index}].jdEvidence`, jdText, { required: status !== "NOT_APPLICABLE" });
+    return {
+      skillName: requireNonEmptyText(item?.skillName, `${fieldName}[${index}].skillName`),
+      matchStatus: status,
+      resumeEvidence,
+      jdEvidence,
+      explanation: status === "NOT_FOUND" ? missingResumeEvidenceText : requireNonEmptyText(item?.explanation, `${fieldName}[${index}].explanation`),
+      confidence: strictMatchScore(item?.confidence, `${fieldName}[${index}].confidence`),
+    };
+  });
+}
+
+function normalizeMatchReport(data, { resumeSnapshot, jobDescription, parseResult }) {
+  const resumeText = JSON.stringify(buildAiResumeContext(resumeSnapshot));
+  const jdText = `${jobDescription.rawText}\n${JSON.stringify(parseResult.parsedData || {})}`;
+  if (!Array.isArray(data?.dimensions) || data.dimensions.length !== matchDimensionDefinitions.length) throw new Error("AI 返回的匹配维度不完整");
+  const dimensions = matchDimensionDefinitions.map(([key, label, weight], index) => {
+    const item = data.dimensions[index];
+    if (!item || item.key !== key) throw new Error(`AI 返回的匹配维度顺序或 key 不正确：${key}`);
+    const resumeEvidence = normalizeMatchEvidence(item.resumeEvidence, `dimensions.${key}.resumeEvidence`, resumeText);
+    const jdEvidence = normalizeMatchEvidence(item.jdEvidence, `dimensions.${key}.jdEvidence`, jdText);
+    const missingEvidence = normalizeMatchTextList(item.missingEvidence, `dimensions.${key}.missingEvidence`);
+    return {
+      key, label: String(item.label || label).trim() || label, score: strictMatchScore(item.score, `dimensions.${key}.score`), weight,
+      weightedScore: 0, summary: requireNonEmptyText(item.summary, `dimensions.${key}.summary`), resumeEvidence, jdEvidence,
+      missingEvidence: missingEvidence.map(() => missingResumeEvidenceText), suggestions: normalizeMatchTextList(item.suggestions, `dimensions.${key}.suggestions`),
+    };
+  });
+  for (const item of dimensions) item.weightedScore = Number((item.score * item.weight / 100).toFixed(2));
+  const totalScore = Math.round(dimensions.reduce((total, item) => total + item.weightedScore, 0));
+  return {
+    totalScore,
+    summary: requireNonEmptyText(data.summary, "summary"),
+    dimensions,
+    matchedRequiredSkills: normalizeMatchSkillList(data.matchedRequiredSkills, "matchedRequiredSkills", ["MATCHED"], resumeText, jdText),
+    partiallyMatchedRequiredSkills: normalizeMatchSkillList(data.partiallyMatchedRequiredSkills, "partiallyMatchedRequiredSkills", ["PARTIALLY_MATCHED"], resumeText, jdText),
+    missingRequiredSkills: normalizeMatchSkillList(data.missingRequiredSkills, "missingRequiredSkills", ["NOT_FOUND"], resumeText, jdText),
+    matchedPreferredSkills: normalizeMatchSkillList(data.matchedPreferredSkills, "matchedPreferredSkills", ["MATCHED", "PARTIALLY_MATCHED"], resumeText, jdText),
+    missingPreferredSkills: normalizeMatchSkillList(data.missingPreferredSkills, "missingPreferredSkills", ["NOT_FOUND"], resumeText, jdText),
+    matchedKeywords: normalizeMatchSkillList(data.matchedKeywords, "matchedKeywords", ["MATCHED", "PARTIALLY_MATCHED"], resumeText, jdText),
+    missingKeywords: normalizeMatchSkillList(data.missingKeywords, "missingKeywords", ["NOT_FOUND"], resumeText, jdText),
+    strongestResumeEvidence: normalizeMatchEvidence(data.strongestResumeEvidence, "strongestResumeEvidence", resumeText, { required: true }),
+    risks: normalizeMatchTextList(data.risks, "risks"),
+    prioritizedSuggestions: normalizeMatchTextList(data.prioritizedSuggestions, "prioritizedSuggestions", { required: true }),
+  };
+}
+
+async function generateAiResumeJobMatch(store, userId, context) {
+  const aiResume = buildAiResumeContext(context.resumeSnapshot);
+  const ai = await runAiJson(store, userId, {
+    schemaName: "resume_job_match", schema: matchSchema,
+    system: `You produce an evidence-backed Chinese resume-to-JD matching report. Assess only the supplied resume snapshot and JD. Never infer personal ability beyond the resume. When the resume lacks evidence, use exactly '${missingResumeEvidenceText}'. Every non-empty resumeEvidence must be a verbatim excerpt from the resume context; every non-empty jdEvidence must be a verbatim excerpt from the JD or its parsed result. Use exactly six dimensions in this order: required_skills, project_relevance, keyword_coverage, experience, education, expression. Do not decide the final total score; it will be calculated by the server. Return JSON only.`,
+    user: [
+      `Locked resume context: ${JSON.stringify(aiResume)}`,
+      `Locked JD raw text: ${context.jobDescription.rawText}`,
+      `Locked JD parse result: ${JSON.stringify(context.parseResult.parsedData)}`,
+      "Return a report with summary, dimensions, required/preferred skill lists, keyword lists, strongestResumeEvidence, risks, and prioritizedSuggestions. Every skill item needs skillName, matchStatus, resumeEvidence, jdEvidence, explanation, confidence. Do not include name, contact information, or any private profile field.",
+    ].join("\n"),
+  });
+  if (!ai.ok) throw new HttpError(ai.status || 502, "岗位匹配 AI 调用失败", ai.error);
+  return { ...normalizeMatchReport(ai.data, context), aiMode: ai.mode };
+}
+
+function resolveResumeJobMatchContext(store, user, application) {
+  const requiredFields = ["userId", "resumeId", "resumeVersionId", "resumeVersion", "resumeContentHash", "jobDescriptionId", "jobDescriptionParseResultId", "jobDescriptionRawTextHash"];
+  if (requiredFields.some((field) => application[field] === undefined || application[field] === null || application[field] === "")) {
+    throw new HttpError(409, "求职分析任务的固化输入不完整，无法生成匹配报告");
+  }
+  const resume = getOwnedResume(store, user, application.resumeId);
+  const resumeSnapshot = getResumeSnapshotForApplication(store, application);
+  if (!resume || !resumeSnapshot || buildResumeDTO(resumeSnapshot).contentHash !== application.resumeContentHash) {
+    throw new HttpError(409, "简历版本或内容哈希不一致，无法生成匹配报告");
+  }
+  const jobDescription = getOwnedJobDescription(store, user, application.jobDescriptionId);
+  const parseResult = store.jobDescriptionParseResults.find((item) => item.id === application.jobDescriptionParseResultId
+    && item.userId === user.id && item.jobDescriptionId === application.jobDescriptionId && item.status === "SUCCEEDED");
+  if (!jobDescription || !parseResult || jobDescription.rawTextHash !== application.jobDescriptionRawTextHash || parseResult.rawTextHash !== jobDescription.rawTextHash || jobDescription.currentParseResultId !== parseResult.id || jobDescription.parseStatus !== "SUCCEEDED") {
+    throw new HttpError(409, "岗位 JD 解析结果已失效或未成功解析，无法生成匹配报告");
+  }
+  return { resumeSnapshot, jobDescription, parseResult };
+}
+
+async function executeResumeJobMatch(store, user, application) {
+  const context = resolveResumeJobMatchContext(store, user, application);
+  const config = getAiConfig(store, user.id);
+  const record = {
+    id: nextId(store.resumeJobMatches), userId: user.id, jobApplicationId: application.id,
+    resumeId: application.resumeId, resumeVersionId: application.resumeVersionId, resumeVersion: application.resumeVersion, resumeContentHash: application.resumeContentHash,
+    jobDescriptionId: application.jobDescriptionId, jobDescriptionParseResultId: application.jobDescriptionParseResultId,
+    jobDescriptionRawTextHash: application.jobDescriptionRawTextHash, algorithmVersion: "base-match-v1",
+    status: "PENDING", totalScore: null, report: null, modelProvider: config.provider, modelId: config.modelId,
+    failureCode: null, failureMessage: null, createdAt: now(), updatedAt: now(),
+  };
+  store.resumeJobMatches.push(record);
+  await writeStore(store);
+  record.status = "ANALYZING";
+  record.updatedAt = now();
+  await writeStore(store);
+  try {
+    const result = await generateAiResumeJobMatch(store, user.id, context);
+    record.status = "COMPLETED";
+    record.totalScore = result.totalScore;
+    record.report = result;
+    record.modelProvider = getAiConfig(store, user.id).provider;
+    record.modelId = getAiConfig(store, user.id).modelId;
+    record.failureCode = null;
+    record.failureMessage = null;
+    record.updatedAt = now();
+    await writeStore(store);
+    return record;
+  } catch (error) {
+    record.status = "FAILED";
+    record.totalScore = null;
+    record.report = null;
+    record.failureCode = error instanceof HttpError && error.status === 400 ? "AI_NOT_CONFIGURED" : "MATCH_GENERATION_FAILED";
+    record.failureMessage = String(error.message || "岗位匹配失败").slice(0, 500);
+    record.updatedAt = now();
+    await writeStore(store);
+    throw new HttpError(error instanceof HttpError ? error.status : 422, "岗位匹配失败", { matchId: record.id, reason: record.failureMessage });
+  }
+}
+
 async function generateAiAnalysis(store, userId, resume, position) {
   const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
@@ -1547,6 +1760,19 @@ async function handleApi(req, res) {
     return send(res, 200, { item });
   }
 
+  if (method === "DELETE" && jobDescriptionMatch) {
+    const user = requireUser(store, req);
+    const item = getOwnedJobDescription(store, user, jobDescriptionMatch[1]);
+    if (!item) return send(res, 404, { message: "岗位 JD 不存在" });
+    const applicationIds = new Set(store.jobApplications.filter((application) => application.jobDescriptionId === item.id).map((application) => application.id));
+    store.jobDescriptions = store.jobDescriptions.filter((candidate) => candidate.id !== item.id);
+    store.jobDescriptionParseResults = store.jobDescriptionParseResults.filter((result) => result.jobDescriptionId !== item.id);
+    store.jobApplications = store.jobApplications.filter((application) => application.jobDescriptionId !== item.id);
+    store.resumeJobMatches = store.resumeJobMatches.filter((match) => !applicationIds.has(match.jobApplicationId) && match.jobDescriptionId !== item.id);
+    await writeStore(store);
+    return send(res, 204, {});
+  }
+
   const jobDescriptionParseMatch = pathname.match(/^\/api\/job-descriptions\/(\d+)\/parse$/);
   if (method === "POST" && jobDescriptionParseMatch) {
     const user = requireUser(store, req);
@@ -1596,14 +1822,21 @@ async function handleApi(req, res) {
     const jobDescription = getOwnedJobDescription(store, user, body.jobDescriptionId);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     if (!jobDescription) return send(res, 404, { message: "岗位 JD 不存在" });
+    const resumeVersionId = parseOptionalPositiveInteger(body.resumeVersionId, "resumeVersionId");
+    if (!resumeVersionId) return send(res, 400, { message: "请选择明确的简历版本后再创建求职分析任务" });
+    const resumeHistory = store.resumeHistories.find((item) => item.id === resumeVersionId && item.resumeId === resume.id && item.snapshot);
+    if (!resumeHistory || buildResumeDTO(resumeHistory.snapshot).contentHash !== resumeHistory.contentHash) {
+      return send(res, 409, { message: "所选简历版本快照不完整或内容哈希不一致" });
+    }
     const parseResult = store.jobDescriptionParseResults.find((result) => result.id === jobDescription.currentParseResultId && result.jobDescriptionId === jobDescription.id && result.userId === user.id && result.status === "SUCCEEDED");
     if (!parseResult) return send(res, 409, { message: "请先成功解析该岗位 JD 后再创建求职分析任务" });
     const application = {
       id: nextId(store.jobApplications),
       userId: user.id,
       resumeId: resume.id,
-      resumeVersion: Number(resume.version) || 1,
-      resumeContentHash: buildResumeDTO(resume).contentHash,
+      resumeVersionId: resumeHistory.id,
+      resumeVersion: resumeHistory.resumeVersion,
+      resumeContentHash: resumeHistory.contentHash,
       jobDescriptionId: jobDescription.id,
       jobDescriptionParseResultId: parseResult.id,
       jobDescriptionRawTextHash: jobDescription.rawTextHash,
@@ -1613,6 +1846,46 @@ async function handleApi(req, res) {
     store.jobApplications.push(application);
     await writeStore(store);
     return send(res, 201, { item: application });
+  }
+
+  const applicationMatchesMatch = pathname.match(/^\/api\/job-applications\/(\d+)\/matches$/);
+  if (applicationMatchesMatch && method === "GET") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationMatchesMatch[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在" });
+    const items = store.resumeJobMatches
+      .filter((item) => item.userId === user.id && item.jobApplicationId === application.id)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .map(({ report, ...item }) => ({ ...item, hasReport: Boolean(report) }));
+    return send(res, 200, { items });
+  }
+
+  if (applicationMatchesMatch && method === "POST") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationMatchesMatch[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在" });
+    const item = await executeResumeJobMatch(store, user, application);
+    return send(res, 201, { item });
+  }
+
+  const resumeJobMatchDetail = pathname.match(/^\/api\/resume-job-matches\/(\d+)$/);
+  if (resumeJobMatchDetail && method === "GET") {
+    const user = requireUser(store, req);
+    const item = getOwnedResumeJobMatch(store, user, resumeJobMatchDetail[1]);
+    if (!item) return send(res, 404, { message: "岗位匹配报告不存在" });
+    return send(res, 200, { item });
+  }
+
+  const resumeJobMatchRetry = pathname.match(/^\/api\/resume-job-matches\/(\d+)\/retry$/);
+  if (resumeJobMatchRetry && method === "POST") {
+    const user = requireUser(store, req);
+    const previous = getOwnedResumeJobMatch(store, user, resumeJobMatchRetry[1]);
+    if (!previous) return send(res, 404, { message: "岗位匹配报告不存在" });
+    if (previous.status !== "FAILED") return send(res, 409, { message: "仅失败的匹配任务可以重试" });
+    const application = getOwnedJobApplication(store, user, previous.jobApplicationId);
+    if (!application) return send(res, 409, { message: "原求职分析任务已不可用，无法重试" });
+    const item = await executeResumeJobMatch(store, user, application);
+    return send(res, 201, { item });
   }
 
   if (key === "GET /api/resumes") {
@@ -1675,6 +1948,7 @@ async function handleApi(req, res) {
     store.mockInterviews = store.mockInterviews.filter((item) => item.resumeId !== resume.id);
     store.interviewAnswers = store.interviewAnswers.filter((item) => item.resumeId !== resume.id);
     store.jobApplications = store.jobApplications.filter((item) => item.resumeId !== resume.id);
+    store.resumeJobMatches = store.resumeJobMatches.filter((item) => item.resumeId !== resume.id);
     await writeStore(store);
     return send(res, 204, {});
   }
