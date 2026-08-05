@@ -3112,6 +3112,9 @@ function KnowledgeBaseManager({ notify, onChanged }) {
   const [selected, setSelected] = useState(null);
   const [chunks, setChunks] = useState([]);
   const [records, setRecords] = useState([]);
+  const [indexRuns, setIndexRuns] = useState([]);
+  const [vectorRecords, setVectorRecords] = useState([]);
+  const [vectorStatus, setVectorStatus] = useState(null);
   const [expandedChunkId, setExpandedChunkId] = useState(null);
   const [working, setWorking] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState(null);
@@ -3132,14 +3135,18 @@ function KnowledgeBaseManager({ notify, onChanged }) {
   const loadDetail = useCallback(async (documentId) => {
     try {
       setWorking(`detail-${documentId}`);
-      const [detail, chunkData, recordData] = await Promise.all([
+      const [detail, chunkData, recordData, runData, vectorData] = await Promise.all([
         apiRequest(`/api/admin/knowledge-documents/${documentId}`),
         apiRequest(`/api/admin/knowledge-documents/${documentId}/chunks`),
         apiRequest(`/api/admin/knowledge-documents/${documentId}/processing-records`),
+        apiRequest(`/api/admin/knowledge-documents/${documentId}/index-runs`),
+        apiRequest(`/api/admin/knowledge-documents/${documentId}/vector-records`),
       ]);
       setSelected(detail.item);
       setChunks(chunkData.items);
       setRecords(recordData.items);
+      setIndexRuns(runData.items);
+      setVectorRecords(vectorData.items);
       setExpandedChunkId(null);
     } catch (error) {
       notify(`读取知识资料失败: ${error.message}`);
@@ -3151,6 +3158,10 @@ function KnowledgeBaseManager({ notify, onChanged }) {
   useEffect(() => {
     loadDocuments();
   }, [loadDocuments]);
+
+  useEffect(() => {
+    apiRequest("/api/admin/vector-index/status").then(setVectorStatus).catch(() => setVectorStatus(null));
+  }, []);
 
   const openCreate = () => {
     setEditingId(null);
@@ -3214,6 +3225,8 @@ function KnowledgeBaseManager({ notify, onChanged }) {
         setSelected(null);
         setChunks([]);
         setRecords([]);
+        setIndexRuns([]);
+        setVectorRecords([]);
       }
       setDeleteCandidate(null);
       await loadDocuments();
@@ -3223,6 +3236,18 @@ function KnowledgeBaseManager({ notify, onChanged }) {
     } finally {
       setWorking("");
     }
+  };
+
+  const manageIndex = async (action) => {
+    if (!selected) return;
+    const path = action === "delete" ? `/api/admin/knowledge-documents/${selected.id}/index` : `/api/admin/knowledge-documents/${selected.id}/index${action === "rebuild" ? "/rebuild" : ""}`;
+    try {
+      setWorking(`index-${action}`);
+      const response = await apiRequest(path, { method: action === "delete" ? "DELETE" : "POST" });
+      notify(action === "delete" ? "向量索引已删除" : response.idempotent ? "当前索引未变化，已复用现有索引" : "向量索引已建立");
+      await Promise.all([loadDocuments(), loadDetail(selected.id)]);
+    } catch (error) { notify(`向量索引操作失败: ${error.message}`); }
+    finally { setWorking(""); }
   };
 
   return (
@@ -3263,6 +3288,14 @@ function KnowledgeBaseManager({ notify, onChanged }) {
         <button type="button" className="white-small" disabled={loading} onClick={loadDocuments}>{loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}刷新</button>
       </div>
 
+      <div className="vector-index-summary" role="status">
+        <span className={`knowledge-status ${vectorStatus?.embedding?.configured ? "indexed" : "failed"}`}>Embedding {vectorStatus?.embedding?.configured ? "已配置" : "未配置"}</span>
+        <span className={`knowledge-status ${vectorStatus?.qdrant?.healthy ? "indexed" : "failed"}`}>Qdrant {vectorStatus?.qdrant?.healthy ? "健康" : "不可用"}</span>
+        {vectorStatus?.embedding?.configured && <small>{vectorStatus.embedding.model} · {vectorStatus.embedding.dimension} 维</small>}
+        {vectorStatus?.collectionName && <small className="vector-index-collection">Collection：{vectorStatus.collectionName}</small>}
+        {!vectorStatus?.embedding?.configured && <small>请在服务端环境变量中配置 Embedding 后再建立索引。</small>}
+      </div>
+
       <div className="knowledge-workspace">
         <div className="knowledge-list" aria-label="知识资料列表">
           {loading ? <div className="knowledge-loading"><LoaderCircle className="spin" size={18} />正在读取知识资料</div> : documents.length ? documents.map((document) => (
@@ -3279,12 +3312,15 @@ function KnowledgeBaseManager({ notify, onChanged }) {
             <>
               <div className="knowledge-detail-head">
                 <div><span className={`knowledge-status ${selected.status.toLowerCase()}`}>{knowledgeStatusLabel(selected.status)}</span><h3>{selected.title}</h3><p>{selected.description || "暂无资料说明"}</p></div>
-                <div className="knowledge-detail-actions"><button type="button" className="white-small" disabled={working === "process"} onClick={processDocument}>{working === "process" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}处理文档</button><button type="button" className="white-small" onClick={openEdit}>编辑</button><button type="button" className="danger-text-button" onClick={() => setDeleteCandidate(selected)}><Trash2 size={16} />删除</button></div>
+                <div className="knowledge-detail-actions"><button type="button" className="white-small" disabled={working === "process"} onClick={processDocument}>{working === "process" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}处理文档</button><button type="button" className="white-small" disabled={selected.status !== "PROCESSED" || !vectorStatus?.embedding?.configured || !vectorStatus?.qdrant?.healthy || working.startsWith("index-")} onClick={() => manageIndex("create")}>建立索引</button><button type="button" className="white-small" disabled={selected.status !== "PROCESSED" || !vectorStatus?.embedding?.configured || !vectorStatus?.qdrant?.healthy || working.startsWith("index-")} onClick={() => manageIndex("rebuild")}>重新索引</button>{selected.vectorStatus && selected.vectorStatus !== "NOT_INDEXED" && <button type="button" className="danger-text-button" disabled={working.startsWith("index-")} onClick={() => manageIndex("delete")}>删除索引</button>}<button type="button" className="white-small" onClick={openEdit}>编辑</button><button type="button" className="danger-text-button" onClick={() => setDeleteCandidate(selected)}><Trash2 size={16} />删除</button></div>
               </div>
               <div className="knowledge-meta"><span>来源：{selected.sourceName || "未填写"}</span><span>语言：{selected.language}</span><span>标签：{selected.skillTags?.join("、") || "未填写"}</span><span>原文哈希：{selected.rawTextHash?.slice(0, 12)}…</span></div>
+              <section className="knowledge-detail-section vector-index-detail"><header><h4>向量索引</h4><span className={`knowledge-status ${(selected.vectorStatus || "NOT_INDEXED").toLowerCase()}`}>{vectorStatusLabel(selected.vectorStatus)}</span></header><div className="vector-index-facts"><span>索引版本：{selected.indexedProcessingVersion ? `v${selected.indexedProcessingVersion}` : "—"}</span><span>有效记录：{selected.indexedChunkCount || 0}</span><span>模型：{vectorStatus?.embedding?.model || "未配置"}</span><span>Collection：{selected.vectorCollection || "—"}</span><span>最后索引：{selected.indexedAt ? formatResumeDate(selected.indexedAt) : "—"}</span></div>{selected.vectorStatus === "STALE" && <p className="vector-index-note">文档切片已更新，旧向量不再代表当前版本；请重新建立索引。</p>}{selected.indexFailureMessage && <p className="vector-index-note error">{selected.indexFailureCode}: {selected.indexFailureMessage}</p>}</section>
               {selected.status === "FAILED" && <div className="knowledge-error"><strong>{selected.failureCode || "处理失败"}</strong><span>{selected.failureMessage || "请检查原始内容后重新处理。"}</span></div>}
               <section className="knowledge-detail-section"><header><h4>当前有效切片</h4><span>{chunks.length} 个</span></header>{chunks.length ? chunks.map((chunk) => <article key={chunk.id} className="knowledge-chunk"><button type="button" onClick={() => setExpandedChunkId((current) => current === chunk.id ? null : chunk.id)}><span>#{chunk.chunkIndex + 1}</span><strong>{chunk.title}</strong><small>{chunk.tokenEstimate} 估算 token · {chunk.startOffset}–{chunk.endOffset}</small><ChevronDown size={16} className={expandedChunkId === chunk.id ? "rotated" : ""} /></button>{expandedChunkId === chunk.id && <div><p className="knowledge-heading-path">{chunk.headingPath?.length ? chunk.headingPath.join(" / ") : "未识别章节标题"}</p><pre>{chunk.content}</pre><small>内容哈希：{chunk.contentHash}</small></div>}</article>) : <p className="knowledge-empty-inline">尚未生成切片。保存后点击“处理文档”。</p>}</section>
               <section className="knowledge-detail-section"><header><h4>处理历史</h4><span>{records.length} 次</span></header>{records.length ? <div className="knowledge-history">{records.map((record) => <article key={record.id}><span className={`knowledge-status ${record.status.toLowerCase()}`}>{knowledgeStatusLabel(record.status)}</span><strong>v{record.processingVersion}</strong><small>{record.chunkCount} 个切片 · {formatResumeDate(record.createdAt)}</small>{record.failureMessage && <p>{record.failureCode}: {record.failureMessage}</p>}</article>)}</div> : <p className="knowledge-empty-inline">尚无处理记录。</p>}</section>
+              <section className="knowledge-detail-section"><header><h4>索引历史</h4><span>{indexRuns.length} 次</span></header>{indexRuns.length ? <div className="knowledge-history">{indexRuns.map((run) => <article key={run.id}><span className={`knowledge-status ${run.status === "COMPLETED" ? "indexed" : run.status === "FAILED" ? "failed" : "processing"}`}>{run.status}</span><strong>v{run.processingVersion} · {run.upsertedCount} points</strong><small>{run.model} · 清理 {run.cleanupStatus}</small>{run.failureMessage && <p>{run.failureCode}: {run.failureMessage}</p>}</article>)}</div> : <p className="knowledge-empty-inline">尚无索引记录。</p>}</section>
+              <section className="knowledge-detail-section"><header><h4>VectorRecord 元数据</h4><span>{vectorRecords.length} 条</span></header>{vectorRecords.length ? <div className="vector-record-list">{vectorRecords.map((record) => <article key={record.id}><span className={`knowledge-status ${record.status.toLowerCase()}`}>{record.status}</span><code>{record.pointId}</code><small>chunk #{record.chunkId} · run #{record.indexRunId}</small></article>)}</div> : <p className="knowledge-empty-inline">没有向量记录，且不会展示向量数组。</p>}</section>
             </>
           )}
         </div>
@@ -3300,6 +3336,10 @@ function knowledgeDocumentTypeLabel(value) {
 
 function knowledgeStatusLabel(value) {
   return ({ DRAFT: "待处理", PROCESSING: "处理中", PROCESSED: "已处理", FAILED: "处理失败" })[value] || value;
+}
+
+function vectorStatusLabel(value) {
+  return ({ NOT_INDEXED: "未建立索引", INDEXING: "索引中", INDEXED: "已建立索引", STALE: "需要重建", FAILED: "索引失败" })[value] || value || "未建立索引";
 }
 
 function AnalysisPanel({ notify, go, resumeId }) {

@@ -121,6 +121,10 @@ pnpm dev:api
 
 ## 页面模块
 
+## 阶段 5A：向量索引（ADMIN，已通过最终验收）
+
+阶段 5A 只为已处理的岗位知识 Chunk 建立、重建、删除和审计向量索引，不提供任何搜索或 RAG。复制 `.env.example` 后仅在服务端配置 Embedding/Qdrant 变量；本地可执行 `docker compose -f docker-compose.qdrant.yml up -d` 启动仅绑定 `127.0.0.1:6333` 的 Qdrant。密钥不得写入仓库或 JSON 数据。Docker 可用时运行 `corepack pnpm test:qdrant`。
+
 - 首页仪表盘
 - 简历工作台
 - AI 简历诊断

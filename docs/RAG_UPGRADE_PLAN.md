@@ -1,5 +1,9 @@
 # 灵犀简历：Agentic RAG 升级计划
 
+## 阶段 5A 已批准范围（实施中）
+
+本阶段只实现知识 Chunk 的 Embedding 与 Qdrant 向量索引生命周期，不实现检索。Embedding Profile（provider、model、dimension、输入格式版本、Cosine）决定独立 Collection；Point ID 是由文档、切片、输入 hash、Profile 与 schema 稳定计算的 UUID。写入验证后才切换本地 `activeIndexRunId`，旧 Point 清理失败不得成为当前索引。
+
 ## 审查基线（2026-08-04）
 
 本计划以当前仓库为基线，不新建前后端、不替换 React/Vite/原生 Node HTTP 服务，也不在本阶段安装依赖或接入向量库。实际 API 位于 `backend/server.js`（仓库根目录没有 `server.js`）。运行时以 `backend/data/store.json` 为主，`database.sql` 是尚未接线的 MySQL 参考结构。

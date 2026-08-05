@@ -1,6 +1,6 @@
 # AI_HANDOFF.md
 
-Last updated: 2026-08-04
+Last updated: 2026-08-05
 
 This is the quick continuation note for the next AI/Codex session.
 
@@ -104,16 +104,16 @@ Verified:
 - `pnpm build` passes.
 - `node --check backend/server.js` passes.
 
-## Stage 4 delivery — accepted
+## Stage 4 and 5A delivery — accepted
 
 - Stage 3 has been accepted, merged to `master`, and tagged `rag-stage-3-passed`.
-- Stage 4 passed Claude's second independent review. It is ready for its release commit, merge to `master`, and `rag-stage-4-passed` tag; stage 5 has not started.
+- Stage 4 passed Claude's second independent review and is merged to `master`.
 - `KnowledgeDocument`, server-generated `KnowledgeChunk`, and append-only `KnowledgeProcessingRecord` persist in the local JSON runtime. Every `/api/admin/knowledge-*` route verifies `ADMIN` server-side.
 - `rawText` is saved exactly as submitted and its hash is calculated from that original string. `normalizedText` is the independent LF/whitespace-cleaned processing text. Heading paths recognize Markdown, Chinese numerals, numeric headings, `一、`, brackets, and conservative context-qualified short headings; skills and responsibility rows remain body content.
 - Same input hash and strategy are idempotent. A new successful run atomically replaces the document's chunks; a failed run appends a FAILED record while preserving the previous successful chunks.
 - Added the admin knowledge-base section to the existing backend page and `tests/knowledge-base.integration.mjs`. The integration entry uses the real HTTP server plus an isolated JSON directory; `pnpm test` runs all four test files without external AI calls.
 - Known low-risk limitations: headings without body do not create a Chunk; edited document metadata is copied to existing chunks on next successful processing; `knowledgeMinLength` is not an active merge rule; development logs may print internal `HttpError` details; adjacent body-less short headings may deliberately remain body content.
-- Stage 5 (vector index, retrieval and reranking) has not started. Qdrant, Embedding, Reranker and RAG remain absent.
+- Stage 5A passed Claude's final independent review and is ready for release commit, merge to `master`, and `rag-stage-5a-passed` tagging. It provides only controlled Embedding/Qdrant index lifecycle; retrieval, reranking, and RAG remain absent.
 
 ## Historical Stage 3 delivery
 
@@ -192,6 +192,14 @@ Avoid touching unless necessary:
 - unrelated dirty files.
 
 ## Final Reminder
+
+## 阶段 5A（已通过最终验收）
+
+阶段 5A 已通过 Claude 最终独立验收：知识 Chunk 的 Embedding/Qdrant 索引生命周期与 ADMIN 管理已完成。Embedding/Qdrant 配置只读取服务器环境变量；Profile 隔离模型/维度，`activeIndexRunId` 是有效索引权威。新 run 完成验证与切换后会按 Collection 清理同文档旧 processingVersion Point；清理失败时旧记录可追踪，而新 active run 保持有效。
+
+模块位置：`backend/embedding-provider.js`、`backend/knowledge-embedding-text.js`、`backend/knowledge-vector-index.js`、`backend/qdrant-client.js` 与 `backend/server.js`。测试入口：`corepack pnpm test`（Mock 集成测试）和 `corepack pnpm test:qdrant`（真实 Qdrant smoke）。运行环境变量与 API、数据模型、Collection/Point payload 和生命周期规则以 `README.md`、`docs/RAG_DATA_MODEL.md` 与 `docs/tasks/STAGE_05A_VECTOR_INDEX.md` 为准。
+
+阶段 5B 尚未开始；没有关键词检索、向量搜索、混合检索、Reranker、RAG 或 Agent。
 
 ## RAG Phase 1-2 Handoff
 
