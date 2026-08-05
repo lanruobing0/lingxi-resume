@@ -19,6 +19,9 @@ desktop.ini
 .vscode/
 *.code-workspace
 backend/data/*.json
+.qdrant-data/
+qdrant-data/
+.vector-index-tmp/
 backend/uploads/
 uploads/
 storage/uploads/

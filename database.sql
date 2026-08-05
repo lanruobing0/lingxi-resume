@@ -373,3 +373,36 @@ INSERT INTO system_notice (title, content) VALUES
 --   CONSTRAINT fk_knowledge_processing_document FOREIGN KEY (document_id) REFERENCES knowledge_document(id),
 --   INDEX idx_knowledge_processing_document_created (document_id, created_at)
 -- );
+
+-- Phase 5A vector-index production reference. Local runtime remains JSON and no vector arrays are stored here.
+-- ALTER TABLE knowledge_document ADD COLUMN vector_status VARCHAR(24) NOT NULL DEFAULT 'NOT_INDEXED',
+--   ADD COLUMN active_index_run_id BIGINT NULL, ADD COLUMN indexed_processing_version INT NULL,
+--   ADD COLUMN indexed_chunk_count INT NOT NULL DEFAULT 0, ADD COLUMN embedding_profile_id VARCHAR(80) NULL,
+--   ADD COLUMN vector_collection VARCHAR(160) NULL, ADD COLUMN indexed_at DATETIME NULL,
+--   ADD COLUMN index_failure_code VARCHAR(100) NULL, ADD COLUMN index_failure_message TEXT NULL;
+-- CREATE TABLE knowledge_index_run (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, document_id BIGINT NOT NULL, processing_version INT NOT NULL,
+--   input_hash CHAR(64) NOT NULL, embedding_profile_id VARCHAR(80) NOT NULL, provider VARCHAR(80) NOT NULL,
+--   model VARCHAR(160) NOT NULL, dimension INT NOT NULL, collection_name VARCHAR(160) NOT NULL,
+--   status VARCHAR(24) NOT NULL, input_chunk_count INT NOT NULL, embedded_count INT NOT NULL DEFAULT 0,
+--   reused_count INT NOT NULL DEFAULT 0, upserted_count INT NOT NULL DEFAULT 0, removed_count INT NOT NULL DEFAULT 0,
+--   cleanup_status VARCHAR(24) NOT NULL, failure_code VARCHAR(100) NULL, failure_message TEXT NULL,
+--   started_at DATETIME NOT NULL, completed_at DATETIME NULL, created_by BIGINT NOT NULL,
+--   CONSTRAINT fk_knowledge_index_document FOREIGN KEY (document_id) REFERENCES knowledge_document(id),
+--   CONSTRAINT fk_knowledge_index_creator FOREIGN KEY (created_by) REFERENCES user(id),
+--   INDEX idx_knowledge_index_document_created (document_id, started_at),
+--   INDEX idx_knowledge_index_profile_collection (embedding_profile_id, collection_name)
+-- );
+-- CREATE TABLE knowledge_vector_record (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, index_run_id BIGINT NOT NULL, document_id BIGINT NOT NULL,
+--   chunk_id BIGINT NOT NULL, processing_version INT NOT NULL, content_hash CHAR(64) NOT NULL,
+--   embedding_input_hash CHAR(64) NOT NULL, embedding_profile_id VARCHAR(80) NOT NULL,
+--   collection_name VARCHAR(160) NOT NULL, point_id CHAR(36) NOT NULL, status VARCHAR(24) NOT NULL,
+--   indexed_at DATETIME NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+--   CONSTRAINT fk_knowledge_vector_run FOREIGN KEY (index_run_id) REFERENCES knowledge_index_run(id),
+--   CONSTRAINT fk_knowledge_vector_document FOREIGN KEY (document_id) REFERENCES knowledge_document(id),
+--   CONSTRAINT fk_knowledge_vector_chunk FOREIGN KEY (chunk_id) REFERENCES knowledge_chunk(id),
+--   UNIQUE KEY uq_knowledge_vector_collection_point (collection_name, point_id),
+--   INDEX idx_knowledge_vector_document_status (document_id, status),
+--   INDEX idx_knowledge_vector_run (index_run_id)
+-- );

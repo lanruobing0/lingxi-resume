@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import { KnowledgeVectorIndexError, KnowledgeVectorIndexService } from "./knowledge-vector-index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
@@ -181,6 +182,8 @@ const seedData = {
   knowledgeDocuments: [],
   knowledgeChunks: [],
   knowledgeProcessingRecords: [],
+  knowledgeIndexRuns: [],
+  knowledgeVectorRecords: [],
   mockInterviews: [],
   interviewAnswers: [],
   systemNotices: [
@@ -658,6 +661,8 @@ async function readStore() {
     knowledgeDocuments: store.knowledgeDocuments || [],
     knowledgeChunks: store.knowledgeChunks || [],
     knowledgeProcessingRecords: store.knowledgeProcessingRecords || [],
+    knowledgeIndexRuns: store.knowledgeIndexRuns || [],
+    knowledgeVectorRecords: store.knowledgeVectorRecords || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     systemNotices: store.systemNotices || seedData.systemNotices,
@@ -809,6 +814,16 @@ const knowledgeProcessingStrategy = "heading-paragraph-sentence-v1";
 const knowledgeTargetLength = 760;
 const knowledgeMaxLength = 1200;
 const knowledgeMinLength = 100;
+
+function vectorIndexService() {
+  return new KnowledgeVectorIndexService({ persist: writeStore, now });
+}
+
+function vectorIndexErrorResponse(error) {
+  if (error instanceof KnowledgeVectorIndexError) return { status: error.status, message: error.message, failureCode: error.code };
+  if (error && typeof error.status === "number" && error.code) return { status: error.status, message: error.message, failureCode: error.code };
+  return { status: 502, message: "向量索引服务不可用", failureCode: "VECTOR_INDEX_FAILED" };
+}
 
 function requireAdmin(store, req) {
   const user = requireUser(store, req);
@@ -2550,10 +2565,76 @@ async function handleApi(req, res) {
       processedAt: null,
       failureCode: "",
       failureMessage: "",
+      vectorStatus: "NOT_INDEXED",
+      activeIndexRunId: null,
+      indexedProcessingVersion: null,
+      indexedChunkCount: 0,
+      embeddingProfileId: null,
+      vectorCollection: null,
+      indexedAt: null,
+      indexFailureCode: "",
+      indexFailureMessage: "",
     };
     store.knowledgeDocuments.push(document);
     await writeStore(store);
     return send(res, 201, { item: knowledgeDocumentSummary(document) });
+  }
+
+  if (key === "GET /api/admin/vector-index/status") {
+    requireAdmin(store, req);
+    return send(res, 200, await vectorIndexService().status());
+  }
+
+  const knowledgeIndexMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/index$/);
+  if (knowledgeIndexMatch && ["POST", "DELETE"].includes(method)) {
+    const user = requireAdmin(store, req);
+    const documentId = parseOptionalPositiveInteger(knowledgeIndexMatch[1], "documentId");
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    if (!document) return send(res, 404, { message: "知识资料不存在" });
+    try {
+      if (method === "DELETE") {
+        const result = await vectorIndexService().deleteDocumentIndex(store, document);
+        return send(res, 200, { ok: true, ...result, item: knowledgeDocumentSummary(document) });
+      }
+      const result = await vectorIndexService().indexDocument(store, document, user.id);
+      return send(res, 200, { ...result, item: knowledgeDocumentSummary(document) });
+    } catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
+  }
+
+  const knowledgeRebuildMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/index\/rebuild$/);
+  if (method === "POST" && knowledgeRebuildMatch) {
+    const user = requireAdmin(store, req);
+    const documentId = parseOptionalPositiveInteger(knowledgeRebuildMatch[1], "documentId");
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    if (!document) return send(res, 404, { message: "知识资料不存在" });
+    try { const result = await vectorIndexService().indexDocument(store, document, user.id, { force: true }); return send(res, 200, { ...result, item: knowledgeDocumentSummary(document) }); }
+    catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
+  }
+
+  const knowledgeIndexRunsMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/index-runs$/);
+  if (method === "GET" && knowledgeIndexRunsMatch) {
+    requireAdmin(store, req); const documentId = parseOptionalPositiveInteger(knowledgeIndexRunsMatch[1], "documentId");
+    if (!store.knowledgeDocuments.some((item) => item.id === documentId)) return send(res, 404, { message: "知识资料不存在" });
+    return send(res, 200, { items: store.knowledgeIndexRuns.filter((run) => run.documentId === documentId).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))) });
+  }
+
+  const knowledgeVectorRecordsMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/vector-records$/);
+  if (method === "GET" && knowledgeVectorRecordsMatch) {
+    requireAdmin(store, req); const documentId = parseOptionalPositiveInteger(knowledgeVectorRecordsMatch[1], "documentId");
+    if (!store.knowledgeDocuments.some((item) => item.id === documentId)) return send(res, 404, { message: "知识资料不存在" });
+    return send(res, 200, { items: store.knowledgeVectorRecords.filter((record) => record.documentId === documentId).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) });
+  }
+
+  const knowledgeIndexRetryMatch = pathname.match(/^\/api\/admin\/knowledge-index-runs\/([^/]+)\/retry$/);
+  if (method === "POST" && knowledgeIndexRetryMatch) {
+    const user = requireAdmin(store, req); const runId = parseOptionalPositiveInteger(knowledgeIndexRetryMatch[1], "indexRunId");
+    const failedRun = store.knowledgeIndexRuns.find((run) => run.id === runId);
+    if (!failedRun) return send(res, 404, { message: "索引运行记录不存在" });
+    if (failedRun.status !== "FAILED") return send(res, 409, { message: "只有失败的索引运行可以重试", failureCode: "INDEX_RUN_NOT_FAILED" });
+    const document = store.knowledgeDocuments.find((item) => item.id === failedRun.documentId);
+    if (!document) return send(res, 404, { message: "知识资料不存在" });
+    try { const result = await vectorIndexService().indexDocument(store, document, user.id, { force: true }); return send(res, 200, { ...result, item: knowledgeDocumentSummary(document) }); }
+    catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
   }
 
   const knowledgeDocumentMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)$/);
@@ -2578,9 +2659,13 @@ async function handleApi(req, res) {
       return send(res, 200, { item: knowledgeDocumentSummary(document) });
     }
     if (method === "DELETE") {
+      try { await vectorIndexService().deleteDocumentIndex(store, document); }
+      catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
       store.knowledgeDocuments = store.knowledgeDocuments.filter((item) => item.id !== documentId);
       store.knowledgeChunks = store.knowledgeChunks.filter((item) => item.documentId !== documentId);
       store.knowledgeProcessingRecords = store.knowledgeProcessingRecords.filter((item) => item.documentId !== documentId);
+      store.knowledgeIndexRuns = store.knowledgeIndexRuns.filter((item) => item.documentId !== documentId);
+      store.knowledgeVectorRecords = store.knowledgeVectorRecords.filter((item) => item.documentId !== documentId);
       await writeStore(store);
       return send(res, 200, { ok: true, deletedId: documentId });
     }
@@ -2642,6 +2727,13 @@ async function handleApi(req, res) {
       document.status = "PROCESSED";
       document.processingVersion = processingVersion;
       document.chunkCount = chunks.length;
+      if (document.activeIndexRunId || store.knowledgeVectorRecords.some((item) => item.documentId === documentId)) {
+        document.vectorStatus = "STALE";
+        document.activeIndexRunId = null;
+        document.indexFailureCode = "";
+        document.indexFailureMessage = "文档已重新处理，请重新建立向量索引";
+        store.knowledgeVectorRecords.filter((item) => item.documentId === documentId && item.status === "ACTIVE").forEach((item) => { item.status = "STALE"; item.updatedAt = record.completedAt; });
+      }
       document.processedAt = record.completedAt;
       document.updatedAt = record.completedAt;
       store.knowledgeChunks = [...store.knowledgeChunks.filter((chunk) => chunk.documentId !== documentId), ...chunks];

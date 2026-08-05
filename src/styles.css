@@ -4322,6 +4322,34 @@ textarea {
 .knowledge-status.processing { background: var(--blue-soft); color: #2161cc; }
 .knowledge-status.failed { background: #fff0ee; color: #b73c32; }
 .knowledge-status.draft { background: #f3f1eb; color: #6a6254; }
+.knowledge-status.indexed { background: #e9f7ef; color: #20704a; }
+.knowledge-status.stale { background: #fff8df; color: #805b00; }
+.knowledge-status.not_indexed { background: #f3f1eb; color: #6a6254; }
+
+.vector-index-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.vector-index-summary small { overflow-wrap: anywhere; }
+.vector-index-collection { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.vector-index-detail { border-top: 1px solid var(--line); padding-top: 16px; }
+.vector-index-facts { display: flex; flex-wrap: wrap; gap: 7px 15px; color: var(--muted); font-size: 12px; }
+.vector-index-note { margin: 10px 0 0; color: #805b00; font-size: 12px; line-height: 1.5; }
+.vector-index-note.error { color: #9c352d; }
+.vector-record-list { display: grid; gap: 7px; }
+.vector-record-list article { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 9px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+.vector-record-list code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4f5d70; font-size: 11px; }
+.vector-record-list small { grid-column: 2; color: var(--muted); font-size: 11px; }
 
 .knowledge-detail {
   min-width: 0;
@@ -4500,6 +4528,7 @@ textarea {
   .knowledge-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 320px; overflow-y: auto; }
   .knowledge-detail { padding: 16px; }
   .knowledge-detail-actions { justify-content: flex-start; }
+  .vector-record-list article { grid-template-columns: auto minmax(0, 1fr); }
   .knowledge-chunk > button { grid-template-columns: auto minmax(0, 1fr) auto; }
   .knowledge-chunk > button small { display: none; }
   .knowledge-chunk > div { padding-left: 0; }

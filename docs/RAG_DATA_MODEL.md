@@ -77,6 +77,10 @@ erDiagram
 
 Qdrant payload 不放原始 Resume/JD、用户联系方式、API Key 或唯一业务状态。删除/禁用 document 时由异步任务删除或过滤对应 vector；MySQL `KnowledgeChunk.status` 始终是最终授权判断。
 
+## 阶段 5A 索引元数据
+
+`KnowledgeIndexRun` 保存 document/version/input hash、Embedding Profile、Collection、各步骤计数、cleanup 与失败审计。`KnowledgeVectorRecord` 保存 Point ID、Chunk 与 run 的关联、输入 hash、profile、Collection 和 ACTIVE/STALE/PENDING_DELETE 状态；不保存向量数组。Document 摘要保存 `activeIndexRunId`、`vectorStatus`、已索引版本/数量/Profile/Collection/时间和安全失败摘要。后续检索必须以 `activeIndexRunId` 校验 Point payload。
+
 ## 当前 AI 历史的保留策略
 
 - `analysisRecords`：保留已有总分和建议，新增 `legacy=true`；新的基础/RAG 匹配使用 ResumeJobMatch，不混写。
