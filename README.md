@@ -72,6 +72,19 @@ pnpm dev:api
 - `POST /api/interviews/:id/answers`：提交面试回答并生成反馈
 - `GET /api/admin/overview`：后台统计概览
 
+### 岗位知识库（阶段 4，ADMIN 专用）
+
+知识库当前仅支持管理员以文本方式录入可追溯的岗位资料；普通用户不能浏览或调用管理接口。资料可使用 Markdown、中文序号、阿拉伯数字、`一、` 和 `【标题】`。服务端只进行换行/空白规范化、章节识别和语义优先切片，不调用 AI 改写原文。
+
+- `GET/POST /api/admin/knowledge-documents`：筛选或创建资料
+- `GET/PUT/DELETE /api/admin/knowledge-documents/:id`：查看、编辑或级联删除资料
+- `POST /api/admin/knowledge-documents/:id/process`：生成或重用当前资料的 chunks
+- `GET /api/admin/knowledge-documents/:id/chunks`：查看当前有效 chunks
+- `GET /api/admin/knowledge-documents/:id/processing-records`：查看不可覆写的处理历史
+- `GET /api/admin/knowledge-chunks/:chunkId`：查看单个 chunk
+
+相同 `rawTextHash` 和处理策略会直接返回既有成功结果；新处理只有成功后才替换当前 chunks，失败会保留上一次成功结果。`tokenEstimate` 使用文档化的字符/词近似算法，不等同于模型真实 token 数。阶段 4 不包含文件上传、PDF/DOCX/网页解析、Embedding、向量检索或 RAG。
+
 ### 基础岗位匹配（阶段 3）
 
 岗位匹配基于用户显式选择的 ResumeVersion 和已成功解析、仍有效的 JD。创建 JobApplication 时必须同时提交 `resumeId`、`resumeVersionId` 和 `jobDescriptionId`；不会以“当前简历”“最近版本”或“最新 JD”补全输入。

@@ -3033,20 +3033,24 @@ function RecordColumn({ title, items }) {
 
 function AdminPanel({ notify }) {
   const [metrics, setMetrics] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const loadOverview = async () => {
+  const loadOverview = useCallback(async (showNotice = false) => {
     try {
+      setLoading(true);
       const data = await apiRequest("/api/admin/overview");
       setMetrics(data.metrics);
-      notify("后台数据已刷新");
+      if (showNotice) notify("后台数据已刷新");
     } catch (error) {
       notify(`后台数据加载失败: ${error.message}`);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [notify]);
 
   useEffect(() => {
     loadOverview();
-  }, []);
+  }, [loadOverview]);
 
   const cards = [
     ["用户数", metrics?.users ?? 0],
@@ -3056,6 +3060,7 @@ function AdminPanel({ notify }) {
     ["语法检查", metrics?.grammarRecords ?? 0],
     ["模拟面试", metrics?.interviews ?? 0],
     ["岗位方向", metrics?.positions ?? 0],
+    ["知识资料", metrics?.knowledgeDocuments ?? 0],
   ];
 
   return (
@@ -3065,7 +3070,7 @@ function AdminPanel({ notify }) {
           <span className="section-kicker">数据概览</span>
           <p>查看用户、简历、AI 记录、岗位方向和模拟面试数据概览。</p>
         </div>
-        <button className="black-small" onClick={loadOverview}>刷新统计</button>
+        <button type="button" className="black-small" disabled={loading} onClick={() => loadOverview(true)}>{loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}刷新统计</button>
       </div>
       <div className="admin-grid">
         {cards.map(([label, value]) => (
@@ -3075,8 +3080,226 @@ function AdminPanel({ notify }) {
           </article>
         ))}
       </div>
+      <KnowledgeBaseManager notify={notify} onChanged={() => loadOverview()} />
     </section>
   );
+}
+
+const knowledgeDocumentTypeOptions = [
+  ["ROLE_SKILL_DESCRIPTION", "岗位技能说明"],
+  ["COMPETENCY_STANDARD", "岗位能力标准"],
+  ["INDUSTRY_ROLE_REQUIREMENT", "行业岗位要求"],
+  ["RESUME_EXAMPLE", "优秀简历案例"],
+  ["PROJECT_CASE", "项目经历案例"],
+  ["STAR_TEMPLATE", "STAR 表达模板"],
+  ["INTERVIEW_QUESTION", "面试题"],
+  ["INTERVIEW_RUBRIC", "面试评分标准"],
+  ["RESUME_COMMON_ISSUE", "常见简历问题"],
+  ["RESUME_WRITING_GUIDELINE", "简历表达规范"],
+];
+
+const emptyKnowledgeDocumentForm = () => ({
+  title: "", description: "", sourceType: "TEXT_ENTRY", documentType: "ROLE_SKILL_DESCRIPTION", jobFamily: "", seniority: "", skillTags: "", language: "zh-CN", sourceName: "", sourceUrl: "", rawText: "",
+});
+
+function KnowledgeBaseManager({ notify, onChanged }) {
+  const [documents, setDocuments] = useState([]);
+  const [filters, setFilters] = useState({ documentType: "", jobFamily: "", status: "" });
+  const [loading, setLoading] = useState(true);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyKnowledgeDocumentForm);
+  const [selected, setSelected] = useState(null);
+  const [chunks, setChunks] = useState([]);
+  const [records, setRecords] = useState([]);
+  const [expandedChunkId, setExpandedChunkId] = useState(null);
+  const [working, setWorking] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState(null);
+
+  const loadDocuments = useCallback(async () => {
+    try {
+      setLoading(true);
+      const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value));
+      const data = await apiRequest(`/api/admin/knowledge-documents${query.size ? `?${query}` : ""}`);
+      setDocuments(data.items);
+    } catch (error) {
+      notify(`知识资料加载失败: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, notify]);
+
+  const loadDetail = useCallback(async (documentId) => {
+    try {
+      setWorking(`detail-${documentId}`);
+      const [detail, chunkData, recordData] = await Promise.all([
+        apiRequest(`/api/admin/knowledge-documents/${documentId}`),
+        apiRequest(`/api/admin/knowledge-documents/${documentId}/chunks`),
+        apiRequest(`/api/admin/knowledge-documents/${documentId}/processing-records`),
+      ]);
+      setSelected(detail.item);
+      setChunks(chunkData.items);
+      setRecords(recordData.items);
+      setExpandedChunkId(null);
+    } catch (error) {
+      notify(`读取知识资料失败: ${error.message}`);
+    } finally {
+      setWorking("");
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    loadDocuments();
+  }, [loadDocuments]);
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm(emptyKnowledgeDocumentForm());
+    setFormOpen(true);
+  };
+
+  const openEdit = () => {
+    if (!selected) return;
+    setEditingId(selected.id);
+    setForm({ ...selected, skillTags: (selected.skillTags || []).join(", ") });
+    setFormOpen(true);
+  };
+
+  const submitForm = async (event) => {
+    event.preventDefault();
+    try {
+      setWorking("save");
+      const payload = { ...form, skillTags: form.skillTags.split(",").map((item) => item.trim()).filter(Boolean) };
+      const response = await apiRequest(editingId ? `/api/admin/knowledge-documents/${editingId}` : "/api/admin/knowledge-documents", {
+        method: editingId ? "PUT" : "POST",
+        body: JSON.stringify(payload),
+      });
+      setFormOpen(false);
+      notify(editingId ? "知识资料已更新" : "知识资料已创建，等待处理");
+      await loadDocuments();
+      await loadDetail(response.item.id);
+      onChanged();
+    } catch (error) {
+      notify(`保存知识资料失败: ${error.message}`);
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const processDocument = async () => {
+    if (!selected) return;
+    try {
+      setWorking("process");
+      const response = await apiRequest(`/api/admin/knowledge-documents/${selected.id}/process`, { method: "POST" });
+      notify(response.idempotent ? "原文和策略未变，已复用现有切片" : `文档处理完成，生成 ${response.item.chunkCount} 个切片`);
+      await loadDocuments();
+      await loadDetail(selected.id);
+      onChanged();
+    } catch (error) {
+      notify(`处理失败: ${error.message}`);
+      await loadDetail(selected.id);
+      await loadDocuments();
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const deleteDocument = async () => {
+    if (!deleteCandidate) return;
+    try {
+      setWorking("delete");
+      await apiRequest(`/api/admin/knowledge-documents/${deleteCandidate.id}`, { method: "DELETE" });
+      notify("知识资料、切片和处理记录已删除");
+      if (selected?.id === deleteCandidate.id) {
+        setSelected(null);
+        setChunks([]);
+        setRecords([]);
+      }
+      setDeleteCandidate(null);
+      await loadDocuments();
+      onChanged();
+    } catch (error) {
+      notify(`删除知识资料失败: ${error.message}`);
+    } finally {
+      setWorking("");
+    }
+  };
+
+  return (
+    <section className="knowledge-manager" aria-labelledby="knowledge-manager-title">
+      <div className="knowledge-manager-head">
+        <div>
+          <span className="section-kicker">知识库管理</span>
+          <h2 id="knowledge-manager-title">岗位资料与切片</h2>
+          <p>仅管理员可维护。文本会在服务端清洗、识别章节并按语义边界切片；不会调用 AI 改写资料。</p>
+        </div>
+        <button type="button" className="black-small" onClick={openCreate}><Plus size={16} />新建资料</button>
+      </div>
+
+      {formOpen && (
+        <form className="knowledge-form" onSubmit={submitForm}>
+          <div className="knowledge-form-head"><h3>{editingId ? "编辑知识资料" : "新建知识资料"}</h3><button type="button" className="plain-icon" aria-label="关闭资料表单" onClick={() => setFormOpen(false)}><X size={18} /></button></div>
+          <div className="knowledge-form-grid">
+            <label>标题<input required maxLength={160} value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} /></label>
+            <label>资料类型<select value={form.documentType} onChange={(event) => setForm((current) => ({ ...current, documentType: event.target.value }))}>{knowledgeDocumentTypeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label>来源类型<select value={form.sourceType} onChange={(event) => setForm((current) => ({ ...current, sourceType: event.target.value }))}><option value="TEXT_ENTRY">文本录入</option><option value="INTERNAL">内部资料</option><option value="EXTERNAL">外部资料</option></select></label>
+            <label>岗位族<input maxLength={100} placeholder="例如：研发 / 产品 / 运营" value={form.jobFamily} onChange={(event) => setForm((current) => ({ ...current, jobFamily: event.target.value }))} /></label>
+            <label>职级<input maxLength={80} placeholder="例如：初级 / 中级 / 资深" value={form.seniority} onChange={(event) => setForm((current) => ({ ...current, seniority: event.target.value }))} /></label>
+            <label>语言<input maxLength={32} value={form.language} onChange={(event) => setForm((current) => ({ ...current, language: event.target.value }))} /></label>
+            <label>来源名称<input maxLength={200} value={form.sourceName} onChange={(event) => setForm((current) => ({ ...current, sourceName: event.target.value }))} /></label>
+            <label>来源链接<input type="url" maxLength={2048} placeholder="https://" value={form.sourceUrl} onChange={(event) => setForm((current) => ({ ...current, sourceUrl: event.target.value }))} /></label>
+            <label className="knowledge-form-span">技能标签（用英文逗号分隔）<input maxLength={1900} placeholder="React, TypeScript, Spring Boot" value={form.skillTags} onChange={(event) => setForm((current) => ({ ...current, skillTags: event.target.value }))} /></label>
+            <label className="knowledge-form-span">简介<textarea maxLength={2000} rows={3} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
+            <label className="knowledge-form-span">原始内容<textarea required maxLength={300000} rows={12} placeholder="粘贴可追溯的岗位资料。支持 Markdown 和常见中文标题。" value={form.rawText} onChange={(event) => setForm((current) => ({ ...current, rawText: event.target.value }))} /></label>
+          </div>
+          <div className="knowledge-form-actions"><button type="button" className="white-small" disabled={working === "save"} onClick={() => setFormOpen(false)}>取消</button><button className="black-small" disabled={working === "save"}>{working === "save" ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{editingId ? "保存修改" : "创建资料"}</button></div>
+        </form>
+      )}
+
+      <div className="knowledge-filterbar">
+        <select aria-label="按资料类型筛选" value={filters.documentType} onChange={(event) => setFilters((current) => ({ ...current, documentType: event.target.value }))}><option value="">全部资料类型</option>{knowledgeDocumentTypeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+        <input aria-label="按岗位族筛选" placeholder="筛选岗位族" value={filters.jobFamily} onChange={(event) => setFilters((current) => ({ ...current, jobFamily: event.target.value }))} />
+        <select aria-label="按处理状态筛选" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="">全部状态</option><option value="DRAFT">待处理</option><option value="PROCESSING">处理中</option><option value="PROCESSED">已处理</option><option value="FAILED">处理失败</option></select>
+        <button type="button" className="white-small" disabled={loading} onClick={loadDocuments}>{loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}刷新</button>
+      </div>
+
+      <div className="knowledge-workspace">
+        <div className="knowledge-list" aria-label="知识资料列表">
+          {loading ? <div className="knowledge-loading"><LoaderCircle className="spin" size={18} />正在读取知识资料</div> : documents.length ? documents.map((document) => (
+            <button type="button" key={document.id} className={`knowledge-list-item ${selected?.id === document.id ? "active" : ""}`} onClick={() => loadDetail(document.id)}>
+              <span className={`knowledge-status ${document.status.toLowerCase()}`}>{knowledgeStatusLabel(document.status)}</span>
+              <strong>{document.title}</strong>
+              <small>{knowledgeDocumentTypeLabel(document.documentType)} · {document.jobFamily || "未标注岗位族"}</small>
+              <span>{document.chunkCount || 0} 个切片 · v{document.processingVersion || 0}</span>
+            </button>
+          )) : <div className="knowledge-empty"><FolderOpen size={22} /><strong>还没有知识资料</strong><p>先录入一份可追溯的岗位或面试资料，再在此处处理为可查看的切片。</p><button type="button" className="white-small" onClick={openCreate}><Plus size={16} />录入资料</button></div>}
+        </div>
+        <div className="knowledge-detail">
+          {!selected ? <div className="knowledge-empty"><FileText size={24} /><strong>选择一份资料查看详情</strong><p>这里将展示服务端生成的章节路径、切片内容和不可覆写的处理历史。</p></div> : (
+            <>
+              <div className="knowledge-detail-head">
+                <div><span className={`knowledge-status ${selected.status.toLowerCase()}`}>{knowledgeStatusLabel(selected.status)}</span><h3>{selected.title}</h3><p>{selected.description || "暂无资料说明"}</p></div>
+                <div className="knowledge-detail-actions"><button type="button" className="white-small" disabled={working === "process"} onClick={processDocument}>{working === "process" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}处理文档</button><button type="button" className="white-small" onClick={openEdit}>编辑</button><button type="button" className="danger-text-button" onClick={() => setDeleteCandidate(selected)}><Trash2 size={16} />删除</button></div>
+              </div>
+              <div className="knowledge-meta"><span>来源：{selected.sourceName || "未填写"}</span><span>语言：{selected.language}</span><span>标签：{selected.skillTags?.join("、") || "未填写"}</span><span>原文哈希：{selected.rawTextHash?.slice(0, 12)}…</span></div>
+              {selected.status === "FAILED" && <div className="knowledge-error"><strong>{selected.failureCode || "处理失败"}</strong><span>{selected.failureMessage || "请检查原始内容后重新处理。"}</span></div>}
+              <section className="knowledge-detail-section"><header><h4>当前有效切片</h4><span>{chunks.length} 个</span></header>{chunks.length ? chunks.map((chunk) => <article key={chunk.id} className="knowledge-chunk"><button type="button" onClick={() => setExpandedChunkId((current) => current === chunk.id ? null : chunk.id)}><span>#{chunk.chunkIndex + 1}</span><strong>{chunk.title}</strong><small>{chunk.tokenEstimate} 估算 token · {chunk.startOffset}–{chunk.endOffset}</small><ChevronDown size={16} className={expandedChunkId === chunk.id ? "rotated" : ""} /></button>{expandedChunkId === chunk.id && <div><p className="knowledge-heading-path">{chunk.headingPath?.length ? chunk.headingPath.join(" / ") : "未识别章节标题"}</p><pre>{chunk.content}</pre><small>内容哈希：{chunk.contentHash}</small></div>}</article>) : <p className="knowledge-empty-inline">尚未生成切片。保存后点击“处理文档”。</p>}</section>
+              <section className="knowledge-detail-section"><header><h4>处理历史</h4><span>{records.length} 次</span></header>{records.length ? <div className="knowledge-history">{records.map((record) => <article key={record.id}><span className={`knowledge-status ${record.status.toLowerCase()}`}>{knowledgeStatusLabel(record.status)}</span><strong>v{record.processingVersion}</strong><small>{record.chunkCount} 个切片 · {formatResumeDate(record.createdAt)}</small>{record.failureMessage && <p>{record.failureCode}: {record.failureMessage}</p>}</article>)}</div> : <p className="knowledge-empty-inline">尚无处理记录。</p>}</section>
+            </>
+          )}
+        </div>
+      </div>
+      <ConfirmDialog open={Boolean(deleteCandidate)} title="删除这份知识资料？" description={`“${deleteCandidate?.title || "知识资料"}”及其全部切片、处理历史会被永久删除，无法撤销。`} confirmLabel="删除资料" isWorking={working === "delete"} onClose={() => setDeleteCandidate(null)} onConfirm={deleteDocument} />
+    </section>
+  );
+}
+
+function knowledgeDocumentTypeLabel(value) {
+  return knowledgeDocumentTypeOptions.find(([key]) => key === value)?.[1] || value;
+}
+
+function knowledgeStatusLabel(value) {
+  return ({ DRAFT: "待处理", PROCESSING: "处理中", PROCESSED: "已处理", FAILED: "处理失败" })[value] || value;
 }
 
 function AnalysisPanel({ notify, go, resumeId }) {

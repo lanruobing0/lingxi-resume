@@ -305,3 +305,71 @@ INSERT INTO system_notice (title, content) VALUES
 -- failure_code, failure_message, created_at, updated_at ...);
 -- CREATE INDEX idx_resume_job_match_user_application
 --   ON resume_job_match (user_id, job_application_id, created_at);
+
+-- Phase 4 knowledge-base production reference (do not execute as a local
+-- runtime migration; the Node development service still uses JSON):
+-- CREATE TABLE knowledge_document (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+--   title VARCHAR(160) NOT NULL,
+--   description VARCHAR(2000) NULL,
+--   source_type VARCHAR(32) NOT NULL,
+--   document_type VARCHAR(64) NOT NULL,
+--   job_family VARCHAR(100) NULL,
+--   seniority VARCHAR(80) NULL,
+--   skill_tags_json JSON NOT NULL,
+--   language VARCHAR(32) NOT NULL,
+--   source_name VARCHAR(200) NULL,
+--   source_url VARCHAR(2048) NULL,
+--   raw_text MEDIUMTEXT NOT NULL,
+--   raw_text_hash CHAR(64) NOT NULL,
+--   normalized_text MEDIUMTEXT NULL,
+--   status VARCHAR(16) NOT NULL,
+--   processing_version INT NOT NULL DEFAULT 0,
+--   chunk_count INT NOT NULL DEFAULT 0,
+--   created_by BIGINT NOT NULL,
+--   created_at DATETIME NOT NULL,
+--   updated_at DATETIME NOT NULL,
+--   processed_at DATETIME NULL,
+--   failure_code VARCHAR(100) NULL,
+--   failure_message TEXT NULL,
+--   CONSTRAINT fk_knowledge_document_creator FOREIGN KEY (created_by) REFERENCES user(id),
+--   INDEX idx_knowledge_document_status_type (status, document_type, updated_at)
+-- );
+-- CREATE TABLE knowledge_chunk (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+--   document_id BIGINT NOT NULL,
+--   chunk_index INT NOT NULL,
+--   heading_path_json JSON NOT NULL,
+--   title VARCHAR(200) NOT NULL,
+--   content MEDIUMTEXT NOT NULL,
+--   content_hash CHAR(64) NOT NULL,
+--   token_estimate INT NOT NULL COMMENT 'Approximation, not provider token usage',
+--   start_offset INT NOT NULL COMMENT 'Offset in normalized_text',
+--   end_offset INT NOT NULL COMMENT 'Offset in normalized_text',
+--   source_type VARCHAR(32) NOT NULL,
+--   document_type VARCHAR(64) NOT NULL,
+--   job_family VARCHAR(100) NULL,
+--   seniority VARCHAR(80) NULL,
+--   skill_tags_json JSON NOT NULL,
+--   language VARCHAR(32) NOT NULL,
+--   processing_version INT NOT NULL,
+--   created_at DATETIME NOT NULL,
+--   CONSTRAINT fk_knowledge_chunk_document FOREIGN KEY (document_id) REFERENCES knowledge_document(id),
+--   UNIQUE KEY uq_knowledge_chunk_document_version_index (document_id, processing_version, chunk_index),
+--   INDEX idx_knowledge_chunk_document_version (document_id, processing_version)
+-- );
+-- CREATE TABLE knowledge_processing_record (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT,
+--   document_id BIGINT NOT NULL,
+--   processing_version INT NOT NULL,
+--   status VARCHAR(16) NOT NULL,
+--   input_hash CHAR(64) NOT NULL,
+--   chunk_count INT NOT NULL DEFAULT 0,
+--   strategy VARCHAR(100) NOT NULL,
+--   failure_code VARCHAR(100) NULL,
+--   failure_message TEXT NULL,
+--   created_at DATETIME NOT NULL,
+--   completed_at DATETIME NULL,
+--   CONSTRAINT fk_knowledge_processing_document FOREIGN KEY (document_id) REFERENCES knowledge_document(id),
+--   INDEX idx_knowledge_processing_document_created (document_id, created_at)
+-- );
