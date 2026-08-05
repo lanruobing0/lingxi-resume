@@ -104,7 +104,18 @@ Verified:
 - `pnpm build` passes.
 - `node --check backend/server.js` passes.
 
-## Stage 3 delivery — waiting for Claude acceptance
+## Stage 4 delivery — accepted
+
+- Stage 3 has been accepted, merged to `master`, and tagged `rag-stage-3-passed`.
+- Stage 4 passed Claude's second independent review. It is ready for its release commit, merge to `master`, and `rag-stage-4-passed` tag; stage 5 has not started.
+- `KnowledgeDocument`, server-generated `KnowledgeChunk`, and append-only `KnowledgeProcessingRecord` persist in the local JSON runtime. Every `/api/admin/knowledge-*` route verifies `ADMIN` server-side.
+- `rawText` is saved exactly as submitted and its hash is calculated from that original string. `normalizedText` is the independent LF/whitespace-cleaned processing text. Heading paths recognize Markdown, Chinese numerals, numeric headings, `一、`, brackets, and conservative context-qualified short headings; skills and responsibility rows remain body content.
+- Same input hash and strategy are idempotent. A new successful run atomically replaces the document's chunks; a failed run appends a FAILED record while preserving the previous successful chunks.
+- Added the admin knowledge-base section to the existing backend page and `tests/knowledge-base.integration.mjs`. The integration entry uses the real HTTP server plus an isolated JSON directory; `pnpm test` runs all four test files without external AI calls.
+- Known low-risk limitations: headings without body do not create a Chunk; edited document metadata is copied to existing chunks on next successful processing; `knowledgeMinLength` is not an active merge rule; development logs may print internal `HttpError` details; adjacent body-less short headings may deliberately remain body content.
+- Stage 5 (vector index, retrieval and reranking) has not started. Qdrant, Embedding, Reranker and RAG remain absent.
+
+## Historical Stage 3 delivery
 
 - Branch: `feat/rag-stage-3-base-matching`, created from `master` at `a14d449`; no merge, tag, or push was performed.
 - `ResumeJobMatch` is immutable per run and binds `userId`, `jobApplicationId`, `resumeId`, `resumeVersionId`, `resumeVersion`, `resumeContentHash`, `jobDescriptionId`, and `jobDescriptionParseResultId`.

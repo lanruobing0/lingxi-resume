@@ -178,6 +178,9 @@ const seedData = {
   jobDescriptionParseResults: [],
   jobApplications: [],
   resumeJobMatches: [],
+  knowledgeDocuments: [],
+  knowledgeChunks: [],
+  knowledgeProcessingRecords: [],
   mockInterviews: [],
   interviewAnswers: [],
   systemNotices: [
@@ -652,6 +655,9 @@ async function readStore() {
     jobDescriptionParseResults: store.jobDescriptionParseResults || [],
     jobApplications: store.jobApplications || [],
     resumeJobMatches: store.resumeJobMatches || [],
+    knowledgeDocuments: store.knowledgeDocuments || [],
+    knowledgeChunks: store.knowledgeChunks || [],
+    knowledgeProcessingRecords: store.knowledgeProcessingRecords || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     systemNotices: store.systemNotices || seedData.systemNotices,
@@ -783,6 +789,279 @@ function applySecurityHeaders(req, res) {
 
 function routeKey(method, pathname) {
   return `${method} ${pathname}`;
+}
+
+const knowledgeDocumentTypes = new Set([
+  "ROLE_SKILL_DESCRIPTION",
+  "COMPETENCY_STANDARD",
+  "INDUSTRY_ROLE_REQUIREMENT",
+  "RESUME_EXAMPLE",
+  "PROJECT_CASE",
+  "STAR_TEMPLATE",
+  "INTERVIEW_QUESTION",
+  "INTERVIEW_RUBRIC",
+  "RESUME_COMMON_ISSUE",
+  "RESUME_WRITING_GUIDELINE",
+]);
+const knowledgeSourceTypes = new Set(["TEXT_ENTRY", "INTERNAL", "EXTERNAL"]);
+const knowledgeStatuses = new Set(["DRAFT", "PROCESSING", "PROCESSED", "FAILED"]);
+const knowledgeProcessingStrategy = "heading-paragraph-sentence-v1";
+const knowledgeTargetLength = 760;
+const knowledgeMaxLength = 1200;
+const knowledgeMinLength = 100;
+
+function requireAdmin(store, req) {
+  const user = requireUser(store, req);
+  if (user.role !== "ADMIN") throw new HttpError(403, "仅管理员可访问知识库管理接口");
+  return user;
+}
+
+function validateKnowledgeString(value, fieldName, { required = false, max = 200 } = {}) {
+  if (value === undefined || value === null) {
+    if (required) throw new HttpError(400, `${fieldName}不能为空`);
+    return "";
+  }
+  if (typeof value !== "string") throw new HttpError(400, `${fieldName}必须为文本`);
+  const normalized = value.trim();
+  if (required && !normalized) throw new HttpError(400, `${fieldName}不能为空`);
+  if (normalized.length > max) throw new HttpError(400, `${fieldName}长度不能超过${max}`);
+  return normalized;
+}
+
+// Raw source text is an audit record. Unlike regular metadata fields it must
+// retain every submitted character, including leading whitespace and CRLF.
+function validateKnowledgeRawText(value, { allowBlank = true, max = 300000 } = {}) {
+  if (typeof value !== "string") throw new HttpError(400, "rawText必须为文本");
+  if (value.length > max) throw new HttpError(400, `rawText长度不能超过${max}`);
+  if (!allowBlank && !value.trim()) throw new HttpError(400, "rawText不能为空");
+  return value;
+}
+
+function validateKnowledgeTags(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 30) throw new HttpError(400, "skillTags必须是最多30项的文本数组");
+  const tags = value.map((tag) => {
+    if (typeof tag !== "string") throw new HttpError(400, "skillTags必须是文本数组");
+    const normalized = tag.trim();
+    if (!normalized || normalized.length > 64) throw new HttpError(400, "skillTags中的每个标签长度须为1-64");
+    return normalized;
+  });
+  if (new Set(tags.map((tag) => tag.toLocaleLowerCase())).size !== tags.length) {
+    throw new HttpError(400, "skillTags不能包含重复标签");
+  }
+  return tags;
+}
+
+function validateKnowledgeDocumentInput(body, { isCreate = false, current = null } = {}) {
+  const required = (field, options) => body[field] === undefined && !isCreate
+    ? current[field]
+    : validateKnowledgeString(body[field], field, options);
+  const documentType = body.documentType === undefined && !isCreate ? current.documentType : validateKnowledgeString(body.documentType, "documentType", { required: true, max: 64 });
+  if (!knowledgeDocumentTypes.has(documentType)) throw new HttpError(400, "documentType不合法");
+  const sourceType = body.sourceType === undefined && !isCreate ? current.sourceType : validateKnowledgeString(body.sourceType, "sourceType", { required: true, max: 32 });
+  if (!knowledgeSourceTypes.has(sourceType)) throw new HttpError(400, "sourceType不合法");
+  const rawText = body.rawText === undefined && !isCreate ? current.rawText : validateKnowledgeRawText(body.rawText);
+  const skillTags = body.skillTags === undefined && !isCreate ? current.skillTags : validateKnowledgeTags(body.skillTags);
+  const sourceUrl = required("sourceUrl", { max: 2048 });
+  if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) throw new HttpError(400, "sourceUrl必须是http或https地址");
+  return {
+    title: required("title", { required: true, max: 160 }),
+    description: required("description", { max: 2000 }),
+    sourceType,
+    documentType,
+    jobFamily: required("jobFamily", { max: 100 }),
+    seniority: required("seniority", { max: 80 }),
+    skillTags,
+    language: required("language", { max: 32 }) || "zh-CN",
+    sourceName: required("sourceName", { max: 200 }),
+    sourceUrl,
+    rawText,
+  };
+}
+
+// This intentionally does not rewrite facts or wording. Offsets stored on chunks
+// refer to normalizedText, the stable source used by later retrieval phases.
+function normalizeKnowledgeText(rawText = "") {
+  const lines = String(rawText).replace(/\r\n?/g, "\n").split("\n");
+  const normalized = [];
+  let previousBlank = false;
+  for (const line of lines) {
+    const cleaned = line.replace(/[\t ]+/g, " ").trim();
+    if (!cleaned) {
+      if (!previousBlank && normalized.length) normalized.push("");
+      previousBlank = true;
+      continue;
+    }
+    normalized.push(cleaned);
+    previousBlank = false;
+  }
+  while (normalized.at(-1) === "") normalized.pop();
+  return normalized.join("\n");
+}
+
+function isLikelyKnowledgeBodyLine(line) {
+  const text = String(line || "").trim();
+  return text.length > 28
+    || /[。！？!?；;]$/.test(text)
+    || /(?:负责|参与|实现|完成|优化|开发|设计|处理|支持|推动|协作|需要|应当|能够|可以|具有|掌握|熟悉|使用|提升|降低|确保|建立|包括|通过)/.test(text);
+}
+
+function detectKnowledgeHeading(lines, index) {
+  const text = String(lines[index]?.text || "").trim();
+  let match = text.match(/^(#{1,6})\s+(.+)$/);
+  if (match) return { level: match[1].length, title: match[2].trim() };
+  match = text.match(/^([一二三四五六七八九十百]+)、\s*(.+)$/);
+  if (match) return { level: 1, title: match[2].trim() };
+  match = text.match(/^(\d+(?:\.\d+){0,4})[.、]?\s+(.+)$/);
+  if (match) return { level: match[1].split(".").length + 1, title: match[2].trim() };
+  match = text.match(/^【\s*(.{1,100}?)\s*】$/);
+  if (match) return { level: 1, title: match[1].trim() };
+  const startsBlock = index === 0 || !lines[index - 1]?.text;
+  if (!startsBlock || text.length < 2 || text.length > 24 || /[。！？!?；;，,：:]$/.test(text) || /^[-*+•]/.test(text)) return null;
+  if (isLikelyKnowledgeBodyLine(text)) return null;
+  let nextIndex = index + 1;
+  while (nextIndex < lines.length && !lines[nextIndex].text) nextIndex += 1;
+  const nextLine = lines[nextIndex]?.text || "";
+  // An independent short line only earns heading status when the following
+  // content looks like prose/body text. This keeps skill rows and consecutive
+  // short responsibility sentences as content instead of turning a whole
+  // document into headings.
+  if (nextLine && isLikelyKnowledgeBodyLine(nextLine)) return { level: 1, title: text };
+  return null;
+}
+
+function estimateKnowledgeTokens(content = "") {
+  const cjk = (String(content).match(/[\u3400-\u9fff]/g) || []).length;
+  const nonCjkWords = String(content).replace(/[\u3400-\u9fff]/g, " ").trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(cjk + nonCjkWords / 4));
+}
+
+function splitKnowledgeText(text, startOffset, maxLength = knowledgeMaxLength) {
+  if (text.length <= maxLength) return [{ content: text, startOffset, endOffset: startOffset + text.length }];
+  const parts = [];
+  let cursor = 0;
+  const sentences = [...text.matchAll(/[^。！？!?；;\n]+[。！？!?；;]?|\n+/gu)].map((match) => ({ text: match[0], index: match.index }));
+  let buffer = "";
+  let bufferStart = 0;
+  const flush = () => {
+    const content = buffer.trim();
+    if (!content) return;
+    const leading = buffer.indexOf(content);
+    parts.push({ content, startOffset: startOffset + bufferStart + leading, endOffset: startOffset + bufferStart + leading + content.length });
+    buffer = "";
+  };
+  for (const sentence of sentences) {
+    const candidate = sentence.text;
+    if (candidate.length > maxLength) {
+      flush();
+      for (let index = 0; index < candidate.length; index += maxLength) {
+        const content = candidate.slice(index, index + maxLength).trim();
+        if (content) parts.push({ content, startOffset: startOffset + sentence.index + index, endOffset: startOffset + sentence.index + index + content.length });
+      }
+      cursor = sentence.index + candidate.length;
+      continue;
+    }
+    if (!buffer) {
+      buffer = candidate;
+      bufferStart = sentence.index;
+    } else if (buffer.length + candidate.length > maxLength) {
+      flush();
+      buffer = candidate;
+      bufferStart = sentence.index;
+    } else {
+      buffer += candidate;
+    }
+    cursor = sentence.index + candidate.length;
+  }
+  flush();
+  return parts.length ? parts : [{ content: text.slice(0, maxLength), startOffset, endOffset: startOffset + Math.min(text.length, maxLength) }];
+}
+
+function createKnowledgeChunks(document, normalizedText, processingVersion) {
+  const lines = [];
+  let position = 0;
+  for (const line of normalizedText.split("\n")) {
+    lines.push({ text: line, startOffset: position, endOffset: position + line.length });
+    position += line.length + 1;
+  }
+  const blocks = [];
+  const headingStack = [{ level: 0, title: document.title }];
+  let paragraph = [];
+  const emitParagraph = () => {
+    if (!paragraph.length) return;
+    const content = paragraph.map((line) => line.text).join("\n");
+    blocks.push({ content, startOffset: paragraph[0].startOffset, endOffset: paragraph.at(-1).endOffset, headingPath: headingStack.map((item) => item.title) });
+    paragraph = [];
+  };
+  for (const [index, line] of lines.entries()) {
+    const heading = line.text ? detectKnowledgeHeading(lines, index) : null;
+    if (heading) {
+      emitParagraph();
+      while (headingStack.length && headingStack.at(-1).level >= heading.level) headingStack.pop();
+      headingStack.push(heading);
+    } else if (!line.text) {
+      emitParagraph();
+    } else {
+      paragraph.push(line);
+    }
+  }
+  emitParagraph();
+  const chunks = [];
+  let pending = null;
+  const pushPending = () => {
+    if (!pending?.content.trim()) return;
+    for (const part of splitKnowledgeText(pending.content, pending.startOffset)) {
+      chunks.push({ ...part, headingPath: pending.headingPath });
+    }
+    pending = null;
+  };
+  for (const block of blocks) {
+    if (block.content.length > knowledgeMaxLength) {
+      pushPending();
+      for (const part of splitKnowledgeText(block.content, block.startOffset)) chunks.push({ ...part, headingPath: block.headingPath });
+      continue;
+    }
+    const sameSection = pending && JSON.stringify(pending.headingPath) === JSON.stringify(block.headingPath);
+    if (!pending || !sameSection || pending.content.length + 2 + block.content.length > knowledgeTargetLength) {
+      pushPending();
+      pending = { ...block };
+    } else {
+      pending.content += `\n\n${block.content}`;
+      pending.endOffset = block.endOffset;
+    }
+  }
+  pushPending();
+  if (!chunks.length && normalizedText.trim()) chunks.push({ content: normalizedText.trim(), startOffset: 0, endOffset: normalizedText.trim().length, headingPath: [] });
+  return chunks.map((chunk, chunkIndex) => ({
+    id: null,
+    documentId: document.id,
+    chunkIndex,
+    headingPath: chunk.headingPath,
+    title: chunk.headingPath.at(-1) || document.title,
+    content: chunk.content,
+    contentHash: contentHash(chunk.content),
+    tokenEstimate: estimateKnowledgeTokens(chunk.content),
+    startOffset: chunk.startOffset,
+    endOffset: chunk.endOffset,
+    sourceType: document.sourceType,
+    documentType: document.documentType,
+    jobFamily: document.jobFamily,
+    seniority: document.seniority,
+    skillTags: [...document.skillTags],
+    language: document.language,
+    processingVersion,
+    createdAt: now(),
+  }));
+}
+
+function nextKnowledgeProcessingVersion(store, documentId) {
+  return store.knowledgeProcessingRecords.filter((record) => record.documentId === documentId)
+    .reduce((maximum, record) => Math.max(maximum, Number(record.processingVersion) || 0), 0) + 1;
+}
+
+function knowledgeDocumentSummary(document) {
+  const { rawText, normalizedText, ...summary } = document;
+  return summary;
 }
 
 class HttpError extends Error {
@@ -2237,6 +2516,182 @@ async function handleApi(req, res) {
     return send(res, 200, { items: store.systemNotices.filter((item) => item.status === 1) });
   }
 
+  if (key === "GET /api/admin/knowledge-documents") {
+    requireAdmin(store, req);
+    const documentType = String(url.searchParams.get("documentType") || "").trim();
+    const jobFamily = String(url.searchParams.get("jobFamily") || "").trim();
+    const status = String(url.searchParams.get("status") || "").trim();
+    if (documentType && !knowledgeDocumentTypes.has(documentType)) throw new HttpError(400, "documentType不合法");
+    if (status && !knowledgeStatuses.has(status)) throw new HttpError(400, "status不合法");
+    const items = store.knowledgeDocuments
+      .filter((document) => (!documentType || document.documentType === documentType)
+        && (!jobFamily || document.jobFamily === jobFamily)
+        && (!status || document.status === status))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .map(knowledgeDocumentSummary);
+    return send(res, 200, { items });
+  }
+
+  if (key === "POST /api/admin/knowledge-documents") {
+    const user = requireAdmin(store, req);
+    const input = validateKnowledgeDocumentInput(await readJson(req), { isCreate: true });
+    const timestamp = now();
+    const document = {
+      id: nextId(store.knowledgeDocuments),
+      ...input,
+      rawTextHash: contentHash(input.rawText),
+      normalizedText: "",
+      status: "DRAFT",
+      processingVersion: 0,
+      chunkCount: 0,
+      createdBy: user.id,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      processedAt: null,
+      failureCode: "",
+      failureMessage: "",
+    };
+    store.knowledgeDocuments.push(document);
+    await writeStore(store);
+    return send(res, 201, { item: knowledgeDocumentSummary(document) });
+  }
+
+  const knowledgeDocumentMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)$/);
+  if (knowledgeDocumentMatch) {
+    requireAdmin(store, req);
+    const documentId = parseOptionalPositiveInteger(knowledgeDocumentMatch[1], "documentId");
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    if (!document) return send(res, 404, { message: "知识资料不存在" });
+    if (method === "GET") return send(res, 200, { item: document });
+    if (method === "PUT") {
+      const input = validateKnowledgeDocumentInput(await readJson(req), { current: document });
+      const rawTextChanged = input.rawText !== document.rawText;
+      Object.assign(document, input, { updatedAt: now() });
+      if (rawTextChanged) {
+        document.rawTextHash = contentHash(input.rawText);
+        document.normalizedText = "";
+        document.status = "DRAFT";
+        document.failureCode = "";
+        document.failureMessage = "原文已修改，等待重新处理";
+      }
+      await writeStore(store);
+      return send(res, 200, { item: knowledgeDocumentSummary(document) });
+    }
+    if (method === "DELETE") {
+      store.knowledgeDocuments = store.knowledgeDocuments.filter((item) => item.id !== documentId);
+      store.knowledgeChunks = store.knowledgeChunks.filter((item) => item.documentId !== documentId);
+      store.knowledgeProcessingRecords = store.knowledgeProcessingRecords.filter((item) => item.documentId !== documentId);
+      await writeStore(store);
+      return send(res, 200, { ok: true, deletedId: documentId });
+    }
+  }
+
+  const knowledgeProcessMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/process$/);
+  if (method === "POST" && knowledgeProcessMatch) {
+    requireAdmin(store, req);
+    const documentId = parseOptionalPositiveInteger(knowledgeProcessMatch[1], "documentId");
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    if (!document) return send(res, 404, { message: "知识资料不存在" });
+    const inputHash = contentHash(document.rawText);
+    const existing = store.knowledgeProcessingRecords.find((record) => record.documentId === documentId
+      && record.status === "PROCESSED"
+      && record.inputHash === inputHash
+      && record.strategy === knowledgeProcessingStrategy
+      && record.processingVersion === document.processingVersion);
+    if (existing) {
+      document.status = "PROCESSED";
+      document.normalizedText = normalizeKnowledgeText(document.rawText);
+      document.chunkCount = store.knowledgeChunks.filter((chunk) => chunk.documentId === documentId).length;
+      document.failureCode = "";
+      document.failureMessage = "";
+      document.updatedAt = now();
+      await writeStore(store);
+      return send(res, 200, { item: document, record: existing, idempotent: true });
+    }
+    const processingVersion = nextKnowledgeProcessingVersion(store, documentId);
+    const timestamp = now();
+    const record = {
+      id: nextId(store.knowledgeProcessingRecords),
+      documentId,
+      processingVersion,
+      status: "PROCESSING",
+      inputHash,
+      chunkCount: 0,
+      strategy: knowledgeProcessingStrategy,
+      failureCode: "",
+      failureMessage: "",
+      createdAt: timestamp,
+      completedAt: null,
+    };
+    document.status = "PROCESSING";
+    document.failureCode = "";
+    document.failureMessage = "";
+    try {
+      if (!String(document.rawText || "").trim()) throw new HttpError(400, "原始内容为空，无法处理", "EMPTY_RAW_TEXT");
+      const normalizedText = normalizeKnowledgeText(document.rawText);
+      if (!normalizedText) throw new HttpError(400, "清洗后内容为空，无法处理", "EMPTY_NORMALIZED_TEXT");
+      const generated = createKnowledgeChunks(document, normalizedText, processingVersion);
+      if (!generated.length) throw new HttpError(400, "未生成有效切片", "NO_VALID_CHUNKS");
+      let nextChunkId = nextId(store.knowledgeChunks);
+      const chunks = generated.map((chunk) => ({ ...chunk, id: nextChunkId++ }));
+      record.status = "PROCESSED";
+      record.chunkCount = chunks.length;
+      record.completedAt = now();
+      document.normalizedText = normalizedText;
+      document.rawTextHash = inputHash;
+      document.status = "PROCESSED";
+      document.processingVersion = processingVersion;
+      document.chunkCount = chunks.length;
+      document.processedAt = record.completedAt;
+      document.updatedAt = record.completedAt;
+      store.knowledgeChunks = [...store.knowledgeChunks.filter((chunk) => chunk.documentId !== documentId), ...chunks];
+      store.knowledgeProcessingRecords.push(record);
+      await writeStore(store);
+      return send(res, 200, { item: knowledgeDocumentSummary(document), record, idempotent: false });
+    } catch (error) {
+      record.status = "FAILED";
+      record.failureCode = error instanceof HttpError && error.detail ? error.detail : "KNOWLEDGE_PROCESSING_FAILED";
+      record.failureMessage = error.message || "知识资料处理失败";
+      record.completedAt = now();
+      document.status = "FAILED";
+      document.failureCode = record.failureCode;
+      document.failureMessage = record.failureMessage;
+      document.updatedAt = record.completedAt;
+      store.knowledgeProcessingRecords.push(record);
+      await writeStore(store);
+      return send(res, 400, { message: record.failureMessage, failureCode: record.failureCode, item: knowledgeDocumentSummary(document), record });
+    }
+  }
+
+  const knowledgeChunksMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/chunks$/);
+  if (method === "GET" && knowledgeChunksMatch) {
+    requireAdmin(store, req);
+    const documentId = parseOptionalPositiveInteger(knowledgeChunksMatch[1], "documentId");
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    if (!document) return send(res, 404, { message: "知识资料不存在" });
+    const items = store.knowledgeChunks.filter((item) => item.documentId === documentId).sort((a, b) => a.chunkIndex - b.chunkIndex);
+    return send(res, 200, { items, document: knowledgeDocumentSummary(document) });
+  }
+
+  const knowledgeRecordsMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/processing-records$/);
+  if (method === "GET" && knowledgeRecordsMatch) {
+    requireAdmin(store, req);
+    const documentId = parseOptionalPositiveInteger(knowledgeRecordsMatch[1], "documentId");
+    if (!store.knowledgeDocuments.some((item) => item.id === documentId)) return send(res, 404, { message: "知识资料不存在" });
+    const items = store.knowledgeProcessingRecords.filter((item) => item.documentId === documentId)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    return send(res, 200, { items });
+  }
+
+  const knowledgeChunkMatch = pathname.match(/^\/api\/admin\/knowledge-chunks\/([^/]+)$/);
+  if (method === "GET" && knowledgeChunkMatch) {
+    requireAdmin(store, req);
+    const chunkId = parseOptionalPositiveInteger(knowledgeChunkMatch[1], "chunkId");
+    const item = store.knowledgeChunks.find((chunk) => chunk.id === chunkId);
+    if (!item) return send(res, 404, { message: "知识切片不存在" });
+    return send(res, 200, { item });
+  }
+
   if (key === "GET /api/admin/overview") {
     const user = requireUser(store, req);
     if (user.role !== "ADMIN") return send(res, 403, { message: "仅管理员可访问后台数据" });
@@ -2249,6 +2704,7 @@ async function handleApi(req, res) {
         grammarRecords: store.grammarRecords.length,
         interviews: store.mockInterviews.length,
         positions: store.jobPositions.length,
+        knowledgeDocuments: store.knowledgeDocuments.length,
       },
     });
   }

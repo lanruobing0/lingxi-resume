@@ -65,14 +65,14 @@
 
 | 项目 | 设计 |
 | --- | --- |
-| 阶段目标 | 建立可审核的岗位技能、优秀案例、STAR 表达、面试题知识库，先完成文本管道。 |
-| 前置依赖 | MySQL 可用于新表；内容治理规则。 |
-| 修改范围 | 管理端知识库录入/审批、文档清洗切片服务、MySQL 文档/块表。 |
-| 数据结构 | `knowledge_documents`、`knowledge_chunks`，包括来源、版权/许可、领域、岗位、技能、语言、状态、版本、hash。 |
-| API | 文档 CRUD、`POST /api/knowledge-documents/:id/ingest`、chunk 浏览/禁用 API。 |
-| 前端页面 | 管理端资料录入、清洗预览、分块预览、元数据和发布状态。 |
-| 验收条件 | 标题+语义边界切片可重跑、chunk 稳定 ID、过期源可撤回；用户 JD 不混入公共知识库。 |
-| 测试方法 | Markdown/纯文本、重复文档、超长段落、中文标题、禁用文档回归。 |
+| 阶段目标 | 已实现管理员可审核的岗位技能、优秀案例、STAR 表达、面试题文本管道；等待 Claude 验收。 |
+| 前置依赖 | 阶段 3 已验收；资料治理由管理员录入时承担。 |
+| 修改范围 | 管理端资料录入/编辑/删除、JSON 文档清洗与切片服务、MySQL 生产参考表。 |
+| 数据结构 | `knowledgeDocuments`、`knowledgeChunks`、`knowledgeProcessingRecords`；保留来源、领域、岗位、技能、语言、状态、版本、hash 与失败信息。 |
+| API | 管理员 `GET/POST/PUT/DELETE /api/admin/knowledge-documents`、处理、chunk 与处理历史查询。 |
+| 前端页面 | 既有后台中的资料筛选、录入、处理、chunk 展开、失败信息与删除确认。 |
+| 验收条件 | 标题+语义边界切片、无变化幂等、成功后替换、失败保留旧 chunks；用户 JD 不混入公共知识库。 |
+| 测试方法 | Markdown/纯文本、超长段落、中文标题、权限、重复处理、失败保护、级联删除与重启持久化。 |
 | 不属于本阶段 | Qdrant 写入、Embedding、在线检索。 |
 | 主要风险 | 资料质量与授权；只允许可追溯、可撤回的来源进入生产索引。 |
 
@@ -172,4 +172,3 @@
 - `backend/server.js`：将所有业务记录写入显式 resume/version 关联；为版本保存深拷贝 snapshot 与 hash；保留 current 兼容层但禁止新页面依赖。
 - `database.sql`：增加不破坏现有表的迁移段和索引，补 resume version snapshot、record version references；不执行 drop/recreate。
 - `docs/RAG_DATA_MODEL.md` 与 API/迁移说明：同步明确兼容和回填策略。
-

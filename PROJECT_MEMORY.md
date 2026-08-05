@@ -159,7 +159,7 @@ It is ignored by Git and must remain uncommitted.
 - Mock interviews are real AI sessions: target role input, resume-based opening question, answer score and feedback, AI follow-up questions, final report, and persisted history records.
 - Interview endpoints: `POST /api/interviews`, `POST /api/interviews/:id/answers`, `POST /api/interviews/:id/report`, and `GET /api/records/interviews`.
 
-## RAG Upgrade Progress (Stage 3 awaiting acceptance)
+## RAG Upgrade Progress (Stage 4 accepted)
 
 - Runtime persistence remains `backend/data/store.json`; `database.sql` is a production schema/migration reference only.
 - Phase 1 normalizes editor data into `buildResumeDTO`. Provider prompts use PII-filtered `buildAiResumeContext`, while history retains full DTO snapshots. AI records bind `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`.
@@ -167,10 +167,12 @@ It is ignored by Git and must remain uncommitted.
 - Phase 2 stores user-owned JobDescription records, raw JD hashes, evidence-backed parse results, and JobApplication links that lock resume/JD parse versions. No RAG infrastructure has been added.
 - Record endpoints accept an optional positive `resumeId`; invalid values return 400. `GET /api/resumes/:id/versions` lists owned snapshots and `GET /api/resumes/:id/versions/:versionId` returns one owned version.
 - Regression suite: `pnpm test` uses temporary JSON stores and local mock AI servers only.
-- Stage 3 adds immutable `resumeJobMatches`: every record binds the owner, explicit JobApplication, ResumeVersion snapshot/hash, JD, and successful current JD parse result. It never resolves a current/recent resume or JD.
+- Stage 3 adds immutable `resumeJobMatches`: every record binds the owner, explicit JobApplication, ResumeVersion snapshot/hash, JD, and successful current JD parse result. It never resolves a current/recent resume or JD. It is accepted and merged to `master`.
 - Backend fixed weights are required skills 30, project relevance 25, keyword coverage 15, experience 10, education 10, and expression 10. It recomputes the total and ignores AI-provided totals.
 - AI uses provider-safe `buildAiResumeContext`; evidence is validated against the locked resume snapshot and JD materials. Invalid evidence becomes a `FAILED` history record with no report. `NOT_FOUND` is normalized to `当前简历中未找到相关证据`.
-- Branch `feat/rag-stage-3-base-matching` passed local checks but is waiting for Claude independent acceptance. Do not start Stage 4, merge, tag, or push.
+- Stage 4 passed Claude's second independent review. It adds an ADMIN-only public knowledge-base pipeline: `KnowledgeDocument`, server-only `KnowledgeChunk`, and append-only `KnowledgeProcessingRecord`. It is JSON-backed, preserves normalized-source offsets and heading paths, uses a documented token estimate, and never sends content to AI.
+- `rawText` remains exactly as submitted and is hashed in its original form; `normalizedText` is separately cleaned for processing. Short independent headings use context, so skills and responsibility rows are retained as content. Identical raw-text hash plus strategy is idempotent; a successful new process replaces chunks and a failed process retains the last successful chunks. `tests/knowledge-base.integration.mjs` uses a temporary store and real HTTP requests without AI.
+- Stage 5 has not started. There is still no Qdrant, Embedding, Reranker, vector retrieval, or RAG implementation.
 
 ## Design Memory
 

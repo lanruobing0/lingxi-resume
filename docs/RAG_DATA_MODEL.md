@@ -18,8 +18,9 @@
 | ResumeJobMatch | `id`; `job_application_id` | 输入绑定、algorithm_version、六维报告、total_score、status、provider/model、failure code/message、created/updated_at | 一次基础匹配执行；与 Application 的版本绑定，不能漂移到当前简历，失败不复用旧成功报告。 |
 | MatchDimension | `id`; `match_id` | code、label、weight、score、status、resume_evidence JSON、jd_evidence JSON、rationale | 如 hard_requirements、skills、experience、impact、education、keywords；总分可重算。 |
 | ResumeSuggestion | `id`; `match_id/resume_version_id` | target_path、target_entry_id、before_json、after_json、reason、citations JSON、status、decision_reason、applied_version_id | 状态：PENDING/ACCEPTED/REJECTED/STALE/FAILED；不能自动改 Resume。 |
-| KnowledgeDocument | `id`; `created_by` | title、document_type、source_url、license、raw_content、clean_content、metadata JSON、status、version、content_hash | 只允许 DRAFT/APPROVED/RETIRED；来源/授权审计。 |
-| KnowledgeChunk | `id`; `document_id` | chunk_index、heading_path、content、token_count、metadata JSON、content_hash、embedding_status/model/version、status | `(document_id, version, chunk_index)` 唯一；MySQL 是 chunks 唯一事实源，Qdrant payload 带 chunk ID。 |
+| KnowledgeDocument | `id`; `created_by -> user.id` | title、description、source_type/name/url、document_type、job_family、seniority、skill_tags、language、raw_text/hash、normalized_text、status、processing_version、chunk_count、failure | 阶段 4 JSON 实体；状态 DRAFT/PROCESSING/PROCESSED/FAILED，原文变更标记重处理。 |
+| KnowledgeChunk | `id`; `document_id -> KnowledgeDocument.id` | chunk_index、heading_path、title、content/hash、token_estimate、normalized-text offsets、来源元数据、processing_version、created_at | 只由服务端生成；成功新版本才替换当前文档 chunks，`tokenEstimate` 是明确近似值而非模型 token。 |
+| KnowledgeProcessingRecord | `id`; `document_id -> KnowledgeDocument.id` | processing_version、status、input_hash、chunk_count、strategy、failure、created/completed_at | 处理审计不可覆盖；相同输入 hash 与策略幂等返回，失败保留上一版成功 chunks。 |
 | RetrievalRecord | `id`; `job_application_id` 可空，`agent_execution_id` 可空 | purpose、query_text/hash、filters JSON、candidate JSON、selected JSON、fusion/rerank config、latency、status | 保存关键词/向量/Reranker 候选、分数和最终引用，便于调试和评估。 |
 | InterviewSession | `id`; `job_application_id/resume_version_id/resume_job_match_id` | target_role snapshot、question_plan JSON、status、report JSON、provider/model、created/completed_at | 取代当前仅 `resumeId/positionId/targetPosition` 绑定；问题/答案可沿用现有 mock interview/answer 表并增外键。 |
 | AgentExecution | `id`; `user_id/job_application_id` | agent_type、status、input_hash、plan JSON、step_count、max_steps、token/cost/latency、result_ref、failure_code | 固定上限状态机的完整审计；不保存隐藏思维链，只存工具输入输出摘要和 trace IDs。 |
@@ -37,6 +38,7 @@ erDiagram
   RESUME_JOB_MATCH ||--o{ RESUME_SUGGESTION : proposes
   RESUME_VERSION ||--o{ RESUME_SUGGESTION : targets
   KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_CHUNK : splits_into
+  KNOWLEDGE_DOCUMENT ||--o{ KNOWLEDGE_PROCESSING_RECORD : audits
   JOB_APPLICATION ||--o{ RETRIEVAL_RECORD : retrieves_for
   JOB_APPLICATION ||--o{ INTERVIEW_SESSION : practices_for
   JOB_APPLICATION ||--o{ AGENT_EXECUTION : executes_for
