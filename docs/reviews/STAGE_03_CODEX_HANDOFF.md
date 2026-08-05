@@ -101,6 +101,25 @@
 - `database.sql`、`docs/RAG_DATA_MODEL.md`：阶段 3 MySQL 参考与数据模型说明。
 - `README.md`、`docs/PROJECT_STATUS.md`、`docs/CURRENT_TASK.md`、`AI_HANDOFF.md`、`PROJECT_MEMORY.md`：API、状态和持续交接信息。
 
-## 10. 已知限制
+## 10. Claude 验收整改（2026-08-04）
+
+- 修复前端失败状态：`createMatch` 发起时清空当前报告和错误状态；失败后仅刷新历史，不再调用会自动选中旧成功报告的流程。刷新结果只会把本次 `FAILED` 记录及其 `failureMessage` 显示在主区域；历史成功报告仍保留，且只能由用户手动点击打开。
+- 补齐加分技能展示：报告新增“已覆盖加分项”（`matchedPreferredSkills`）和“未覆盖加分项”（`missingPreferredSkills`）两个独立分组。每个项目显示技能名、状态、置信度、解释、简历证据和 JD 证据；空列表显示“暂无相关项”，不生成假数据。
+- 新增 `src/matchState.js` 这一最小纯函数模块，区分“刷新历史但不自动选择”和“选择 Application 时自动选择最近完成报告”。`tests/resume-job-match.integration.mjs` 对失败后历史列表断言前一种行为，避免回归。
+- 扩展真实 HTTP 集成测试：Java/React 两份简历匹配同一 Java JD、同一 Java 简历匹配 Java/React 两份 JD、故意返回跨简历或跨 JD 证据并断言 `FAILED`、JD 删除级联、以及同一 Application 首次成功后第二次失败而保留旧成功报告。测试继续使用 `backend/server.js`、本地 mock AI 和 `mkdtemp` 临时 JSON 数据目录，不调用收费模型。
+- 前端状态的自动选择决策由上述纯函数测试覆盖，组件编译由 Vite 构建覆盖；本轮未用登录态浏览器逐项手工操作 DOM，因此失败提示与加分项面板的视觉渲染仍应由 Claude 二次验收时手工确认，未在此报告中声称浏览器端到端已通过。
+
+实际复验（2026-08-04）：
+
+| 命令 | 退出码 | 结果 |
+| --- | ---: | --- |
+| `node --check backend/server.js` | 0 | 后端语法检查通过。 |
+| `corepack pnpm test` | 0 | 3 个集成测试脚本通过，0 失败：JD、隔离和 ResumeJobMatch。 |
+| `corepack pnpm build` | 0 | Vite 生产构建通过，1597 个模块完成转换。 |
+| `git diff --check master...HEAD` | 0 | 无空白错误。 |
+
+阶段 3 仍未进入阶段 4；本次整改未引入 RAG、Qdrant、Embedding、Reranker、知识库、Agentic RAG 或自动应用简历建议，且未合并或推送。
+
+## 11. 已知限制
 
 当前尚未实现知识库、Qdrant、Embedding、Reranker、RAG、Agentic RAG 或自动应用简历建议。当前运行时仍是本地 JSON 持久化，`database.sql` 仅为未来 MySQL 迁移参考。阶段 3 完成后必须等待 Claude 独立验收，不能自动进入阶段 4。

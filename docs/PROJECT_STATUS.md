@@ -1,6 +1,6 @@
 # 项目状态
 
-最后核实：2026-08-04（依据 `package.json`、`backend/server.js`、`src/App.jsx`、`tests/`、Git 最近提交与既有文档）。
+最后核实：2026-08-05（依据 `package.json`、`backend/server.js`、`src/App.jsx`、`tests/`、Git 最近提交与 Claude 阶段 3 最终验收记录）。
 
 ## 当前技术栈与数据层
 
@@ -15,6 +15,8 @@
 - 简历库、编辑器、A4 预览、多个结构化简历模板与版本快照。
 - 真实 AI 简历诊断、润色、语法检查、模拟面试和历史记录。
 - 真实 JD 的保存、编辑、AI 解析、原文证据校验及 JobApplication 关联。
+- 阶段 3 基础岗位匹配：基于固化 ResumeVersion 与 JD ParseResult 的七项输入绑定、六维固定权重评分与后端 `totalScore` 重算、简历/JD 双向证据校验、匹配历史及 FAILED 状态、多用户权限隔离、AI Prompt 隐私过滤，以及必备技能、加分技能和关键词展示。
+- 阶段 3 回归覆盖：A/B 简历匹配同一 JD、同一简历匹配双 JD、JD 删除级联和同一 Application 成功后失败的历史保护。
 
 ## RAG 升级阶段
 
@@ -22,7 +24,7 @@
 | --- | --- | --- |
 | 1 | 简历数据链修复与 ResumeDTO/版本绑定 | 已通过 Claude 二次验收（既有交接记录） |
 | 2 | 真实 JD 管理、解析与 JobApplication | 已通过 Claude 二次验收（既有交接记录） |
-| 3 | 基于真实简历与真实 JD 的基础岗位匹配 | 已完成开发，等待 Claude 独立验收 |
+| 3 | 基于真实简历与真实 JD 的基础岗位匹配 | 已完成，并通过 Claude 二次独立验收 |
 
 当前尚未接入 Qdrant、Embedding、Reranker、知识库检索或 RAG。
 
@@ -44,7 +46,7 @@
 
 ## 尚未实现与技术债务
 
-- 阶段 3 已开发完成，等待 Claude 独立验收；未开始下一阶段。
+- 阶段 4 的岗位知识库与文档处理链路尚未开始；需先创建完整任务文档。
 - RAG 知识库、切片、向量检索、重排、Agent 工作流和生产级异步任务。
 - `src/App.jsx` 与 `src/styles.css` 较大，应在已批准任务中渐进拆分。
 - JSON 单文件存储不适用于生产并发；迁移 MySQL/worker 需单独批准。

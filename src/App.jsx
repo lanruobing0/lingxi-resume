@@ -43,6 +43,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCountUp } from "./hooks/useCountUp";
 import { useInViewOnce } from "./hooks/useInViewOnce";
+import { selectHistoryMatch, selectLatestFailedMatch } from "./matchState";
 import { usePresence } from "./hooks/usePresence";
 
 const appNav = [
@@ -2286,6 +2287,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [selectedApplicationId, setSelectedApplicationId] = useState("");
   const [matches, setMatches] = useState([]);
   const [selectedMatch, setSelectedMatch] = useState(null);
+  const [matchFailureMessage, setMatchFailureMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
@@ -2300,6 +2302,24 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       notify(`读取岗位 JD 失败: ${error.message}`);
     } finally {
       setLoading(false);
+    }
+  }, [notify]);
+
+  const loadMatches = useCallback(async (applicationId, { autoSelectCompleted = false } = {}) => {
+    if (!applicationId) {
+      setMatches([]);
+      return [];
+    }
+    try {
+      const data = await apiRequest(`/api/job-applications/${applicationId}/matches`);
+      const items = data.items || [];
+      setMatches(items);
+      const historyMatch = selectHistoryMatch(items, { autoSelectCompleted });
+      if (historyMatch) setSelectedMatch((await apiRequest(`/api/resume-job-matches/${historyMatch.id}`)).item);
+      return items;
+    } catch (error) {
+      notify(`读取匹配历史失败: ${error.message}`);
+      return [];
     }
   }, [notify]);
 
@@ -2329,16 +2349,8 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setSelectedApplicationId(String(nextApplication?.id || ""));
       setMatches([]);
       setSelectedMatch(null);
-      if (nextApplication?.id) {
-        const matchData = await apiRequest(`/api/job-applications/${nextApplication.id}/matches`);
-        const nextMatches = matchData.items || [];
-        setMatches(nextMatches);
-        const latest = nextMatches.find((item) => item.status === "COMPLETED");
-        if (latest) {
-          const report = await apiRequest(`/api/resume-job-matches/${latest.id}`);
-          setSelectedMatch(report.item);
-        }
-      }
+      setMatchFailureMessage("");
+      if (nextApplication?.id) await loadMatches(String(nextApplication.id), { autoSelectCompleted: true });
       setMode("detail");
     } catch (error) {
       notify(`读取岗位详情失败: ${error.message}`);
@@ -2346,7 +2358,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     } finally {
       setLoading(false);
     }
-  }, [activeResumeId, notify]);
+  }, [activeResumeId, loadMatches, notify]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
   useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
@@ -2364,19 +2376,13 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     }
   };
 
-  const selectApplication = async (applicationId) => {
+  const selectApplication = async (applicationId, { autoSelectCompleted = true } = {}) => {
     setSelectedApplicationId(applicationId);
     setSelectedMatch(null);
+    setMatchFailureMessage("");
     setMatches([]);
     if (!applicationId) return;
-    try {
-      const data = await apiRequest(`/api/job-applications/${applicationId}/matches`);
-      setMatches(data.items || []);
-      const latest = (data.items || []).find((item) => item.status === "COMPLETED");
-      if (latest) setSelectedMatch((await apiRequest(`/api/resume-job-matches/${latest.id}`)).item);
-    } catch (error) {
-      notify(`读取匹配历史失败: ${error.message}`);
-    }
+    await loadMatches(applicationId, { autoSelectCompleted });
   };
 
   const saveJob = async () => {
@@ -2437,7 +2443,10 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   };
 
   const openMatch = async (matchId) => {
-    try { setSelectedMatch((await apiRequest(`/api/resume-job-matches/${matchId}`)).item); } catch (error) { notify(`读取匹配报告失败: ${error.message}`); }
+    try {
+      setMatchFailureMessage("");
+      setSelectedMatch((await apiRequest(`/api/resume-job-matches/${matchId}`)).item);
+    } catch (error) { notify(`读取匹配报告失败: ${error.message}`); }
   };
 
   const createMatch = async (retryMatchId = "") => {
@@ -2445,17 +2454,21 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     if (!application) { notify("请先选择一个已锁定版本的求职分析任务"); return; }
     setWorking(true);
     setSelectedMatch(null);
+    setMatchFailureMessage("");
     try {
       const path = retryMatchId ? `/api/resume-job-matches/${retryMatchId}/retry` : `/api/job-applications/${application.id}/matches`;
       const data = await apiRequest(path, { method: "POST" });
       setSelectedMatch(data.item);
       notify("基础岗位匹配报告已生成并保存");
-      await selectApplication(String(application.id));
+      await loadMatches(String(application.id), { autoSelectCompleted: false });
       await openMatch(data.item.id);
     } catch (error) {
       setSelectedMatch(null);
+      setMatchFailureMessage(error.message);
       notify(`岗位匹配失败: ${error.message}`);
-      await selectApplication(String(application.id));
+      const refreshedMatches = await loadMatches(String(application.id), { autoSelectCompleted: false });
+      const failedMatch = selectLatestFailedMatch(refreshedMatches);
+      if (failedMatch) setSelectedMatch(failedMatch);
     } finally { setWorking(false); }
   };
 
@@ -2505,8 +2518,8 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           <div className="job-match-head"><div><h3>基础岗位匹配</h3><p>{selectedApplicationId ? "基于已锁定的简历版本与 JD 解析结果生成，不会修改你的简历。" : "先创建并选择一个求职分析任务。"}</p></div><button className="black-small" disabled={working || !selectedApplicationId} onClick={() => createMatch()}>{working ? <><LoaderCircle className="spin" size={16} />正在生成报告</> : <><Gauge size={16} />生成匹配报告</>}</button></div>
           {working && <ResultSkeleton lines={5} />}
           {!working && selectedMatch?.status === "COMPLETED" && <ResumeJobMatchReport match={selectedMatch} />}
-          {!working && selectedMatch?.status === "FAILED" && <p className="job-error">上次匹配失败：{selectedMatch.failureMessage}</p>}
-          {matches.length > 0 && <div className="job-match-history"><strong>匹配历史</strong>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? setSelectedMatch(item) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</div>}
+          {!working && (selectedMatch?.status === "FAILED" || matchFailureMessage) && <p className="job-error">本次匹配失败：{selectedMatch?.failureMessage || matchFailureMessage}</p>}
+          {matches.length > 0 && <div className="job-match-history"><strong>匹配历史</strong>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? (setMatchFailureMessage(""), setSelectedMatch(item)) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</div>}
           {!working && !selectedMatch && !matches.length && <div className="job-empty"><strong>尚未生成匹配报告</strong><p>报告仅会在真实 AI 返回并通过证据校验后显示分数与建议。</p></div>}
         </section>
       </section>
@@ -2524,11 +2537,11 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
 function ResumeJobMatchReport({ match }) {
   const report = match.report;
   if (!report) return null;
-  return <div className="job-match-report"><div className="job-match-score"><strong>{match.totalScore}</strong><span>综合匹配度</span></div><div><h4>匹配结论</h4><p>{report.summary}</p></div><div className="job-match-dimensions">{(report.dimensions || []).map((dimension) => <article key={dimension.key}><div><strong>{dimension.label}</strong><span>{dimension.score} 分 · 权重 {dimension.weight}%</span></div><i><b style={{ "--match-score": `${dimension.score}%` }} /></i><p>{dimension.summary}</p>{dimension.resumeEvidence?.length > 0 && <small>简历证据：{dimension.resumeEvidence.join("；")}</small>}{dimension.jdEvidence?.length > 0 && <small>JD 证据：{dimension.jdEvidence.join("；")}</small>}{dimension.missingEvidence?.length > 0 && <small>缺失：{dimension.missingEvidence.join("；")}</small>}</article>)}</div><div className="job-match-evidence"><MatchEvidenceGroup title="已证实必备项" items={report.matchedRequiredSkills} /><MatchEvidenceGroup title="部分匹配" items={report.partiallyMatchedRequiredSkills} /><MatchEvidenceGroup title="当前简历未找到的必备项" items={report.missingRequiredSkills} /><MatchEvidenceGroup title="关键词覆盖" items={report.matchedKeywords} /></div><div className="job-match-suggestions"><div><h4>最有力的简历证据</h4><ul>{report.strongestResumeEvidence?.map((item) => <li key={item}>{item}</li>)}</ul></div><div><h4>优先修改建议</h4><ul>{report.prioritizedSuggestions?.map((item) => <li key={item}>{item}</li>)}</ul></div></div></div>;
+  return <div className="job-match-report"><div className="job-match-score"><strong>{match.totalScore}</strong><span>综合匹配度</span></div><div><h4>匹配结论</h4><p>{report.summary}</p></div><div className="job-match-dimensions">{(report.dimensions || []).map((dimension) => <article key={dimension.key}><div><strong>{dimension.label}</strong><span>{dimension.score} 分 · 权重 {dimension.weight}%</span></div><i><b style={{ "--match-score": `${dimension.score}%` }} /></i><p>{dimension.summary}</p>{dimension.resumeEvidence?.length > 0 && <small>简历证据：{dimension.resumeEvidence.join("；")}</small>}{dimension.jdEvidence?.length > 0 && <small>JD 证据：{dimension.jdEvidence.join("；")}</small>}{dimension.missingEvidence?.length > 0 && <small>缺失：{dimension.missingEvidence.join("；")}</small>}</article>)}</div><div className="job-match-evidence"><MatchEvidenceGroup title="已证实必备项" items={report.matchedRequiredSkills} /><MatchEvidenceGroup title="部分匹配" items={report.partiallyMatchedRequiredSkills} /><MatchEvidenceGroup title="当前简历未找到的必备项" items={report.missingRequiredSkills} /><MatchEvidenceGroup title="已覆盖加分项" items={report.matchedPreferredSkills} /><MatchEvidenceGroup title="未覆盖加分项" items={report.missingPreferredSkills} /><MatchEvidenceGroup title="关键词覆盖" items={report.matchedKeywords} /></div><div className="job-match-suggestions"><div><h4>最有力的简历证据</h4><ul>{report.strongestResumeEvidence?.map((item) => <li key={item}>{item}</li>)}</ul></div><div><h4>优先修改建议</h4><ul>{report.prioritizedSuggestions?.map((item) => <li key={item}>{item}</li>)}</ul></div></div></div>;
 }
 
 function MatchEvidenceGroup({ title, items = [] }) {
-  return <section><h4>{title}</h4>{items.length ? <ul>{items.map((item, index) => <li key={`${item.skillName}-${index}`}><strong>{item.skillName}</strong><span>{item.explanation}</span>{item.resumeEvidence?.length > 0 && <small>简历：{item.resumeEvidence.join("；")}</small>}{item.jdEvidence?.length > 0 && <small>JD：{item.jdEvidence.join("；")}</small>}</li>)}</ul> : <p>无</p>}</section>;
+  return <section><h4>{title}</h4>{items.length ? <ul>{items.map((item, index) => <li key={`${item.skillName}-${index}`}><strong>{item.skillName || "--"}</strong><small className="match-evidence-meta">状态：{item.matchStatus || "--"} · 置信度：{Number.isFinite(item.confidence) ? `${item.confidence}%` : "--"}</small><span>{item.explanation || "--"}</span>{item.resumeEvidence?.length > 0 && <small>简历：{item.resumeEvidence.join("；")}</small>}{item.jdEvidence?.length > 0 && <small>JD：{item.jdEvidence.join("；")}</small>}</li>)}</ul> : <p>暂无相关项</p>}</section>;
 }
 
 function JobParseResult({ parsed }) {

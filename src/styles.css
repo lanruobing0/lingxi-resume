@@ -5139,6 +5139,7 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 .job-match-evidence ul, .job-match-suggestions ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .job-match-evidence li { display: grid; gap: 3px; font-size: 13px; line-height: 1.45; }
 .job-match-evidence li span, .job-match-evidence li small { color: var(--muted); }
+.job-match-evidence .match-evidence-meta { font-size: 12px; }
 .job-match-evidence p { color: var(--muted); font-size: 13px; }
 .job-match-suggestions li { color: var(--muted); font-size: 13px; line-height: 1.55; }
 .job-match-history { display: grid; gap: 5px; padding-top: 4px; border-top: 1px solid var(--line); }
