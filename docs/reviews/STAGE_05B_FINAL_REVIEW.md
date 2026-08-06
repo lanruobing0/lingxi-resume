@@ -1,6 +1,6 @@
 # 阶段 5B Claude 第三次独立验收
 
-验收结论：**通过（附 1 项环境条件）**。
+验收结论：**通过，全部发布门禁通过**。
 
 ## 已确认通过
 
@@ -14,13 +14,18 @@
 - RetrievalRun 的脱敏和 JSON 重启持久化通过。
 - `useReranker` 严格 JSON boolean 契约通过。
 
-## 环境条件与非阻断观察
+## 真实 Qdrant 复验
 
-- `corepack pnpm test:qdrant` 与 `corepack pnpm test:qdrant-retrieval` 在当前环境均因没有可用 Docker 按测试设计以 exit 2 跳过；**不得描述为通过**。
-- 在具备 Docker/Qdrant 的环境复验两条真实 Qdrant smoke，是唯一剩余发布条件。
+- 执行时间：2026-08-06T10:54:42+08:00。
+- 环境：Docker Desktop `desktop-linux`，Docker Server 29.4.1，Docker Compose v5.1.3；仓库 Compose 配置实际启动 Qdrant 容器。
+- `corepack pnpm test:qdrant`：exit 0。验证真实 Point 写入、collection 维度、检索、payload 过滤、`with_vector:false` 与删除后不可再检索。
+- `corepack pnpm test:qdrant-retrieval`：exit 0。验证真实向量写入、查询、document/version/indexRunId 过滤、`with_vector:false` 与删除后不再召回。
+- 真实 Qdrant smoke 与本地 currentKnowledge 复核共同确认，伪造/陈旧 payload 不会绕过本地有效性边界。
+
+## 非阻断观察
 - 浏览器手工交互尚未执行，属于非阻断观察。
 - `keywordScore` 为 0 时展示为 `null` 属于非阻断展示层观察，本轮不修改。
 
 ## 后续约束
 
-阶段 5B 第三次独立代码验收已通过；等待在具备 Docker/Qdrant 的环境完成真实 Qdrant smoke 复验。复验完成前不得合并 master、创建 `rag-stage-5b-passed` 标签或开始阶段 6。
+阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签。

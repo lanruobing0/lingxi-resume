@@ -1,6 +1,6 @@
 # 阶段 5B Codex 实施交接
 
-状态：第三次独立代码验收已通过；等待具备 Docker/Qdrant 的环境完成真实 Qdrant smoke 复验。复验完成前不得合并 master、创建 `rag-stage-5b-passed` 标签或开始阶段 6。
+状态：已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签。本轮未执行合并或打标签。
 
 新增模块将查询规范化、关键词召回、Qdrant 向量召回、RRF、可选 Reranker 与检索服务分离。生产 API 使用 `KnowledgeRetrievalService`，不是测试副本。
 

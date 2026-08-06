@@ -1,6 +1,6 @@
 # 项目状态
 
-最后核实：2026-08-06（阶段 5B 第三次独立代码验收已通过；真实 Qdrant smoke 待具备 Docker/Qdrant 的环境复验）。
+最后核实：2026-08-06（阶段 5B 已完成真实 Qdrant 复验，代码、测试、评测、构建与全部发布门禁通过）。
 
 ## 当前技术栈与数据层
 
@@ -30,7 +30,7 @@
 | 3 | 基于真实简历与真实 JD 的基础岗位匹配 | 已完成，并通过 Claude 二次独立验收 |
 | 4 | 岗位知识库与文档处理链路 | 已完成，并通过 Claude 二次独立验收 |
 | 5A | Embedding Provider 与 Qdrant 向量索引生命周期 | 已完成，并通过 Claude 最终独立验收 |
-| 5B | 管理员关键词/向量混合检索与可选重排序 | 第三次独立代码验收已通过；真实 Qdrant smoke 待 Docker/Qdrant 环境复验 |
+| 5B | 管理员关键词/向量混合检索与可选重排序 | 已完成真实 Qdrant 复验，全部发布门禁通过；允许合并 master 并创建 `rag-stage-5b-passed` 标签 |
 
 阶段 5B 只新增 ADMIN 知识检索，不提供用户侧检索、RAG Prompt、生成式回答、引用式回答、简历修改或 Agent 工作流。
 
@@ -58,7 +58,7 @@
 
 ## 尚未实现与技术债务
 
-- 阶段 5B 第三次独立代码验收已通过；等待在具备 Docker/Qdrant 的环境完成真实 Qdrant smoke 复验。复验完成前不得合并 master、创建 `rag-stage-5b-passed` 标签或开始阶段 6。
+- 阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签；本轮未执行合并或打标签。
 - `src/App.jsx` 与 `src/styles.css` 较大，应在已批准任务中渐进拆分。
 - JSON 单文件存储不适用于生产并发；迁移 MySQL/worker 需单独批准。
 - 阶段 4 已知非阻断限制：没有正文的显式标题不会单独生成 Chunk；编辑岗位/标签后，旧 chunks 中的元数据副本会在下一次成功处理时更新；`knowledgeMinLength` 目前仅保留为策略参数，未参与合并规则；开发环境未对内部 `HttpError` 日志做脱敏格式化。

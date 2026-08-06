@@ -1,3 +1,3 @@
 # 当前任务
 
-阶段 5B 第三次独立代码验收已通过；等待在具备 Docker/Qdrant 的环境完成真实 Qdrant smoke 复验。复验完成前不得合并 master、创建 rag-stage-5b-passed 标签或开始阶段 6。
+阶段 5B 已完成并通过全部验收及真实 Qdrant 发布门禁；等待确认阶段 6 任务范围，阶段 6 尚未开始。

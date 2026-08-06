@@ -1,6 +1,6 @@
 # 阶段 5B：关键词检索、向量检索、融合与可选重排序
 
-状态：第三次独立代码验收已通过；等待具备 Docker/Qdrant 的环境完成真实 Qdrant smoke 复验。复验完成前不得合并 master、创建 `rag-stage-5b-passed` 标签或开始阶段 6。
+状态：已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签。本轮未执行合并或打标签。
 
 目标是在当前有效知识 Chunk 上提供 ADMIN 专用、可追溯的关键词/向量混合检索。检索仅消费 `PROCESSED` 文档当前版本、`INDEXED` 文档及其 `activeIndexRunId` 对应的 Point；旧版本、STALE、孤立或不可追溯 Point 必须丢弃。
 

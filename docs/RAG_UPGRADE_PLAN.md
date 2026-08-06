@@ -95,7 +95,7 @@
 | 不属于本阶段 | 把检索结果直接用于用户报告。 |
 | 主要风险 | 召回偏差、成本和索引漂移；保存 model/version，采用异步重建和离线评估门槛。 |
 
-阶段 5B 第三次独立代码验收已通过：已交付 ADMIN 调试检索、确定性关键词规则、Profile 兼容向量召回、服务端过滤、RRF、可回退 Reranker 和检索运行审计；不生成任何 RAG 回答。真实 Qdrant smoke 待具备 Docker/Qdrant 的环境复验，复验完成前不得合并 master、创建 `rag-stage-5b-passed` 标签或开始阶段 6。
+阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过：已交付 ADMIN 调试检索、确定性关键词规则、Profile 兼容向量召回、服务端过滤、RRF、可回退 Reranker 和检索运行审计；不生成任何 RAG 回答。允许合并 master 并创建 `rag-stage-5b-passed` 标签（本轮未执行）。
 
 ### 阶段 6：基于 RAG 的岗位匹配报告
 
