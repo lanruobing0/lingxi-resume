@@ -81,6 +81,10 @@ Qdrant payload 不放原始 Resume/JD、用户联系方式、API Key 或唯一�
 
 `KnowledgeIndexRun` 保存 document/version/input hash、Embedding Profile、Collection、各步骤计数、cleanup 与失败审计。`KnowledgeVectorRecord` 保存 Point ID、Chunk 与 run 的关联、输入 hash、profile、Collection 和 ACTIVE/STALE/PENDING_DELETE 状态；不保存向量数组。Document 摘要保存 `activeIndexRunId`、`vectorStatus`、已索引版本/数量/Profile/Collection/时间和安全失败摘要。后续检索必须以 `activeIndexRunId` 校验 Point payload。
 
+## 阶段 5B 检索运行
+
+`KnowledgeRetrievalRun` 保存 query hash、规范化查询、模式、服务端过滤、Profile/Collection、两路候选数、融合/返回数、Reranker 与降级状态、非敏感失败码、耗时和创建人。它不保存向量、密钥、完整外部请求或用户简历/JD；结果正文总是由本地当前 `KnowledgeChunk` 再读取并复核。
+
 ## 当前 AI 历史的保留策略
 
 - `analysisRecords`：保留已有总分和建议，新增 `legacy=true`；新的基础/RAG 匹配使用 ResumeJobMatch，不混写。

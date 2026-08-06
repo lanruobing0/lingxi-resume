@@ -173,7 +173,7 @@ It is ignored by Git and must remain uncommitted.
 - Stage 4 passed Claude's second independent review. It adds an ADMIN-only public knowledge-base pipeline: `KnowledgeDocument`, server-only `KnowledgeChunk`, and append-only `KnowledgeProcessingRecord`. It is JSON-backed, preserves normalized-source offsets and heading paths, uses a documented token estimate, and never sends content to AI.
 - `rawText` remains exactly as submitted and is hashed in its original form; `normalizedText` is separately cleaned for processing. Short independent headings use context, so skills and responsibility rows are retained as content. Identical raw-text hash plus strategy is idempotent; a successful new process replaces chunks and a failed process retains the last successful chunks. `tests/knowledge-base.integration.mjs` uses a temporary store and real HTTP requests without AI.
 - Stage 5A passed Claude's final independent review. It adds an OpenAI-compatible embedding provider, profile-isolated Qdrant collections, stable embedding-input hashes and deterministic Point IDs, verified upserts, atomic active-run switching, stale/old Point cleanup tracking, delete synchronization, and ADMIN index management. The runtime keeps only metadata, never vectors or secrets.
-- Mock integration coverage and the real Qdrant smoke test passed. Stage 5B has not started: there is no keyword or vector retrieval, fusion, reranking, RAG, or agentic workflow.
+- Stage 5B's third independent code review passed: ADMIN-only keyword/vector/hybrid retrieval, RRF, optional fallback-safe reranking and retrieval-run audit are complete. Real Qdrant smoke still requires a Docker/Qdrant-capable environment; until that retest, do not merge master, create a `rag-stage-5b-passed` tag, or begin Stage 6. RAG generation and Agentic RAG remain out of scope.
 
 ## Design Memory
 
@@ -226,6 +226,6 @@ Recommend rotating it before public deployment or sharing the repository.
 
 ## Stage 5A accepted
 
-Stage 5A passed Claude's final independent review. The approved scope was knowledge-vector indexing lifecycle only: stable embedding input, profile-isolated Qdrant collections, verified upserts, atomic active-run switching, cleanup tracking, and delete synchronization. Stage 5B has not started; do not assume retrieval, reranking, RAG, or agents exist.
+Stage 5A passed Claude's final independent review. The approved scope was knowledge-vector indexing lifecycle only: stable embedding input, profile-isolated Qdrant collections, verified upserts, atomic active-run switching, cleanup tracking, and delete synchronization. Stage 5B then passed its third independent code review, adding ADMIN-only retrieval and reranking; real Qdrant smoke remains an environment-gated retest, and RAG or agents do not exist.
 
-The durable task workflow is now documented in `docs/CONTEXT_INDEX.md`, `docs/PROJECT_STATUS.md`, `docs/CURRENT_TASK.md`, `docs/DECISIONS.md`, `docs/tasks/`, and `docs/reviews/`. Read these before relying on this historical summary. Stages 1–5A are accepted; Stage 5B has not started and needs its own approved task document.
+The durable task workflow is now documented in `docs/CONTEXT_INDEX.md`, `docs/PROJECT_STATUS.md`, `docs/CURRENT_TASK.md`, `docs/DECISIONS.md`, `docs/tasks/`, and `docs/reviews/`. Read these before relying on this historical summary. Stages 1–5A are accepted; Stage 5B code review passed but its real Qdrant smoke retest remains pending in a Docker/Qdrant-capable environment.

@@ -4351,6 +4351,25 @@ textarea {
 .vector-record-list code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4f5d70; font-size: 11px; }
 .vector-record-list small { grid-column: 2; color: var(--muted); font-size: 11px; }
 
+.retrieval-lab { margin: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.retrieval-lab > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.retrieval-lab h3 { margin: 0; font-size: 16px; }
+.retrieval-lab header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.retrieval-status, .retrieval-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.retrieval-form { margin-top: 13px; }
+.retrieval-form > input:first-child { flex: 1 1 260px; min-width: 0; }
+.retrieval-form input, .retrieval-form select { min-height: 36px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; padding: 0 9px; color: var(--ink); }
+.retrieval-form input[type="number"] { width: 70px; }
+.retrieval-form label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+.retrieval-output { margin-top: 14px; }
+.retrieval-output > p { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.retrieval-output article { padding: 11px 0; border-top: 1px solid var(--line); }
+.retrieval-output strong, .retrieval-output small { display: block; }
+.retrieval-output small, .retrieval-output footer { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.retrieval-output article p { margin: 7px 0; line-height: 1.55; font-size: 13px; white-space: pre-wrap; }
+.retrieval-history { margin-top: 12px; color: var(--muted); font-size: 12px; }
+.retrieval-history summary { cursor: pointer; color: var(--ink); font-weight: 700; }
+
 .knowledge-detail {
   min-width: 0;
   padding: 22px;

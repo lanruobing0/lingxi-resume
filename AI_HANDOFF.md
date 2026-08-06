@@ -199,7 +199,7 @@ Avoid touching unless necessary:
 
 模块位置：`backend/embedding-provider.js`、`backend/knowledge-embedding-text.js`、`backend/knowledge-vector-index.js`、`backend/qdrant-client.js` 与 `backend/server.js`。测试入口：`corepack pnpm test`（Mock 集成测试）和 `corepack pnpm test:qdrant`（真实 Qdrant smoke）。运行环境变量与 API、数据模型、Collection/Point payload 和生命周期规则以 `README.md`、`docs/RAG_DATA_MODEL.md` 与 `docs/tasks/STAGE_05A_VECTOR_INDEX.md` 为准。
 
-阶段 5B 尚未开始；没有关键词检索、向量搜索、混合检索、Reranker、RAG 或 Agent。
+阶段 5B 第三次独立代码验收已通过；仅增加 ADMIN 检索实验室与可复用检索服务。关键词/向量两路使用相同服务端过滤，并以本地 `activeIndexRunId`、processingVersion 和当前 Chunk 复核 Qdrant 命中；RRF 默认融合，Reranker 默认关闭且失败回退。等待在具备 Docker/Qdrant 的环境完成真实 Qdrant smoke 复验；复验完成前不得合并 master、创建 `rag-stage-5b-passed` 标签或开始阶段 6，更不得开始 RAG 或 Agent。
 
 ## RAG Phase 1-2 Handoff
 
