@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
+const root = path.resolve(import.meta.dirname, ".."); const hash = (v) => createHash("sha256").update(v).digest("base64url"); const wait = (ms) => new Promise((r) => setTimeout(r, ms)); const token = randomBytes(20).toString("hex"); const dir = await mkdtemp(path.join(tmpdir(), "lingxi-reranker-flag-")); const probe = createServer(); const port = await new Promise((r) => probe.listen(0, "127.0.0.1", () => r(probe.address().port))); probe.close();
+await writeFile(path.join(dir, "store.json"), JSON.stringify({ users: [{ id: 1, username: "flag-admin", passwordHash: "x", role: "ADMIN", status: 1 }], sessions: [{ id: 1, userId: 1, tokenHash: hash(token), expiresAt: new Date(Date.now() + 60000).toISOString() }], knowledgeDocuments: [], knowledgeChunks: [], knowledgeVectorRecords: [], knowledgeRetrievalRuns: [] })); const child = spawn(process.execPath, ["backend/server.js"], { cwd: root, env: { ...process.env, API_PORT: String(port), LINGXI_DATA_DIR: dir }, stdio: "ignore" }); const call = async (useReranker) => { const r = await fetch(`http://127.0.0.1:${port}/api/admin/knowledge-retrieval/search`, { method: "POST", headers: { Cookie: `lingxi_session=${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ query: "Java", mode: "KEYWORD", useReranker }) }); return { status: r.status, body: await r.json() }; };
+try { for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; } catch {} await wait(25); } assert.equal((await call(true)).status, 200); assert.equal((await call(false)).status, 200); assert.equal((await call("true")).status, 400); assert.equal((await call("false")).status, 400); console.log("useReranker flag integration passed."); } finally { child.kill(); await rm(dir, { recursive: true, force: true }); }

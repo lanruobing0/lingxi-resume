@@ -406,3 +406,14 @@ INSERT INTO system_notice (title, content) VALUES
 --   INDEX idx_knowledge_vector_document_status (document_id, status),
 --   INDEX idx_knowledge_vector_run (index_run_id)
 -- );
+
+-- Phase 5B retrieval audit reference. JSON runtime uses knowledgeRetrievalRuns and never saves vectors, keys, or provider request bodies.
+-- CREATE TABLE knowledge_retrieval_run (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, query_hash CHAR(64) NOT NULL, normalized_query VARCHAR(300) NOT NULL,
+--   search_mode VARCHAR(16) NOT NULL, filters_json JSON NOT NULL, embedding_profile_id VARCHAR(80) NULL,
+--   collection_name VARCHAR(160) NULL, keyword_candidate_count INT NOT NULL, vector_candidate_count INT NOT NULL,
+--   fused_candidate_count INT NOT NULL, returned_count INT NOT NULL, reranker_applied BOOLEAN NOT NULL,
+--   degraded BOOLEAN NOT NULL, status VARCHAR(24) NOT NULL, failure_code VARCHAR(100) NULL,
+--   failure_message TEXT NULL, duration_ms INT NOT NULL, created_by BIGINT NOT NULL, created_at DATETIME NOT NULL,
+--   INDEX idx_knowledge_retrieval_created (created_at), INDEX idx_knowledge_retrieval_creator_created (created_by, created_at)
+-- );

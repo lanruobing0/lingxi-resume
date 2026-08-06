@@ -1,0 +1,5 @@
+[
+  { "id": "java-backend", "query": "Java Spring Boot Redis", "filters": { "skillTags": ["Java"] }, "relevantChunkRefs": ["Java后端能力/核心技能"], "notes": "后端技术词" },
+  { "id": "mixed", "query": "Node.js C++ 数据库优化", "filters": {}, "relevantChunkRefs": ["工程能力/性能优化"], "notes": "中英文与技术符号" },
+  { "id": "star", "query": "STAR 项目经历表达", "filters": { "documentType": ["STAR_TEMPLATE"] }, "relevantChunkRefs": ["STAR模板/项目表达"], "notes": "元数据过滤" }
+]

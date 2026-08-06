@@ -15,3 +15,5 @@
 | 知识库管理接口只允许 ADMIN | 公共岗位资料不应被普通用户随意读取或修改 | 后端每个 `/api/admin/knowledge-*` 路由执行服务端角色校验，前端只隐藏入口 | 阶段 4 |
 | 阶段 5A 按 Embedding Profile 隔离 Qdrant Collection | 模型、维度或输入格式不同的向量不可混用 | Collection 名由受控前缀、profileId、维度和 schema 版本计算；配置不匹配拒绝写入 | 阶段 5A |
 | 本地 activeIndexRunId 是有效向量的权威来源 | 外部 Point 可能在清理失败后暂留 | 只有写入验证完成后才切换；旧 Point 残留不得被后续检索视为有效 | 阶段 5A |
+| 阶段 5B 以本地当前状态复核 Qdrant 命中 | Qdrant payload 可能陈旧或孤立 | 仅返回当前 PROCESSED/INDEXED 文档、当前 Chunk 版本且 Point `indexRunId` 等于 `activeIndexRunId` 的结果 | 阶段 5B |
+| 混合检索默认使用确定性 RRF | 关键词分数与 cosine 分数不可直接相加 | 保留两路排名/贡献，Reranker 默认关闭且失败回退 RRF | 阶段 5B |

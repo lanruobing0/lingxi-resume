@@ -3296,6 +3296,8 @@ function KnowledgeBaseManager({ notify, onChanged }) {
         {!vectorStatus?.embedding?.configured && <small>请在服务端环境变量中配置 Embedding 后再建立索引。</small>}
       </div>
 
+      <RetrievalLab notify={notify} />
+
       <div className="knowledge-workspace">
         <div className="knowledge-list" aria-label="知识资料列表">
           {loading ? <div className="knowledge-loading"><LoaderCircle className="spin" size={18} />正在读取知识资料</div> : documents.length ? documents.map((document) => (
@@ -3328,6 +3330,14 @@ function KnowledgeBaseManager({ notify, onChanged }) {
       <ConfirmDialog open={Boolean(deleteCandidate)} title="删除这份知识资料？" description={`“${deleteCandidate?.title || "知识资料"}”及其全部切片、处理历史会被永久删除，无法撤销。`} confirmLabel="删除资料" isWorking={working === "delete"} onClose={() => setDeleteCandidate(null)} onConfirm={deleteDocument} />
     </section>
   );
+}
+
+function RetrievalLab({ notify }) {
+  const [query, setQuery] = useState(""); const [mode, setMode] = useState("HYBRID"); const [topK, setTopK] = useState(10); const [useReranker, setUseReranker] = useState(false); const [status, setStatus] = useState(null); const [result, setResult] = useState(null); const [runs, setRuns] = useState([]); const [working, setWorking] = useState(false);
+  const refresh = useCallback(async () => { try { const [nextStatus, nextRuns] = await Promise.all([apiRequest("/api/admin/knowledge-retrieval/status"), apiRequest("/api/admin/knowledge-retrieval/runs")]); setStatus(nextStatus); setRuns(nextRuns.items.slice(0, 5)); } catch (error) { notify(`读取检索状态失败: ${error.message}`); } }, [notify]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const search = async (event) => { event.preventDefault(); try { setWorking(true); const data = await apiRequest("/api/admin/knowledge-retrieval/search", { method: "POST", body: JSON.stringify({ query, mode, topK: Number(topK), useReranker }) }); setResult(data); await refresh(); } catch (error) { notify(`检索失败: ${error.message}`); } finally { setWorking(false); } };
+  return <section className="retrieval-lab" aria-labelledby="retrieval-lab-title"><header><div><h3 id="retrieval-lab-title">检索实验室</h3><p>仅查询当前有效知识；不生成回答，不修改简历。</p></div><div className="retrieval-status"><span className={`knowledge-status ${status?.keyword?.available ? "indexed" : "failed"}`}>关键词</span><span className={`knowledge-status ${status?.qdrant?.healthy ? "indexed" : "failed"}`}>向量</span><span className={`knowledge-status ${status?.reranker?.configured ? "indexed" : "not_indexed"}`}>Reranker</span></div></header><form onSubmit={search} className="retrieval-form"><input aria-label="检索查询" maxLength={300} required value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：Java 后端事务与高并发能力" /><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="HYBRID">混合检索</option><option value="KEYWORD">关键词检索</option><option value="VECTOR">向量检索</option></select><input aria-label="返回条数" type="number" min="1" max="50" value={topK} onChange={(event) => setTopK(event.target.value)} /><label><input type="checkbox" checked={useReranker} onChange={(event) => setUseReranker(event.target.checked)} />重排序</label><button className="black-small" disabled={working}>{working ? "检索中…" : "运行检索"}</button></form>{result && <div className="retrieval-output"><p>{result.degraded ? `已降级：${result.degradedReason}` : "检索完成"} · {result.durationMs}ms · 关键词 {result.keywordCandidateCount} / 向量 {result.vectorCandidateCount} · 重排序 {result.rerankerApplied ? "已应用" : result.rerankerFallback ? `回退 ${result.rerankerFailureCode}` : "未应用"}</p>{result.results.map((item) => <article key={item.chunkId}><strong>#{item.finalRank} {item.documentTitle}</strong><small>{item.headingPath.join(" / ") || "未识别章节"} · {item.retrievalSources} · hash {item.contentHash.slice(0, 12)}…</small><p>{item.content.slice(0, 220)}{item.content.length > 220 ? "…" : ""}</p><footer>关键词 {item.keywordRank || "—"}/{item.keywordScore ?? "—"} · 向量 {item.vectorRank || "—"}/{item.vectorScore?.toFixed?.(3) || "—"} · RRF {item.rrfScore?.toFixed?.(4) || "—"} · 重排 {item.rerankScore?.toFixed?.(4) || "—"}</footer></article>)}</div>}<details className="retrieval-history"><summary>最近检索运行（{runs.length}）</summary>{runs.map((run) => <p key={run.id}>#{run.id} · {run.searchMode} · {run.status} · {run.returnedCount} 条 · {run.durationMs}ms</p>)}</details></section>;
 }
 
 function knowledgeDocumentTypeLabel(value) {

@@ -125,6 +125,8 @@ pnpm dev:api
 
 阶段 5A 只为已处理的岗位知识 Chunk 建立、重建、删除和审计向量索引，不提供任何搜索或 RAG。复制 `.env.example` 后仅在服务端配置 Embedding/Qdrant 变量；本地可执行 `docker compose -f docker-compose.qdrant.yml up -d` 启动仅绑定 `127.0.0.1:6333` 的 Qdrant。密钥不得写入仓库或 JSON 数据。Docker 可用时运行 `corepack pnpm test:qdrant`。
 
+阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过：ADMIN 可使用关键词、向量或混合检索实验室，检索只返回本地可验证的当前有效 Chunk。RRF 是默认融合策略；Reranker 默认关闭，失败回退 RRF。允许合并 master 并创建 `rag-stage-5b-passed` 标签（本轮未执行）。`corepack pnpm test:qdrant-retrieval` 是独立真实 Qdrant 检索 smoke。
+
 - 首页仪表盘
 - 简历工作台
 - AI 简历诊断

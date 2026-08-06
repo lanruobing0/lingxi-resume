@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { KnowledgeVectorIndexError, KnowledgeVectorIndexService } from "./knowledge-vector-index.js";
+import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
@@ -184,6 +185,7 @@ const seedData = {
   knowledgeProcessingRecords: [],
   knowledgeIndexRuns: [],
   knowledgeVectorRecords: [],
+  knowledgeRetrievalRuns: [],
   mockInterviews: [],
   interviewAnswers: [],
   systemNotices: [
@@ -663,6 +665,7 @@ async function readStore() {
     knowledgeProcessingRecords: store.knowledgeProcessingRecords || [],
     knowledgeIndexRuns: store.knowledgeIndexRuns || [],
     knowledgeVectorRecords: store.knowledgeVectorRecords || [],
+    knowledgeRetrievalRuns: store.knowledgeRetrievalRuns || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     systemNotices: store.systemNotices || seedData.systemNotices,
@@ -817,6 +820,10 @@ const knowledgeMinLength = 100;
 
 function vectorIndexService() {
   return new KnowledgeVectorIndexService({ persist: writeStore, now });
+}
+
+function knowledgeRetrievalService() {
+  return new KnowledgeRetrievalService({ persist: writeStore, now });
 }
 
 function vectorIndexErrorResponse(error) {
@@ -2529,6 +2536,31 @@ async function handleApi(req, res) {
 
   if (key === "GET /api/notices") {
     return send(res, 200, { items: store.systemNotices.filter((item) => item.status === 1) });
+  }
+
+  if (key === "GET /api/admin/knowledge-retrieval/status") {
+    requireAdmin(store, req);
+    return send(res, 200, await knowledgeRetrievalService().status());
+  }
+
+  if (key === "POST /api/admin/knowledge-retrieval/search") {
+    const user = requireAdmin(store, req);
+    try { return send(res, 200, await knowledgeRetrievalService().search(store, await readJson(req), user.id)); }
+    catch (error) { return send(res, error.status || 502, { message: error.message || "检索服务不可用", failureCode: error.code || "RETRIEVAL_FAILED" }); }
+  }
+
+  if (key === "GET /api/admin/knowledge-retrieval/runs") {
+    requireAdmin(store, req);
+    return send(res, 200, { items: [...store.knowledgeRetrievalRuns].sort((a, b) => b.id - a.id) });
+  }
+
+  const retrievalRunMatch = pathname.match(/^\/api\/admin\/knowledge-retrieval\/runs\/([^/]+)$/);
+  if (method === "GET" && retrievalRunMatch) {
+    requireAdmin(store, req);
+    const runId = parseOptionalPositiveInteger(retrievalRunMatch[1], "runId");
+    const item = store.knowledgeRetrievalRuns.find((run) => run.id === runId);
+    if (!item) return send(res, 404, { message: "检索运行记录不存在" });
+    return send(res, 200, { item });
   }
 
   if (key === "GET /api/admin/knowledge-documents") {
