@@ -7,6 +7,9 @@ import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSa
 import { promisify } from "node:util";
 import { KnowledgeVectorIndexError, KnowledgeVectorIndexService } from "./knowledge-vector-index.js";
 import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
+import { validateKnowledgeClaims, sourceAvailability } from "./citation-validator.js";
+import { buildCandidatePromptPayload, buildReportRetrievalPlans, createReportInputHash, allowedBaseEvidence, reportGenerationConfigHash } from "./grounded-report-service.js";
+import { buildGroundedReportPrompt, groundedReportPromptVersion, groundedReportSchema } from "./grounded-report-prompt.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
@@ -180,6 +183,7 @@ const seedData = {
   jobDescriptionParseResults: [],
   jobApplications: [],
   resumeJobMatches: [],
+  matchReports: [],
   knowledgeDocuments: [],
   knowledgeChunks: [],
   knowledgeProcessingRecords: [],
@@ -634,6 +638,10 @@ function contentHash(value) {
   return createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+function normalizeJobDescriptionText(value) {
+  return String(value || "").replace(/\r\n?/g, "\n").replace(/[\t ]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 async function ensureStore() {
   await mkdir(dataDir, { recursive: true });
   if (!existsSync(dataFile)) {
@@ -660,6 +668,7 @@ async function readStore() {
     jobDescriptionParseResults: store.jobDescriptionParseResults || [],
     jobApplications: store.jobApplications || [],
     resumeJobMatches: store.resumeJobMatches || [],
+    matchReports: store.matchReports || [],
     knowledgeDocuments: store.knowledgeDocuments || [],
     knowledgeChunks: store.knowledgeChunks || [],
     knowledgeProcessingRecords: store.knowledgeProcessingRecords || [],
@@ -1209,6 +1218,16 @@ function parseJsonText(text) {
   }
 }
 
+function parseStrictJsonText(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) throw Object.assign(new Error("AI 返回为空"), { code: "REPORT_INVALID_RESPONSE" });
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    throw Object.assign(new Error("AI 未返回严格 JSON"), { code: "REPORT_INVALID_RESPONSE" });
+  }
+}
+
 function unwrapAiPayload(data, schemaName) {
   if (data && typeof data === "object" && data[schemaName] && typeof data[schemaName] === "object") {
     return data[schemaName];
@@ -1245,25 +1264,36 @@ function normalizeIssue(issue = {}) {
 }
 
 async function requestJson(url, payload, apiKey) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error?.message || data.message || `AI 请求失败: ${response.status}`);
+  const controller = new AbortController();
+  const timeoutMs = Math.max(100, Number(process.env.AI_PROVIDER_TIMEOUT_MS || 20000));
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw Object.assign(new Error(data.error?.message || data.message || `AI 请求失败: ${response.status}`), { status: response.status, code: "AI_PROVIDER_UNAVAILABLE" });
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") throw Object.assign(new Error("AI 请求超时"), { status: 504, code: "AI_PROVIDER_UNAVAILABLE" });
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
-async function runAiJson(store, userId, { system, user, schemaName, schema }) {
+async function runAiJson(store, userId, { system, user, schemaName, schema, strictJson = false }) {
   const config = getAiConfig(store, userId);
   if (!config.enabled || !config.apiKey) {
-    return { ok: false, status: 400, error: "AI 服务未配置 API Key，请先在 AI 服务商页面保存配置或设置 OPENAI_API_KEY。" };
+    return { ok: false, status: 400, code: "AI_NOT_CONFIGURED", error: "AI 服务未配置 API Key，请先在 AI 服务商页面保存配置或设置 OPENAI_API_KEY。" };
   }
 
   const jsonInstruction = "只返回符合要求的 JSON，不要 Markdown，不要解释。";
@@ -1283,7 +1313,7 @@ async function runAiJson(store, userId, { system, user, schemaName, schema }) {
         },
       },
     }, config.apiKey);
-    return { ok: true, mode: "live", data: unwrapAiPayload(parseJsonText(extractResponseText(responsesData)), schemaName) };
+    return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(extractResponseText(responsesData)), schemaName) };
   } catch (responsesError) {
     try {
       const chatData = await requestJson(`${config.baseUrl}/chat/completions`, {
@@ -1295,9 +1325,9 @@ async function runAiJson(store, userId, { system, user, schemaName, schema }) {
         response_format: { type: "json_object" },
       }, config.apiKey);
       const text = chatData.choices?.[0]?.message?.content || "";
-      return { ok: true, mode: "live", data: unwrapAiPayload(parseJsonText(text), schemaName) };
+      return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(text), schemaName) };
     } catch (chatError) {
-      return { ok: false, status: 502, error: chatError.message || responsesError.message };
+      return { ok: false, status: chatError.status || 502, code: chatError.code || (strictJson ? "REPORT_PROVIDER_UNAVAILABLE" : "AI_PROVIDER_UNAVAILABLE"), error: chatError.message || responsesError.message };
     }
   }
 }
@@ -1639,6 +1669,140 @@ async function executeResumeJobMatch(store, user, application) {
     await writeStore(store);
     throw new HttpError(error instanceof HttpError ? error.status : 422, "岗位匹配失败", { matchId: record.id, reason: record.failureMessage });
   }
+}
+
+function reportFailure(status, code, message) {
+  return Object.assign(new Error(message), { status, code });
+}
+
+function normalizeGroundedText(value, fieldName) {
+  const normalized = String(value || "").trim();
+  if (!normalized) throw reportFailure(422, "REPORT_INVALID_RESPONSE", `AI 返回字段 ${fieldName} 为空`);
+  return normalized;
+}
+
+function normalizeGroundedReport(data, match) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 报告不是对象");
+  const expectedKeys = matchDimensionDefinitions.map(([key]) => key);
+  if (!Array.isArray(data.dimensionReports) || data.dimensionReports.length !== expectedKeys.length) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 报告维度不完整");
+  const dimensionReports = data.dimensionReports.map((item, index) => {
+    if (!item || item.key !== expectedKeys[index]) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 报告维度顺序不合法");
+    return { key: item.key, summary: normalizeGroundedText(item.summary, `dimensionReports.${item.key}.summary`) };
+  });
+  const normalizeList = (value, fieldName) => {
+    if (!Array.isArray(value)) throw reportFailure(422, "REPORT_INVALID_RESPONSE", `AI 返回字段 ${fieldName} 不是数组`);
+    return [...new Set(value.map((item) => normalizeGroundedText(item, fieldName)))].slice(0, 8);
+  };
+  if (!Array.isArray(data.claims)) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 返回字段 claims 不是数组");
+  const baseEvidence = allowedBaseEvidence(match);
+  const ids = new Set();
+  const claims = data.claims.map((claim, index) => {
+    const claimId = normalizeGroundedText(claim?.claimId, `claims.${index}.claimId`);
+    if (ids.has(claimId)) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 返回重复 claimId");
+    ids.add(claimId);
+    const claimType = String(claim?.claimType || "").trim();
+    if (!["BASE_MATCH_FACT", "KNOWLEDGE_CLAIM", "MODEL_SUGGESTION"].includes(claimType)) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 返回未知 Claim 类型");
+    const citations = Array.isArray(claim?.citations) ? claim.citations : null;
+    const claimBaseEvidence = Array.isArray(claim?.baseEvidence) ? [...new Set(claim.baseEvidence.map((item) => String(item || "").trim()).filter(Boolean))] : null;
+    if (!citations || !claimBaseEvidence) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI Claim 缺少结构字段");
+    if (claimType === "BASE_MATCH_FACT") {
+      if (citations.length || !claimBaseEvidence.length || claimBaseEvidence.some((item) => !baseEvidence.has(item))) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "基础匹配事实没有引用已验证证据");
+    } else if (claimType === "KNOWLEDGE_CLAIM") {
+      if (claimBaseEvidence.length) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "知识主张不得冒充基础匹配事实");
+    } else if (citations.length || claimBaseEvidence.length || !String(claim?.text || "").trim().startsWith("建议：")) {
+      throw reportFailure(422, "REPORT_INVALID_RESPONSE", "模型建议必须显式标识且不带事实引用");
+    }
+    return { claimId, sectionKey: normalizeGroundedText(claim?.sectionKey, `claims.${index}.sectionKey`), text: normalizeGroundedText(claim?.text, `claims.${index}.text`), claimType, citations, baseEvidence: claimBaseEvidence, validationStatus: claimType === "KNOWLEDGE_CLAIM" ? "PENDING" : "VALID" };
+  });
+  if (!claims.length) throw reportFailure(422, "REPORT_NO_SUPPORTED_CLAIMS", "AI 报告不包含可保留的主张");
+  return { executiveSummary: normalizeGroundedText(data.executiveSummary, "executiveSummary"), dimensionReports, strengths: normalizeList(data.strengths, "strengths"), gaps: normalizeList(data.gaps, "gaps"), recommendations: normalizeList(data.recommendations, "recommendations"), claims };
+}
+
+function resolveMatchReportContext(store, user, application, match) {
+  if (!match) throw reportFailure(404, "REPORT_MATCH_NOT_FOUND", "基础匹配记录不存在");
+  if (match.status !== "COMPLETED" || !match.report) throw reportFailure(409, "REPORT_MATCH_NOT_COMPLETED", "只有已完成的基础匹配可以生成报告");
+  const fields = ["userId", "resumeId", "resumeVersionId", "resumeVersion", "resumeContentHash", "jobDescriptionId", "jobDescriptionParseResultId", "jobDescriptionRawTextHash"];
+  if (fields.some((field) => application[field] === undefined || match[field] === undefined || application[field] !== match[field]) || match.jobApplicationId !== application.id) {
+    throw reportFailure(409, "REPORT_INPUT_INVALID", "基础匹配与求职分析任务的固化输入不一致");
+  }
+  const resumeSnapshot = getResumeSnapshotForApplication(store, application);
+  const resume = getOwnedResume(store, user, application.resumeId);
+  const jobDescription = getOwnedJobDescription(store, user, application.jobDescriptionId);
+  const parseResult = store.jobDescriptionParseResults.find((item) => item.id === application.jobDescriptionParseResultId && item.userId === user.id && item.jobDescriptionId === application.jobDescriptionId && item.status === "SUCCEEDED");
+  const normalizedText = normalizeJobDescriptionText(jobDescription?.rawText);
+  const normalizedTextHash = contentHash(normalizedText);
+  if (!resume || !resumeSnapshot || buildResumeDTO(resumeSnapshot).contentHash !== application.resumeContentHash || !jobDescription || !parseResult || jobDescription.rawTextHash !== application.jobDescriptionRawTextHash || parseResult.rawTextHash !== application.jobDescriptionRawTextHash || application.jobDescriptionNormalizedTextHash !== normalizedTextHash) {
+    throw reportFailure(409, "REPORT_INPUT_INVALID", "报告的简历版本、JD 或解析结果已失效");
+  }
+  return { resumeSnapshot, jobDescription: { ...jobDescription, normalizedText, normalizedTextHash }, parseResult };
+}
+
+async function generateAiGroundedReport(store, userId, context, match, candidates) {
+  const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates });
+  const ai = await runAiJson(store, userId, { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true });
+  if (!ai.ok) {
+    const code = ai.code === "AI_NOT_CONFIGURED" ? "REPORT_PROVIDER_NOT_CONFIGURED" : ai.code === "REPORT_INVALID_RESPONSE" ? "REPORT_INVALID_RESPONSE" : "REPORT_PROVIDER_UNAVAILABLE";
+    throw reportFailure(ai.status || 502, code, ai.error || "报告生成服务不可用");
+  }
+  return normalizeGroundedReport(ai.data, match);
+}
+
+async function executeGroundedMatchReport(store, user, application, match, options) {
+  const context = resolveMatchReportContext(store, user, application, match);
+  const config = getAiConfig(store, user.id);
+  const reportVersion = store.matchReports.filter((item) => item.userId === user.id && item.jobApplicationId === application.id && item.resumeJobMatchId === match.id).reduce((maximum, item) => Math.max(maximum, Number(item.reportVersion) || 0), 0) + 1;
+  const generationConfigHash = reportGenerationConfigHash({ ...options, promptVersion: groundedReportPromptVersion });
+  const report = {
+    id: nextId(store.matchReports), userId: user.id, jobApplicationId: application.id, resumeJobMatchId: match.id,
+    resumeId: match.resumeId, resumeVersionId: match.resumeVersionId, resumeVersion: match.resumeVersion, resumeContentHash: match.resumeContentHash,
+    jobDescriptionId: match.jobDescriptionId, jobDescriptionParseResultId: match.jobDescriptionParseResultId, jobDescriptionRawTextHash: match.jobDescriptionRawTextHash, jobDescriptionNormalizedTextHash: context.jobDescription.normalizedTextHash,
+    baseMatchAlgorithmVersion: match.algorithmVersion, status: "PENDING", reportVersion, inputHash: "", promptVersion: groundedReportPromptVersion,
+    provider: config.provider, model: config.modelId, generationConfigHash, retrievalRunIds: [], retrievalQueries: [], evidenceCoverage: null, droppedClaimCount: 0, validationFailures: [], failureCode: null, failureMessage: null, content: null, createdAt: now(), completedAt: null,
+  };
+  store.matchReports.push(report);
+  await writeStore(store);
+  try {
+    const traces = [];
+    for (const plan of buildReportRetrievalPlans(match, context.parseResult, options)) {
+      const result = await knowledgeRetrievalService().search(store, plan.request, user.id);
+      traces.push({ dimensionKey: plan.dimensionKey, retrievalRunId: result.run.id, query: result.normalizedQuery, queryHash: result.queryHash, degraded: result.degraded, rerankerFallback: result.rerankerFallback, candidates: result.results });
+      report.retrievalRunIds = traces.map((trace) => trace.retrievalRunId);
+    }
+    report.retrievalRunIds = traces.map((trace) => trace.retrievalRunId);
+    report.retrievalQueries = traces.map(({ dimensionKey, retrievalRunId, query, queryHash, candidates }) => ({ dimensionKey, retrievalRunId, query, queryHash, candidateChunkIds: candidates.map((candidate) => candidate.chunkId) }));
+    report.inputHash = createReportInputHash({ application, match, retrievalRunIds: report.retrievalRunIds, promptVersion: report.promptVersion, generationConfigHash });
+    const generated = await generateAiGroundedReport(store, user.id, context, match, buildCandidatePromptPayload(traces));
+    const validated = validateKnowledgeClaims(store, report, generated.claims);
+    const claims = validated.claims;
+    if (!claims.length) throw reportFailure(422, "REPORT_NO_SUPPORTED_CLAIMS", "所有报告主张均未通过验证");
+    const knowledgeClaimCount = generated.claims.filter((item) => item.claimType === "KNOWLEDGE_CLAIM").length;
+    const candidateCount = traces.reduce((sum, trace) => sum + trace.candidates.length, 0);
+    const retrievalDegraded = traces.some((trace) => trace.degraded || trace.rerankerFallback);
+    const noKnowledgeEvidence = validated.validKnowledgeClaimCount === 0;
+    report.status = retrievalDegraded || validated.droppedClaimCount || noKnowledgeEvidence ? "DEGRADED" : "COMPLETED";
+    report.content = { ...generated, claims };
+    report.evidenceCoverage = { retrievalRunCount: traces.length, candidateCount, knowledgeClaimCount, validKnowledgeClaimCount: validated.validKnowledgeClaimCount, ratio: knowledgeClaimCount ? Number((validated.validKnowledgeClaimCount / knowledgeClaimCount).toFixed(4)) : 0 };
+    report.droppedClaimCount = validated.droppedClaimCount;
+    report.validationFailures = validated.validationFailures;
+    report.failureCode = report.status === "DEGRADED" ? (validated.droppedClaimCount ? "REPORT_CITATION_INVALID" : retrievalDegraded ? "REPORT_RETRIEVAL_DEGRADED" : "REPORT_NO_KNOWLEDGE_EVIDENCE") : null;
+    report.failureMessage = report.status === "DEGRADED" ? "报告已降级：仅保留通过验证的内容。" : null;
+    report.completedAt = now();
+    await writeStore(store);
+    return report;
+  } catch (error) {
+    report.status = "FAILED";
+    report.content = null;
+    report.failureCode = error.code || "REPORT_RETRIEVAL_FAILED";
+    report.failureMessage = String(error.message || "报告生成失败").slice(0, 500);
+    report.completedAt = now();
+    await writeStore(store);
+    throw reportFailure(error.status || 502, report.failureCode, report.failureMessage);
+  }
+}
+
+function publicMatchReport(store, report) {
+  const content = report.content ? { ...report.content, claims: report.content.claims.map((claim) => ({ ...claim, citations: claim.citations.map((citation) => ({ ...citation, availability: sourceAvailability(store, citation) ? "AVAILABLE" : "UNAVAILABLE" })) })) } : null;
+  return { ...report, content };
 }
 
 async function generateAiAnalysis(store, userId, resume, position) {
@@ -2015,6 +2179,8 @@ async function handleApi(req, res) {
       sourceUrl: String(body.sourceUrl || "").trim(),
       rawText,
       rawTextHash: contentHash(rawText),
+      normalizedText: normalizeJobDescriptionText(rawText),
+      normalizedTextHash: contentHash(normalizeJobDescriptionText(rawText)),
       currentParseResultId: null,
       parseStatus: "NOT_PARSED",
       createdAt: now(),
@@ -2043,6 +2209,7 @@ async function handleApi(req, res) {
     const body = await readJson(req);
     const rawText = Object.hasOwn(body, "rawText") ? requireNonEmptyText(body.rawText, "rawText") : current.rawText;
     const rawTextHash = contentHash(rawText);
+    const normalizedText = normalizeJobDescriptionText(rawText);
     const sourceChanged = rawTextHash !== current.rawTextHash;
     const item = {
       ...current,
@@ -2051,6 +2218,8 @@ async function handleApi(req, res) {
       sourceUrl: Object.hasOwn(body, "sourceUrl") ? String(body.sourceUrl || "").trim() : current.sourceUrl,
       rawText,
       rawTextHash,
+      normalizedText,
+      normalizedTextHash: contentHash(normalizedText),
       currentParseResultId: sourceChanged ? null : current.currentParseResultId,
       parseStatus: sourceChanged ? "NOT_PARSED" : current.parseStatus,
       updatedAt: now(),
@@ -2070,6 +2239,7 @@ async function handleApi(req, res) {
     store.jobDescriptionParseResults = store.jobDescriptionParseResults.filter((result) => result.jobDescriptionId !== item.id);
     store.jobApplications = store.jobApplications.filter((application) => application.jobDescriptionId !== item.id);
     store.resumeJobMatches = store.resumeJobMatches.filter((match) => !applicationIds.has(match.jobApplicationId) && match.jobDescriptionId !== item.id);
+    store.matchReports = store.matchReports.filter((report) => !applicationIds.has(report.jobApplicationId) && report.jobDescriptionId !== item.id);
     await writeStore(store);
     return send(res, 204, {});
   }
@@ -2141,6 +2311,7 @@ async function handleApi(req, res) {
       jobDescriptionId: jobDescription.id,
       jobDescriptionParseResultId: parseResult.id,
       jobDescriptionRawTextHash: jobDescription.rawTextHash,
+      jobDescriptionNormalizedTextHash: jobDescription.normalizedTextHash || contentHash(normalizeJobDescriptionText(jobDescription.rawText)),
       status: "READY_FOR_MATCH",
       createdAt: now(),
     };
@@ -2167,6 +2338,35 @@ async function handleApi(req, res) {
     if (!application) return send(res, 404, { message: "求职分析任务不存在" });
     const item = await executeResumeJobMatch(store, user, application);
     return send(res, 201, { item });
+  }
+
+  const applicationReportsMatch = pathname.match(/^\/api\/job-applications\/(\d+)\/reports$/);
+  if (applicationReportsMatch && method === "POST") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationReportsMatch[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "REPORT_INPUT_INVALID" });
+    const body = await readJson(req);
+    const matchId = Number(body.matchId);
+    if (!Number.isInteger(matchId) || matchId < 1) return send(res, 400, { message: "matchId 必须是正整数", failureCode: "REPORT_INPUT_INVALID" });
+    const searchMode = String(body.searchMode || "HYBRID").toUpperCase();
+    if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "REPORT_INPUT_INVALID" });
+    if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "REPORT_INPUT_INVALID" });
+    const match = getOwnedResumeJobMatch(store, user, matchId);
+    try {
+      const item = await executeGroundedMatchReport(store, user, application, match, { searchMode, useReranker: body.useReranker === true });
+      return send(res, 201, { item: publicMatchReport(store, item) });
+    } catch (error) {
+      return send(res, error.status || 502, { message: error.message || "报告生成失败", failureCode: error.code || "REPORT_RETRIEVAL_FAILED" });
+    }
+  }
+
+  const matchReportDetail = pathname.match(/^\/api\/match-reports\/(\d+)$/);
+  if (matchReportDetail && method === "GET") {
+    const user = requireUser(store, req);
+    const reportId = Number(matchReportDetail[1]);
+    const item = Number.isInteger(reportId) && reportId > 0 ? store.matchReports.find((report) => report.id === reportId && report.userId === user.id) : null;
+    if (!item) return send(res, 404, { message: "岗位匹配报告不存在" });
+    return send(res, 200, { item: publicMatchReport(store, item) });
   }
 
   const resumeJobMatchDetail = pathname.match(/^\/api\/resume-job-matches\/(\d+)$/);
@@ -2248,8 +2448,10 @@ async function handleApi(req, res) {
     store.grammarRecords = store.grammarRecords.filter((item) => item.resumeId !== resume.id);
     store.mockInterviews = store.mockInterviews.filter((item) => item.resumeId !== resume.id);
     store.interviewAnswers = store.interviewAnswers.filter((item) => item.resumeId !== resume.id);
+    const applicationIds = new Set(store.jobApplications.filter((item) => item.resumeId === resume.id).map((item) => item.id));
     store.jobApplications = store.jobApplications.filter((item) => item.resumeId !== resume.id);
     store.resumeJobMatches = store.resumeJobMatches.filter((item) => item.resumeId !== resume.id);
+    store.matchReports = store.matchReports.filter((item) => !applicationIds.has(item.jobApplicationId) && item.resumeId !== resume.id);
     await writeStore(store);
     return send(res, 204, {});
   }

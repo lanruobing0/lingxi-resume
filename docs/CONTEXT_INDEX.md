@@ -9,6 +9,8 @@
 - 当前任务边界：`docs/CURRENT_TASK.md`
 - 已确定架构决策：`docs/DECISIONS.md`
 - 阶段任务说明：`docs/tasks/`
+- 当前实施任务：`docs/tasks/STAGE_06A_GROUNDED_REPORT.md`
+- 当前阶段状态：阶段 6A 已通过 Claude 最终独立验收及全部发布门禁；允许合并 master 并创建 rag-stage-6a-passed。Stage 6B 尚未开始。
 - Claude 独立验收记录：`docs/reviews/`
 - RAG 长期路线：`docs/RAG_UPGRADE_PLAN.md`
 - RAG 数据模型：`docs/RAG_DATA_MODEL.md`
