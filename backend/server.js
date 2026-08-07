@@ -1801,8 +1801,47 @@ async function executeGroundedMatchReport(store, user, application, match, optio
 }
 
 function publicMatchReport(store, report) {
-  const content = report.content ? { ...report.content, claims: report.content.claims.map((claim) => ({ ...claim, citations: claim.citations.map((citation) => ({ ...citation, availability: sourceAvailability(store, citation) ? "AVAILABLE" : "UNAVAILABLE" })) })) } : null;
+  const content = report.content ? {
+    ...report.content,
+    claims: report.content.claims.map((claim) => ({
+      ...claim,
+      citations: claim.citations.map((citation) => {
+        const chunk = store.knowledgeChunks.find((item) => item.id === citation.chunkId && item.documentId === citation.documentId && item.processingVersion === citation.processingVersion);
+        const document = store.knowledgeDocuments.find((item) => item.id === citation.documentId);
+        return {
+          ...citation,
+          availability: sourceAvailability(store, citation) ? "AVAILABLE" : "UNAVAILABLE",
+          headingPath: chunk?.headingPath || [],
+          documentType: document?.documentType || "",
+          jobFamily: document?.jobFamily || "",
+          seniority: document?.seniority || "",
+          skillTags: document?.skillTags || [],
+          language: document?.language || "",
+        };
+      }),
+    })),
+  } : null;
   return { ...report, content };
+}
+
+function publicMatchReportSummary(report) {
+  return {
+    id: report.id,
+    jobApplicationId: report.jobApplicationId,
+    resumeJobMatchId: report.resumeJobMatchId,
+    resumeId: report.resumeId,
+    resumeVersion: report.resumeVersion,
+    jobDescriptionId: report.jobDescriptionId,
+    reportVersion: report.reportVersion,
+    status: report.status,
+    provider: report.provider || null,
+    model: report.model || null,
+    evidenceCoverage: report.evidenceCoverage || null,
+    droppedClaimCount: report.droppedClaimCount || 0,
+    failureCode: report.failureCode || null,
+    createdAt: report.createdAt,
+    completedAt: report.completedAt || null,
+  };
 }
 
 async function generateAiAnalysis(store, userId, resume, position) {
@@ -2341,6 +2380,17 @@ async function handleApi(req, res) {
   }
 
   const applicationReportsMatch = pathname.match(/^\/api\/job-applications\/(\d+)\/reports$/);
+  if (applicationReportsMatch && method === "GET") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationReportsMatch[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在" });
+    const items = store.matchReports
+      .filter((report) => report.userId === user.id && report.jobApplicationId === application.id)
+      .sort((left, right) => (right.reportVersion - left.reportVersion) || String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .map(publicMatchReportSummary);
+    return send(res, 200, { items });
+  }
+
   if (applicationReportsMatch && method === "POST") {
     const user = requireUser(store, req);
     const application = getOwnedJobApplication(store, user, applicationReportsMatch[1]);

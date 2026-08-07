@@ -459,7 +459,11 @@ async function apiRequest(path, options = {}) {
     window.localStorage.removeItem("lingxi-token");
     if (!suppressLoginPrompt) window.dispatchEvent(new CustomEvent("lingxi-login-required"));
   }
-  if (!response.ok) throw new Error(data.detail ? `${data.message}: ${data.detail}` : data.message || "请求失败");
+  if (!response.ok) {
+    const error = new Error(data.detail ? `${data.message}: ${data.detail}` : data.message || "请求失败");
+    error.failureCode = typeof data.failureCode === "string" ? data.failureCode : "";
+    throw error;
+  }
   return data;
 }
 
@@ -2288,6 +2292,10 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [matches, setMatches] = useState([]);
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [matchFailureMessage, setMatchFailureMessage] = useState("");
+  const [reports, setReports] = useState([]);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [reportFailure, setReportFailure] = useState(null);
+  const [reportWorking, setReportWorking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
@@ -2304,6 +2312,41 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setLoading(false);
     }
   }, [notify]);
+
+  const openGroundedReport = useCallback(async (reportId) => {
+    try {
+      setReportFailure(null);
+      const data = await apiRequest(`/api/match-reports/${reportId}`);
+      setSelectedReport(data.item || null);
+    } catch (error) {
+      setSelectedReport(null);
+      const code = error.failureCode || "REPORT_RETRIEVAL_FAILED";
+      setReportFailure({ code, message: error.message });
+      notify(`读取 AI 岗位匹配报告失败: ${reportFailureMessage(code)}`);
+    }
+  }, [notify]);
+
+  const loadGroundedReports = useCallback(async (applicationId, { autoSelect = true } = {}) => {
+    if (!applicationId) {
+      setReports([]);
+      setSelectedReport(null);
+      return [];
+    }
+    try {
+      const data = await apiRequest(`/api/job-applications/${applicationId}/reports`);
+      const items = data.items || [];
+      setReports(items);
+      if (autoSelect && items[0]?.id) await openGroundedReport(items[0].id);
+      return items;
+    } catch (error) {
+      setReports([]);
+      setSelectedReport(null);
+      const code = error.failureCode || "REPORT_RETRIEVAL_FAILED";
+      setReportFailure({ code, message: error.message });
+      notify(`读取 AI 岗位匹配报告历史失败: ${reportFailureMessage(code)}`);
+      return [];
+    }
+  }, [notify, openGroundedReport]);
 
   const loadMatches = useCallback(async (applicationId, { autoSelectCompleted = false } = {}) => {
     if (!applicationId) {
@@ -2350,7 +2393,13 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setMatches([]);
       setSelectedMatch(null);
       setMatchFailureMessage("");
-      if (nextApplication?.id) await loadMatches(String(nextApplication.id), { autoSelectCompleted: true });
+      setReports([]);
+      setSelectedReport(null);
+      setReportFailure(null);
+      if (nextApplication?.id) await Promise.all([
+        loadMatches(String(nextApplication.id), { autoSelectCompleted: true }),
+        loadGroundedReports(String(nextApplication.id)),
+      ]);
       setMode("detail");
     } catch (error) {
       notify(`读取岗位详情失败: ${error.message}`);
@@ -2358,7 +2407,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     } finally {
       setLoading(false);
     }
-  }, [activeResumeId, loadMatches, notify]);
+  }, [activeResumeId, loadGroundedReports, loadMatches, notify]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
   useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
@@ -2381,8 +2430,14 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     setSelectedMatch(null);
     setMatchFailureMessage("");
     setMatches([]);
+    setSelectedReport(null);
+    setReportFailure(null);
+    setReports([]);
     if (!applicationId) return;
-    await loadMatches(applicationId, { autoSelectCompleted });
+    await Promise.all([
+      loadMatches(applicationId, { autoSelectCompleted }),
+      loadGroundedReports(applicationId),
+    ]);
   };
 
   const saveJob = async () => {
@@ -2472,6 +2527,32 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     } finally { setWorking(false); }
   };
 
+  const createGroundedReport = async () => {
+    const application = applications.find((item) => item.id === Number(selectedApplicationId));
+    if (!application || !selectedMatch?.id || selectedMatch.status !== "COMPLETED") {
+      notify("请先选择一份已完成的基础岗位匹配报告。");
+      return;
+    }
+    setReportWorking(true);
+    setReportFailure(null);
+    try {
+      const data = await apiRequest(`/api/job-applications/${application.id}/reports`, {
+        method: "POST",
+        body: JSON.stringify({ matchId: selectedMatch.id, searchMode: "HYBRID", useReranker: false }),
+      });
+      setSelectedReport(data.item || null);
+      await loadGroundedReports(String(application.id), { autoSelect: false });
+      notify("AI 岗位匹配报告已生成并保存为新版本。");
+    } catch (error) {
+      const failure = { code: error.failureCode || "REPORT_RETRIEVAL_FAILED", message: error.message };
+      setReportFailure(failure);
+      await loadGroundedReports(String(application.id));
+      notify(`AI 岗位匹配报告生成失败: ${reportFailureMessage(failure.code)}`);
+    } finally {
+      setReportWorking(false);
+    }
+  };
+
   if (mode === "create") {
     return (
       <section className="job-page job-editor-page">
@@ -2522,6 +2603,25 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           {matches.length > 0 && <div className="job-match-history"><strong>匹配历史</strong>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? (setMatchFailureMessage(""), setSelectedMatch(item)) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</div>}
           {!working && !selectedMatch && !matches.length && <div className="job-empty"><strong>尚未生成匹配报告</strong><p>报告仅会在真实 AI 返回并通过证据校验后显示分数与建议。</p></div>}
         </section>
+        <section className="grounded-report-panel" aria-labelledby="grounded-report-title">
+          <div className="job-match-head">
+            <div>
+              <span className="section-kicker">可引用报告</span>
+              <h3 id="grounded-report-title">AI 岗位匹配报告</h3>
+              <p>{selectedApplicationId && selectedMatch?.status === "COMPLETED" ? `将基于简历 v${selectedMatch.resumeVersion}、当前 JD 与基础匹配 ${selectedMatch.totalScore} 分生成；不会修改简历。` : "请先选择一份已完成的基础岗位匹配报告。"}</p>
+            </div>
+            <button className="black-small" disabled={reportWorking || selectedReport?.status === "PENDING" || selectedMatch?.status !== "COMPLETED" || !selectedApplicationId} onClick={createGroundedReport}>
+              {reportWorking ? <><LoaderCircle className="spin" size={16} />正在生成</> : <><Sparkles size={16} />生成 AI 岗位匹配报告</>}
+            </button>
+          </div>
+          {reportWorking && <div className="grounded-report-loading" role="status" aria-live="polite"><strong>正在生成可引用报告</strong><p>正在检索并验证知识证据，请勿重复提交。</p><ResultSkeleton lines={5} /></div>}
+          {!reportWorking && reportFailure && <GroundedReportFailure failure={reportFailure} onRetry={createGroundedReport} canRetry={selectedMatch?.status === "COMPLETED"} />}
+          {!reportWorking && selectedReport?.status === "PENDING" && <div className="grounded-report-loading" role="status"><strong>报告处理中</strong><p>报告尚未完成，完成后可在历史版本中重新打开。</p><ResultSkeleton lines={4} /></div>}
+          {!reportWorking && selectedReport?.status === "FAILED" && <GroundedReportFailure failure={{ code: selectedReport.failureCode, message: selectedReport.failureMessage }} onRetry={createGroundedReport} canRetry={selectedMatch?.status === "COMPLETED"} />}
+          {!reportWorking && (selectedReport?.status === "COMPLETED" || selectedReport?.status === "DEGRADED") && <GroundedMatchReport report={selectedReport} match={selectedMatch} />}
+          {!reportWorking && !selectedReport && !reportFailure && !reports.length && <div className="job-empty"><strong>尚未生成 AI 岗位匹配报告</strong><p>选择明确的求职分析任务与基础匹配报告后，再生成基于本地可验证引用的报告。</p></div>}
+          {reports.length > 0 && <GroundedReportHistory reports={reports} selectedReportId={selectedReport?.id} onSelect={openGroundedReport} />}
+        </section>
       </section>
     );
   }
@@ -2532,6 +2632,103 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <button className="job-list-item" key={job.id} onClick={() => loadDetail(job.id)}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
     </section>
   );
+}
+
+const reportFailureLabels = {
+  REPORT_PROVIDER_NOT_CONFIGURED: "AI 服务尚未配置。",
+  REPORT_PROVIDER_UNAVAILABLE: "AI 服务暂时不可用，请稍后重试。",
+  REPORT_RETRIEVAL_FAILED: "知识检索失败，请稍后重试。",
+  REPORT_NO_SUPPORTED_CLAIMS: "当前证据不足，无法生成可靠报告。",
+  REPORT_CITATION_INVALID: "部分引用未通过验证，报告已降级。",
+  REPORT_MATCH_NOT_COMPLETED: "基础岗位匹配尚未完成。",
+  REPORT_INPUT_INVALID: "当前报告请求无效，请重新选择匹配记录。",
+  REPORT_INVALID_RESPONSE: "AI 返回的报告格式无效，请重新生成。",
+  REPORT_NO_KNOWLEDGE_EVIDENCE: "当前没有可用的知识证据，报告已降级。",
+  REPORT_RETRIEVAL_DEGRADED: "部分知识检索不可用，报告已降级。",
+};
+
+const reportDimensionLabels = {
+  required_skills: "必需技能",
+  project_relevance: "项目相关性",
+  keyword_coverage: "关键词覆盖",
+  experience: "经验匹配",
+  education: "教育背景",
+  expression: "表达质量",
+};
+
+function reportFailureMessage(code) {
+  return reportFailureLabels[code] || "报告暂时无法生成，请稍后重试。";
+}
+
+function reportStatusLabel(status) {
+  return status === "COMPLETED" ? "已完成" : status === "DEGRADED" ? "已降级" : status === "FAILED" ? "生成失败" : "处理中";
+}
+
+function GroundedReportFailure({ failure, onRetry, canRetry }) {
+  const code = failure?.code || "REPORT_RETRIEVAL_FAILED";
+  return <div className="grounded-report-failure" role="alert"><div><strong>报告未能完整生成</strong><p>{reportFailureMessage(code)}</p><small>错误代码：{code}</small></div>{canRetry && <button className="white-small" onClick={onRetry}><RefreshCw size={15} />重新生成</button>}</div>;
+}
+
+function GroundedReportHistory({ reports, selectedReportId, onSelect }) {
+  return <div className="grounded-report-history"><strong>报告历史版本</strong><div>{reports.map((report) => <button key={report.id} className={selectedReportId === report.id ? "active" : ""} onClick={() => onSelect(report.id)}><span><b>v{report.reportVersion}</b><em className={`report-status status-${String(report.status || "").toLowerCase()}`}>{reportStatusLabel(report.status)}</em></span><small>{formatResumeDate(report.createdAt)} · {report.model || "未记录模型"} · 证据覆盖 {formatEvidenceCoverage(report.evidenceCoverage)}</small></button>)}</div></div>;
+}
+
+function formatEvidenceCoverage(coverage) {
+  if (!coverage || !Number.isFinite(Number(coverage.ratio))) return "--";
+  return `${Math.round(Number(coverage.ratio) * 100)}%`;
+}
+
+function GroundedMatchReport({ report, match }) {
+  const [citation, setCitation] = useState(null);
+  const content = report.content;
+  if (!content) return null;
+  const claims = content.claims || [];
+  const claimsFor = (sectionKey) => claims.filter((claim) => claim.sectionKey === sectionKey);
+  const baseDimensions = match?.report?.dimensions || [];
+  return <div className="grounded-match-report">
+    <div className="grounded-report-overview">
+      <div><span className={`report-status status-${report.status.toLowerCase()}`}>{reportStatusLabel(report.status)}</span><strong>{Number.isFinite(Number(match?.totalScore)) ? `${match.totalScore} 分` : "--"}</strong><small>基础匹配分</small></div>
+      <dl><div><dt>简历版本</dt><dd>v{report.resumeVersion}</dd></div><div><dt>报告版本</dt><dd>v{report.reportVersion}</dd></div><div><dt>岗位 / JD</dt><dd>已锁定</dd></div><div><dt>生成时间</dt><dd>{formatResumeDate(report.completedAt || report.createdAt)}</dd></div><div><dt>证据覆盖</dt><dd>{formatEvidenceCoverage(report.evidenceCoverage)}</dd></div></dl>
+    </div>
+    {report.status === "DEGRADED" && <div className="grounded-report-degraded" role="status"><strong>部分知识证据不可用</strong><p>报告仅保留已通过验证的内容；未通过验证的知识主张不会显示为事实。</p></div>}
+    <section className="grounded-summary"><h4>综合结论</h4><p>{content.executiveSummary}</p></section>
+    <section className="grounded-dimensions"><h4>六维分析</h4><div>{(content.dimensionReports || []).map((dimension) => {
+      const base = baseDimensions.find((item) => item.key === dimension.key);
+      const dimensionClaims = claimsFor(dimension.key);
+      return <article key={dimension.key}><header><div><strong>{reportDimensionLabels[dimension.key] || dimension.key}</strong>{base && <small>基础匹配 {base.score} 分 · 权重 {base.weight}%</small>}</div></header><p>{dimension.summary}</p>{base?.summary && <small className="grounded-base-summary">基础匹配情况：{base.summary}</small>}<ClaimList claims={dimensionClaims} onCitation={setCitation} /></article>;
+    })}</div></section>
+    <section className="grounded-list-grid"><GroundedTextList title="优势" items={content.strengths} claims={claimsFor("strengths")} onCitation={setCitation} /><GroundedTextList title="差距" items={content.gaps} claims={claimsFor("gaps")} onCitation={setCitation} /><GroundedTextList title="建议" items={content.recommendations} claims={claimsFor("recommendations")} onCitation={setCitation} /></section>
+    <section className="grounded-claims"><h4>报告依据</h4><ClaimList claims={claims.filter((claim) => !["strengths", "gaps", "recommendations", ...(content.dimensionReports || []).map((item) => item.key)].includes(claim.sectionKey))} onCitation={setCitation} emptyLabel="本报告未提供额外主张。" /></section>
+    <CitationDrawer citation={citation} onClose={() => setCitation(null)} />
+  </div>;
+}
+
+function GroundedTextList({ title, items = [], claims = [], onCitation }) {
+  return <section><h4>{title}</h4>{items?.length ? <ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul> : <p>暂无可展示内容。</p>}<ClaimList claims={claims} onCitation={onCitation} /></section>;
+}
+
+function ClaimList({ claims = [], onCitation, emptyLabel = "" }) {
+  if (!claims.length) return emptyLabel ? <p className="grounded-empty-claims">{emptyLabel}</p> : null;
+  return <div className="grounded-claim-list">{claims.map((claim) => {
+    const type = claim.claimType;
+    const label = type === "BASE_MATCH_FACT" ? "来自简历/JD 的事实" : type === "KNOWLEDGE_CLAIM" ? "来自知识资料" : "AI 建议";
+    const citations = claim.citations || [];
+    return <article key={claim.claimId}><span className={`claim-type claim-${String(type || "").toLowerCase()}`}>{label}</span><p>{claim.text}</p>{type === "BASE_MATCH_FACT" && claim.baseEvidence?.length > 0 && <small>依据：{claim.baseEvidence.join("；")}</small>}{type === "KNOWLEDGE_CLAIM" && citations.length > 0 && <button className="citation-link" onClick={() => onCitation(citations[0])}>查看引用 {citations.length > 1 ? `(${citations.length})` : ""}</button>}</article>;
+  })}</div>;
+}
+
+function CitationDrawer({ citation, onClose }) {
+  useEffect(() => {
+    if (!citation) return undefined;
+    const onKeyDown = (event) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [citation, onClose]);
+  if (!citation) return null;
+  const available = citation.availability === "AVAILABLE";
+  const heading = Array.isArray(citation.headingPath) ? citation.headingPath.filter(Boolean).join(" / ") : "";
+  const metadata = [citation.documentType, citation.jobFamily, citation.seniority, ...(citation.skillTags || [])].filter(Boolean);
+  return <div className="citation-drawer-backdrop" role="presentation" onMouseDown={onClose}><aside className="citation-drawer" role="dialog" aria-modal="true" aria-labelledby="citation-drawer-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span className="section-kicker">知识引用</span><h3 id="citation-drawer-title">{citation.sourceTitle || "知识资料"}</h3></div><button className="plain-icon" aria-label="关闭引用抽屉" title="关闭" onClick={onClose}><X size={19} /></button></header><span className={`citation-availability ${available ? "is-available" : "is-unavailable"}`}>{available ? "来源当前可用" : "该来源生成报告时有效，目前已不可用。"}</span><blockquote>“{citation.quote}”</blockquote><dl>{heading && <div><dt>章节</dt><dd>{heading}</dd></div>}{metadata.length > 0 && <div><dt>资料信息</dt><dd>{metadata.join(" · ")}</dd></div>}{citation.language && <div><dt>语言</dt><dd>{citation.language}</dd></div>}</dl></aside></div>;
 }
 
 function ResumeJobMatchReport({ match }) {

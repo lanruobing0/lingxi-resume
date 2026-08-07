@@ -127,9 +127,9 @@ pnpm dev:api
 
 阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过：ADMIN 可使用关键词、向量或混合检索实验室，检索只返回本地可验证的当前有效 Chunk。RRF 是默认融合策略；Reranker 默认关闭，失败回退 RRF。允许合并 master 并创建 `rag-stage-5b-passed` 标签（本轮未执行）。`corepack pnpm test:qdrant-retrieval` 是独立真实 Qdrant 检索 smoke。
 
-### 阶段 6A：可引用岗位匹配报告后端闭环（已通过最终验收）
+### 阶段 6：基于 RAG 的岗位匹配报告（6A + 6B 已完成）
 
-阶段 6A 已通过 Claude 最终独立验收及全部发布门禁；允许合并 master 并创建 `rag-stage-6a-passed`。该阶段仅实现基于已完成岗位匹配和本地可验证知识引用的报告后端、持久化、API 与自动化测试；不包含报告 UI、简历修改、Agent 或用户自由检索。Stage 6B 尚未开始。
+阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁；Stage 7 尚未开始。该阶段以锁定的岗位申请与基础匹配生成带本地可验证知识引用的报告，并在用户侧展示报告状态、六维分析、Claim 类型、可信引用抽屉与历史版本；不包含简历修改、Agent 或用户自由检索。
 
 - 首页仪表盘
 - 简历工作台
