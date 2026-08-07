@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:api": "node backend/server.js",
-    "test": "node tests/job-description.integration.mjs && node tests/isolation.integration.mjs && node tests/resume-job-match.integration.mjs && node tests/knowledge-base.integration.mjs && node tests/vector-index.integration.mjs && node tests/hybrid-retrieval.integration.mjs && node tests/use-reranker-flag.integration.mjs",
+    "test": "node tests/job-description.integration.mjs && node tests/isolation.integration.mjs && node tests/resume-job-match.integration.mjs && node tests/knowledge-base.integration.mjs && node tests/vector-index.integration.mjs && node tests/hybrid-retrieval.integration.mjs && node tests/use-reranker-flag.integration.mjs && node tests/grounded-match-report.integration.mjs",
     "test:vector-index": "node tests/vector-index.integration.mjs",
     "test:qdrant": "node tests/qdrant-smoke.integration.mjs",
     "test:qdrant-retrieval": "node tests/qdrant-retrieval-smoke.integration.mjs",

@@ -1,6 +1,6 @@
 # AI_HANDOFF.md
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
 This is the quick continuation note for the next AI/Codex session.
 
@@ -114,6 +114,15 @@ Verified:
 - Added the admin knowledge-base section to the existing backend page and `tests/knowledge-base.integration.mjs`. The integration entry uses the real HTTP server plus an isolated JSON directory; `pnpm test` runs all four test files without external AI calls.
 - Known low-risk limitations: headings without body do not create a Chunk; edited document metadata is copied to existing chunks on next successful processing; `knowledgeMinLength` is not an active merge rule; development logs may print internal `HttpError` details; adjacent body-less short headings may deliberately remain body content.
 - Stage 5A passed Claude's final independent review and is ready for release commit, merge to `master`, and `rag-stage-5a-passed` tagging. It provides only controlled Embedding/Qdrant index lifecycle; retrieval, reranking, and RAG remain absent.
+
+## Stage 6A accepted – Git closure authorized
+
+- Branch: `feat/rag-stage-6a-grounded-report`; Claude 已允许完成 feature 提交与推送、合并 `master` 和创建 `rag-stage-6a-passed`，但 Stage 6B 尚未开始。
+- `POST /api/job-applications/:id/reports` requires a completed owned `matchId`; it creates a new immutable `matchReports` history item. `GET /api/match-reports/:id` is owner-only and annotates historic citations as `AVAILABLE` or `UNAVAILABLE` without changing their snapshots.
+- `backend/grounded-report-service.js` deterministically derives six retrieval plans from the locked stage 3 match/JD and calls production `KnowledgeRetrievalService`. `backend/grounded-report-prompt.js` declares `grounded-match-report-v1` and strict JSON; `backend/citation-validator.js` validates local Chunk/run/version/active-index/quote integrity.
+- Only valid `KNOWLEDGE_CLAIM` citations enter completed output. Invalid citations are dropped with persisted reasons and cause `DEGRADED`; no valid Claims causes `FAILED`. Model suggestions must begin `建议：`; base facts must refer to exact stage 3 evidence.
+- Run `node tests/grounded-match-report.integration.mjs`, then the complete stage command set in `docs/tasks/STAGE_06A_GROUNDED_REPORT.md`. The report test uses real HTTP backend and mocks only external Provider/Embedding/Qdrant/Reranker.
+- 阶段 6A 已通过 Claude 最终独立验收及全部发布门禁；允许合并 master 并创建 rag-stage-6a-passed。Stage 6B 尚未开始。`claim-support-v4` 从并列拆分单元中剔除纯引导语，保留每个实质单元至少一条本地 quote 的要求；“共同”“并”仍不视为因果。中英文逗号等句界后的明确他/她归因已拒绝，普通“其他”不误伤。真实 HTTP 报告断言、连续 5 次集成测试和双 Qdrant smoke 均通过。
 
 ## Historical Stage 3 delivery
 

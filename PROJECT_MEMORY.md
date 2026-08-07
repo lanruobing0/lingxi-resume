@@ -159,7 +159,7 @@ It is ignored by Git and must remain uncommitted.
 - Mock interviews are real AI sessions: target role input, resume-based opening question, answer score and feedback, AI follow-up questions, final report, and persisted history records.
 - Interview endpoints: `POST /api/interviews`, `POST /api/interviews/:id/answers`, `POST /api/interviews/:id/report`, and `GET /api/records/interviews`.
 
-## RAG Upgrade Progress (Stage 5A accepted)
+## RAG Upgrade Progress (Stage 6A accepted)
 
 - Runtime persistence remains `backend/data/store.json`; `database.sql` is a production schema/migration reference only.
 - Phase 1 normalizes editor data into `buildResumeDTO`. Provider prompts use PII-filtered `buildAiResumeContext`, while history retains full DTO snapshots. AI records bind `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`.
@@ -174,6 +174,8 @@ It is ignored by Git and must remain uncommitted.
 - `rawText` remains exactly as submitted and is hashed in its original form; `normalizedText` is separately cleaned for processing. Short independent headings use context, so skills and responsibility rows are retained as content. Identical raw-text hash plus strategy is idempotent; a successful new process replaces chunks and a failed process retains the last successful chunks. `tests/knowledge-base.integration.mjs` uses a temporary store and real HTTP requests without AI.
 - Stage 5A passed Claude's final independent review. It adds an OpenAI-compatible embedding provider, profile-isolated Qdrant collections, stable embedding-input hashes and deterministic Point IDs, verified upserts, atomic active-run switching, stale/old Point cleanup tracking, delete synchronization, and ADMIN index management. The runtime keeps only metadata, never vectors or secrets.
 - Stage 5B completed its real Qdrant retest on Docker Desktop (Docker Server 29.4.1, Compose v5.1.3): both Qdrant smoke commands exited 0, and syntax checks, the full mock integration suite, golden evaluation, build, and diff checks passed. All release gates now pass; merging master and creating a `rag-stage-5b-passed` tag are allowed, but were not performed in this verification run. RAG generation and Agentic RAG remain out of scope.
+- Stage 6A adds only the backend grounded-report loop. `matchReports` binds a completed `ResumeJobMatch`, frozen resume/JD hashes, provider/config/prompt versions and RetrievalRun IDs. The orchestrator calls the existing `KnowledgeRetrievalService`; its persisted candidate references plus local current source checks drive `citation-validator.js`. Knowledge claims with invalid Chunk/run/version/quote evidence are removed and marked `DEGRADED`; historic reports retain quote snapshots and report source availability after a document is withdrawn. `tests/grounded-match-report.integration.mjs` is the HTTP-level regression suite. No report UI, resume mutation, Agent or free user retrieval was added.
+- 阶段 6A 已通过 Claude 最终独立验收及全部发布门禁；允许合并 master 并创建 rag-stage-6a-passed。Stage 6B 尚未开始。`claim-support-v4` 从并列单元剔除纯引导语，仅校验实质单元，并继续拒绝跨引用因果/结果拼接；中英文逗号等句界后的明确他/她归因被拒绝，普通“其他”表达不受影响。连续 5 次真实 HTTP 重启集成和双 Qdrant smoke 均通过。
 
 ## Design Memory
 

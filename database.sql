@@ -417,3 +417,28 @@ INSERT INTO system_notice (title, content) VALUES
 --   failure_message TEXT NULL, duration_ms INT NOT NULL, created_by BIGINT NOT NULL, created_at DATETIME NOT NULL,
 --   INDEX idx_knowledge_retrieval_created (created_at), INDEX idx_knowledge_retrieval_creator_created (created_by, created_at)
 -- );
+
+-- Phase 6A grounded match-report production reference. The JSON runtime uses
+-- matchReports; report content remains structured JSON and retrieval candidate
+-- refs contain identifiers/hashes only, never vectors or provider secrets.
+-- ALTER TABLE job_application ADD COLUMN job_description_normalized_text_hash CHAR(64) NULL;
+-- CREATE TABLE match_report (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   job_application_id BIGINT NOT NULL, resume_job_match_id BIGINT NOT NULL,
+--   resume_id BIGINT NOT NULL, resume_version_id BIGINT NOT NULL, resume_version INT NOT NULL,
+--   resume_content_hash CHAR(64) NOT NULL, job_description_id BIGINT NOT NULL,
+--   job_description_parse_result_id BIGINT NOT NULL, job_description_raw_text_hash CHAR(64) NOT NULL,
+--   job_description_normalized_text_hash CHAR(64) NOT NULL, base_match_algorithm_version VARCHAR(80) NOT NULL,
+--   status VARCHAR(24) NOT NULL, report_version INT NOT NULL, input_hash CHAR(64) NOT NULL,
+--   prompt_version VARCHAR(80) NOT NULL, provider VARCHAR(80) NULL, model VARCHAR(160) NULL,
+--   generation_config_hash CHAR(64) NOT NULL, retrieval_run_ids_json JSON NOT NULL,
+--   retrieval_queries_json JSON NOT NULL, evidence_coverage_json JSON NULL,
+--   dropped_claim_count INT NOT NULL DEFAULT 0, validation_failures_json JSON NOT NULL,
+--   failure_code VARCHAR(100) NULL, failure_message TEXT NULL, content_json JSON NULL,
+--   created_at DATETIME NOT NULL, completed_at DATETIME NULL,
+--   CONSTRAINT fk_match_report_user FOREIGN KEY (user_id) REFERENCES user(id),
+--   CONSTRAINT fk_match_report_application FOREIGN KEY (job_application_id) REFERENCES job_application(id),
+--   CONSTRAINT fk_match_report_match FOREIGN KEY (resume_job_match_id) REFERENCES resume_job_match(id),
+--   INDEX idx_match_report_owner_created (user_id, created_at),
+--   INDEX idx_match_report_application_version (job_application_id, report_version)
+-- );
