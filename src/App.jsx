@@ -26,6 +26,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Search,
   Save,
   Send,
   Settings,
@@ -46,6 +47,7 @@ import { useInViewOnce } from "./hooks/useInViewOnce";
 import { selectHistoryMatch, selectLatestFailedMatch } from "./matchState";
 import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, suggestionFailureMessage, suggestionStatusLabel, versionSourceLabel } from "./suggestionUiState";
 import { feedbackTextItems, interviewApiRequest, interviewCategoryLabel, interviewDifficultyLabel, interviewFailureMessage, interviewStatusLabel, nextInterviewQuestionIndex, safeKnowledgeSources } from "./interviewUiState";
+import { agentActionLabel, agentApiRequest, agentFailureMessage, agentResultTypes, agentStatusLabel, safeAgentStepSummary, safeRetrievalSources } from "./agentUiState";
 import { usePresence } from "./hooks/usePresence";
 
 const appNav = [
@@ -467,6 +469,7 @@ async function apiRequest(path, options = {}) {
     error.status = response.status;
     error.answerId = data.answerId || null;
     error.feedbackId = data.feedbackId || null;
+    error.agentRunId = data.agentRunId || null;
     throw error;
   }
   return data;
@@ -2311,6 +2314,12 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [selectedVersionSnapshot, setSelectedVersionSnapshot] = useState(null);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
   const [versionHistoryError, setVersionHistoryError] = useState(null);
+  const [agentRuns, setAgentRuns] = useState([]);
+  const [selectedAgentRun, setSelectedAgentRun] = useState(null);
+  const [agentSteps, setAgentSteps] = useState([]);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentWorking, setAgentWorking] = useState(false);
+  const [agentError, setAgentError] = useState(null);
   const [interviewSessions, setInterviewSessions] = useState([]);
   const [selectedInterview, setSelectedInterview] = useState(null);
   const [interviewFeedback, setInterviewFeedback] = useState({});
@@ -2470,6 +2479,62 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     }
   }, [openInterviewSession]);
 
+  const openAgentRun = useCallback(async (runId) => {
+    if (!runId) return null;
+    try {
+      setAgentLoading(true);
+      setAgentError(null);
+      const detailRequest = agentApiRequest("detail", { runId });
+      const stepsRequest = agentApiRequest("steps", { runId });
+      const [detailData, stepsData] = await Promise.all([
+        apiRequest(detailRequest.path),
+        apiRequest(stepsRequest.path),
+      ]);
+      const item = detailData.item || null;
+      setSelectedAgentRun(item);
+      setAgentSteps(stepsData.items || []);
+      return item;
+    } catch (error) {
+      setSelectedAgentRun(null);
+      setAgentSteps([]);
+      setAgentError({ code: error.failureCode || "AGENT_RUN_NOT_FOUND", message: error.message });
+      return null;
+    } finally {
+      setAgentLoading(false);
+    }
+  }, []);
+
+  const loadAgentRuns = useCallback(async (applicationId, { autoSelect = true } = {}) => {
+    if (!applicationId) {
+      setAgentRuns([]);
+      setSelectedAgentRun(null);
+      setAgentSteps([]);
+      return [];
+    }
+    try {
+      setAgentLoading(true);
+      setAgentError(null);
+      const request = agentApiRequest("history", { applicationId });
+      const data = await apiRequest(request.path);
+      const items = data.items || [];
+      setAgentRuns(items);
+      if (autoSelect && items[0]?.id) await openAgentRun(items[0].id);
+      if (!items.length) {
+        setSelectedAgentRun(null);
+        setAgentSteps([]);
+      }
+      return items;
+    } catch (error) {
+      setAgentRuns([]);
+      setSelectedAgentRun(null);
+      setAgentSteps([]);
+      setAgentError({ code: error.failureCode || "AGENT_HISTORY_FAILED", message: error.message });
+      return [];
+    } finally {
+      setAgentLoading(false);
+    }
+  }, [openAgentRun]);
+
   const openGroundedReport = useCallback(async (reportId) => {
     try {
       setReportFailure(null);
@@ -2566,6 +2631,10 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setSuggestionSuccess("");
       setResumeVersionHistory([]);
       setSelectedVersionSnapshot(null);
+      setAgentRuns([]);
+      setSelectedAgentRun(null);
+      setAgentSteps([]);
+      setAgentError(null);
       setInterviewSessions([]);
       setSelectedInterview(null);
       setInterviewFeedback({});
@@ -2573,6 +2642,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       if (nextApplication?.id) await Promise.all([
         loadMatches(String(nextApplication.id), { autoSelectCompleted: true }),
         loadGroundedReports(String(nextApplication.id)),
+        loadAgentRuns(String(nextApplication.id)),
         loadInterviewSessions(String(nextApplication.id)),
       ]);
       setMode("detail");
@@ -2582,7 +2652,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     } finally {
       setLoading(false);
     }
-  }, [activeResumeId, loadGroundedReports, loadInterviewSessions, loadMatches, notify]);
+  }, [activeResumeId, loadAgentRuns, loadGroundedReports, loadInterviewSessions, loadMatches, notify]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
   useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
@@ -2614,6 +2684,10 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     setSuggestionSuccess("");
     setResumeVersionHistory([]);
     setSelectedVersionSnapshot(null);
+    setAgentRuns([]);
+    setSelectedAgentRun(null);
+    setAgentSteps([]);
+    setAgentError(null);
     setInterviewSessions([]);
     setSelectedInterview(null);
     setInterviewFeedback({});
@@ -2623,6 +2697,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     await Promise.all([
       loadMatches(applicationId, { autoSelectCompleted }),
       loadGroundedReports(applicationId),
+      loadAgentRuns(applicationId),
       loadInterviewSessions(applicationId),
     ]);
   };
@@ -2804,6 +2879,33 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     }
   };
 
+  const createAgentRun = async () => {
+    const application = applications.find((item) => item.id === Number(selectedApplicationId));
+    if (!application || !selectedReport?.id || !["COMPLETED", "DEGRADED"].includes(selectedReport.status)) {
+      setAgentError({ code: "AGENT_REPORT_NOT_READY", message: "请先打开一份已完成或降级可用的 AI 岗位匹配报告。" });
+      return;
+    }
+    setAgentWorking(true);
+    setAgentError(null);
+    try {
+      const request = agentApiRequest("create", { applicationId: application.id, matchReportId: selectedReport.id });
+      const data = await apiRequest(request.path, request.options);
+      const run = data.item || null;
+      setSelectedAgentRun(run);
+      setAgentSteps(run?.steps || []);
+      await loadAgentRuns(String(application.id), { autoSelect: false });
+      if (run?.id) await openAgentRun(run.id);
+      notify(run?.status === "DEGRADED" ? "Agent 分析已完成，部分检索或步骤处于降级状态。" : run?.status === "STOPPED_LIMIT" ? "Agent 已达到服务器允许的最大步骤数并停止。" : "Agent 分析已完成，可查看步骤、来源与建议计划。");
+    } catch (error) {
+      const code = error.failureCode || "AGENT_EXECUTION_FAILED";
+      await loadAgentRuns(String(application.id), { autoSelect: false });
+      if (error.agentRunId) await openAgentRun(error.agentRunId);
+      else setAgentError({ code, message: error.message });
+    } finally {
+      setAgentWorking(false);
+    }
+  };
+
   const createInterviewSession = async () => {
     const application = applications.find((item) => item.id === Number(selectedApplicationId));
     if (!application || !selectedReport?.id || !["COMPLETED", "DEGRADED"].includes(selectedReport.status)) {
@@ -2956,6 +3058,19 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           onDecision={decideSuggestion}
           onRefresh={() => selectedReport?.id && loadSuggestionRuns(selectedReport.id)}
           onSelectVersion={openResumeVersionSnapshot}
+        />
+        <AgentRunWorkspace
+          applicationId={selectedApplicationId}
+          report={selectedReport}
+          runs={agentRuns}
+          run={selectedAgentRun}
+          steps={agentSteps}
+          loading={agentLoading}
+          working={agentWorking}
+          error={agentError}
+          onCreate={createAgentRun}
+          onSelectRun={openAgentRun}
+          onRefresh={() => selectedApplicationId && loadAgentRuns(selectedApplicationId)}
         />
         <MockInterviewWorkspace
           applicationId={selectedApplicationId}
@@ -3227,11 +3342,74 @@ function InterviewCompletionSummary({ session, questions, feedbackByQuestion, on
   return <section className="interview-completion" aria-labelledby="interview-completion-title"><div className="interview-completion-score"><span>后端最终平均分</span><strong>{Number.isFinite(Number(session.averageScore)) ? session.averageScore : "--"}</strong><small id="interview-completion-title">本次模拟面试已保存，可从历史记录恢复回看。</small></div><div className="interview-completion-summary"><FeedbackList title="本次优势摘要（AI 反馈）" items={strengths} /><FeedbackList title="本次改进摘要（AI 反馈）" items={weaknesses} /></div><div className="interview-score-list">{questions.map((question, index) => <button key={question.id} onClick={() => onSelectQuestion?.(index)}><span>第 {index + 1} 题 · {interviewCategoryLabel(question.category)}</span><strong>{feedbackByQuestion[question.id]?.feedback?.score ?? "--"} 分</strong></button>)}</div></section>;
 }
 
+function AgentRunWorkspace({ applicationId, report, runs = [], run, steps = [], loading, working, error, onCreate, onSelectRun, onRefresh }) {
+  const canCreate = Boolean(applicationId) && ["COMPLETED", "DEGRADED"].includes(report?.status);
+  const canShowResult = ["COMPLETED", "DEGRADED"].includes(run?.status) && run?.finalResult;
+
+  return (
+    <section className="agent-run-panel" aria-labelledby="agent-run-title">
+      <div className="job-match-head agent-run-head">
+        <div>
+          <h3 id="agent-run-title">Agent 证据分析</h3>
+          <p>基于锁定简历、岗位、匹配报告与知识证据规划下一步。全程只读，不会修改简历或自动执行建议。</p>
+        </div>
+        <div className="agent-run-actions">
+          <button className="white-small" disabled={loading || working || !applicationId} onClick={onRefresh}><RefreshCw size={15} />刷新状态</button>
+          <button className="black-small" disabled={working || !canCreate} onClick={onCreate}>{working ? <><LoaderCircle className="spin" size={16} />Agent 正在分析</> : <><Bot size={16} />启动 Agent 分析</>}</button>
+        </div>
+      </div>
+
+      {!canCreate && <div className="agent-empty"><strong>等待可用的岗位匹配报告</strong><p>先选择一份已完成或降级可用的 AI 岗位匹配报告，再启动只读 Agent 分析。</p></div>}
+      {loading && <div className="agent-loading" role="status" aria-live="polite"><strong>正在从后端恢复 AgentRun</strong><p>运行状态、步骤与来源均以后端保存记录为准。</p><ResultSkeleton lines={4} /></div>}
+      {!loading && error && <div className="agent-error" role="alert"><div><strong>Agent 记录读取或执行失败</strong><p>{agentFailureMessage(error.code)}</p><small>错误代码：{error.code}</small></div><button className="white-small" onClick={onRefresh}>重新读取</button></div>}
+
+      {!loading && runs.length > 0 && <div className="agent-run-history"><strong>历史 AgentRun</strong><div>{runs.map((item) => <button key={item.id} className={run?.id === item.id ? "active" : ""} aria-pressed={run?.id === item.id} onClick={() => onSelectRun(item.id)}><span><b>Run #{item.id}</b><em className={`agent-status status-${String(item.status || "").toLowerCase()}`}>{agentStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {formatResumeDate(item.createdAt)}</small></button>)}</div></div>}
+
+      {!loading && canCreate && !runs.length && !run && !error && <div className="agent-empty"><Search size={20} /><strong>尚未开始 Agent 分析</strong><p>启动后可回看每一步行动、检索来源与最终建议；刷新页面也能恢复记录。</p></div>}
+
+      {!loading && run && <div className="agent-run-detail">
+        <header className="agent-run-summary">
+          <div><span className={`agent-status status-${String(run.status || "").toLowerCase()}`}>{agentStatusLabel(run.status)}</span><strong>Run #{run.id}</strong></div>
+          <dl><div><dt>锁定简历</dt><dd>v{run.resumeVersion}</dd></div><div><dt>执行进度</dt><dd>{run.currentStep || 0} / {run.maxSteps || "--"}</dd></div><div><dt>开始时间</dt><dd>{formatResumeDate(run.createdAt)}</dd></div><div><dt>完成时间</dt><dd>{run.completedAt ? formatResumeDate(run.completedAt) : "尚未完成"}</dd></div></dl>
+        </header>
+
+        {["PENDING", "RUNNING"].includes(run.status) && <div className="agent-active-state" role="status"><LoaderCircle className="spin" size={18} /><div><strong>{run.status === "PENDING" ? "AgentRun 等待开始" : "Agent 正在执行有界分析"}</strong><p>刷新后会从后端恢复最新状态，页面不会自行选择或执行工具。</p></div></div>}
+        {run.status === "STOPPED_LIMIT" && <div className="agent-limit-state" role="status"><strong>Agent 已达到服务器允许的最大步骤数并停止。</strong><p>这是独立的安全停止状态，不表示失败或已完成最终计划。</p></div>}
+        {run.status === "DEGRADED" && <div className="agent-degraded-state" role="status"><strong>部分检索或步骤已降级</strong><p>剩余有效证据与最终结果仍可查看；降级内容不会被伪装为完整成功。</p></div>}
+        {run.status === "FAILED" && <div className="agent-failed-state" role="alert"><strong>本次 Agent 分析失败</strong><p>{agentFailureMessage(run.failureCode)}</p><small>失败运行不会展示为成功计划。</small></div>}
+
+        <AgentStepTimeline steps={steps} />
+        {canShowResult && <AgentFinalResult result={run.finalResult} />}
+        {["COMPLETED", "DEGRADED"].includes(run.status) && !run.finalResult && <div className="agent-empty"><strong>暂无可展示的最终计划</strong><p>后端没有保存通过校验的 finalResult，页面不会补造成功内容。</p></div>}
+      </div>}
+    </section>
+  );
+}
+
+function AgentStepTimeline({ steps = [] }) {
+  return <section className="agent-timeline" aria-labelledby="agent-timeline-title"><div><h4 id="agent-timeline-title">步骤时间线</h4><p>仅展示审计记录中的安全摘要，不显示内部提示词或工具定义。</p></div>{!steps.length ? <div className="agent-empty compact"><strong>暂无步骤记录</strong><p>运行开始后，后端会按顺序保存每一步。</p></div> : <ol>{steps.map((step) => <AgentStepItem key={step.id || step.stepIndex} step={step} />)}</ol>}</section>;
+}
+
+function AgentStepItem({ step }) {
+  const summary = safeAgentStepSummary(step);
+  const sources = safeRetrievalSources(step);
+  const retrievalLabel = step.actionType === "RETRIEVE_KNOWLEDGE" ? step.status === "DEGRADED" ? "检索降级" : step.retrievalRunId ? "检索已记录" : "未记录检索" : null;
+  return <li className={`agent-step step-${String(step.status || "").toLowerCase()}`}><span className="agent-step-index">{step.stepIndex}</span><article><header><div><strong>{agentActionLabel(step.actionType)}</strong>{retrievalLabel && <em>{retrievalLabel}</em>}</div><span className={`agent-status status-${String(step.status || "").toLowerCase()}`}>{agentStatusLabel(step.status)}</span></header><p className="agent-step-reason">{step.reason || "该步骤未保存可展示的原因说明。"}</p><div className="agent-step-times"><span>开始 {formatResumeDate(step.startedAt)}</span><span>{step.completedAt ? `完成 ${formatResumeDate(step.completedAt)}` : "尚未完成"}</span></div>{(summary.input.length > 0 || summary.output.length > 0) && <div className="agent-step-safe-summary">{summary.input.length > 0 && <AgentSummaryRows title="安全输入摘要" rows={summary.input} />}{summary.output.length > 0 && <AgentSummaryRows title="安全输出摘要" rows={summary.output} />}</div>}{step.actionType === "RETRIEVE_KNOWLEDGE" && <details className="agent-sources"><summary>查看检索来源（{sources.length}）</summary>{sources.length ? <div>{sources.map((source, index) => <article key={`${source.title}-${index}`}><header><strong>{source.title}</strong><span>{source.sourceType} · {source.availability === "AVAILABLE" ? "可用" : "当前不可用"}</span></header><p>{source.summary || "该来源未提供可展示摘要。"}</p></article>)}</div> : <p>本步骤没有可安全展示的知识来源。</p>}</details>}</article></li>;
+}
+
+function AgentSummaryRows({ title, rows }) {
+  return <dl><dt>{title}</dt>{rows.map((row) => <div key={`${title}-${row.label}`}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>;
+}
+
+function AgentFinalResult({ result }) {
+  return <section className="agent-final-result" aria-labelledby="agent-final-title"><div><h4 id="agent-final-title">最终计划与建议</h4><p>四类内容保持事实边界，不会写回简历或自动执行。</p></div><div className="agent-result-grid">{Object.entries(agentResultTypes).map(([type, meta]) => <section className={`agent-result-card result-${type.toLowerCase()}`} key={type}><header><strong>{meta.label}</strong><span>{meta.note}</span></header>{(result?.[type] || []).length ? <ul>{result[type].map((item, index) => <li key={`${type}-${index}`}><p>{item.text}</p><small>已绑定 {item.sourceRefs?.length || 0} 条后端验证来源</small></li>)}</ul> : <p className="agent-result-empty">本类暂无通过校验的内容。</p>}</section>)}</div></section>;
+}
+
 function ResumeVersionHistoryPanel({ versions, loading, error, selectedVersion, onSelect }) {
   return <section className="resume-version-history" aria-labelledby="resume-version-history-title"><div><h4 id="resume-version-history-title">简历版本历史（只读）</h4><p>查看由接受建议生成的版本及原始快照；此处不能回写或覆盖内容。</p></div>{loading && <ResultSkeleton lines={2} />}{error && <p className="job-error">{error}</p>}{!loading && !error && !versions.length && <p className="grounded-empty-claims">暂无可读取的版本历史。</p>}{!loading && versions.length > 0 && <div className="resume-version-list">{versions.map((version) => <button key={version.id} className={selectedVersion?.id === version.id ? "active" : ""} onClick={() => onSelect(version.resumeId, version.id)}><span><b>v{version.resumeVersion || version.version}</b><small>{formatResumeDate(version.createdAt)}</small></span><em>{versionSourceLabel(version)}</em></button>)}</div>}{selectedVersion?.snapshot && <div className="resume-version-snapshot"><div><strong>v{selectedVersion.resumeVersion || selectedVersion.version} 内容快照</strong><small>{selectedVersion.summary || "历史版本"}</small></div><pre>{JSON.stringify(selectedVersion.snapshot, null, 2)}</pre></div>}</section>;
 }
 
-export { ResumeSuggestionWorkspace, SuggestionDiff, ResumeVersionHistoryPanel };
+export { AgentRunWorkspace, AgentStepTimeline, AgentFinalResult, ResumeSuggestionWorkspace, SuggestionDiff, ResumeVersionHistoryPanel };
 
 function GroundedMatchReport({ report, match }) {
   const [citation, setCitation] = useState(null);

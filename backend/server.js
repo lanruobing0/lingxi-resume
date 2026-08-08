@@ -2508,6 +2508,22 @@ function publicAgentRun(store, run, { includeSteps = false } = {}) {
   return item;
 }
 
+function publicAgentRunSummary(run) {
+  return {
+    id: run.id,
+    jobApplicationId: run.jobApplicationId,
+    resumeId: run.resumeId,
+    resumeVersion: run.resumeVersion,
+    matchReportId: run.matchReportId,
+    status: run.status,
+    maxSteps: run.maxSteps,
+    currentStep: run.currentStep,
+    failureCode: run.failureCode,
+    createdAt: run.createdAt,
+    completedAt: run.completedAt,
+  };
+}
+
 function flattenAgentText(value, output = []) {
   if (typeof value === "string") {
     const normalized = value.replace(/[\r\n\t ]+/g, " ").trim();
@@ -3416,6 +3432,17 @@ async function handleApi(req, res) {
   }
 
   const applicationAgentRuns = pathname.match(/^\/api\/job-applications\/(\d+)\/agent-runs$/);
+  if (applicationAgentRuns && method === "GET") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationAgentRuns[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "AGENT_APPLICATION_NOT_FOUND" });
+    const items = store.agentRuns
+      .filter((item) => item.userId === user.id && item.jobApplicationId === application.id)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .map(publicAgentRunSummary);
+    return send(res, 200, { items });
+  }
+
   if (applicationAgentRuns && method === "POST") {
     const user = requireUser(store, req);
     const application = getOwnedJobApplication(store, user, applicationAgentRuns[1]);

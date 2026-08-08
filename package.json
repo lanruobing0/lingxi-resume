@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:api": "node backend/server.js",
-    "test": "node tests/job-description.integration.mjs && node tests/isolation.integration.mjs && node tests/resume-job-match.integration.mjs && node tests/knowledge-base.integration.mjs && node tests/vector-index.integration.mjs && node tests/hybrid-retrieval.integration.mjs && node tests/use-reranker-flag.integration.mjs && node tests/grounded-match-report.integration.mjs && node tests/resume-suggestions.integration.mjs && node tests/rag-mock-interview.integration.mjs && node tests/bounded-agentic-rag.integration.mjs && node tests/suggestion-ui.unit.mjs && node tests/suggestion-ui.render.mjs && node tests/interview-ui.unit.mjs && node tests/interview-ui.render.mjs",
+    "test": "node tests/job-description.integration.mjs && node tests/isolation.integration.mjs && node tests/resume-job-match.integration.mjs && node tests/knowledge-base.integration.mjs && node tests/vector-index.integration.mjs && node tests/hybrid-retrieval.integration.mjs && node tests/use-reranker-flag.integration.mjs && node tests/grounded-match-report.integration.mjs && node tests/resume-suggestions.integration.mjs && node tests/rag-mock-interview.integration.mjs && node tests/bounded-agentic-rag.integration.mjs && node tests/suggestion-ui.unit.mjs && node tests/suggestion-ui.render.mjs && node tests/interview-ui.unit.mjs && node tests/interview-ui.render.mjs && node tests/agent-ui.unit.mjs && node tests/agent-ui.render.mjs",
     "test:interview-ui": "node tests/interview-ui.unit.mjs && node tests/interview-ui.render.mjs",
     "test:resume-suggestions": "node tests/resume-suggestions.integration.mjs",
     "test:rag-mock-interview": "node tests/rag-mock-interview.integration.mjs",
     "test:bounded-agentic-rag": "node tests/bounded-agentic-rag.integration.mjs",
+    "test:agent-ui": "node tests/agent-ui.unit.mjs && node tests/agent-ui.render.mjs",
     "test:vector-index": "node tests/vector-index.integration.mjs",
     "test:qdrant": "node tests/qdrant-smoke.integration.mjs",
     "test:qdrant-retrieval": "node tests/qdrant-retrieval-smoke.integration.mjs",
