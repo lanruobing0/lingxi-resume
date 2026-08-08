@@ -1,3 +1,3 @@
 # 当前任务
 
-Stage 8A RAG Mock Interview backend 已通过；Stage 8B UI 尚未开始。
+Stage 8 已正式完成；Stage 9 尚未开始。

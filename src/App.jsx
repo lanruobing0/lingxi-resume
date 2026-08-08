@@ -45,6 +45,7 @@ import { useCountUp } from "./hooks/useCountUp";
 import { useInViewOnce } from "./hooks/useInViewOnce";
 import { selectHistoryMatch, selectLatestFailedMatch } from "./matchState";
 import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, suggestionFailureMessage, suggestionStatusLabel, versionSourceLabel } from "./suggestionUiState";
+import { feedbackTextItems, interviewApiRequest, interviewCategoryLabel, interviewDifficultyLabel, interviewFailureMessage, interviewStatusLabel, nextInterviewQuestionIndex, safeKnowledgeSources } from "./interviewUiState";
 import { usePresence } from "./hooks/usePresence";
 
 const appNav = [
@@ -463,6 +464,9 @@ async function apiRequest(path, options = {}) {
   if (!response.ok) {
     const error = new Error(data.detail ? `${data.message}: ${data.detail}` : data.message || "请求失败");
     error.failureCode = typeof data.failureCode === "string" ? data.failureCode : "";
+    error.status = response.status;
+    error.answerId = data.answerId || null;
+    error.feedbackId = data.feedbackId || null;
     throw error;
   }
   return data;
@@ -878,7 +882,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
           {active === "ai-tools" && <AiToolsPanel notify={notify} go={go} resumeId={activeResumeId} />}
           {active === "providers" && <ProviderSettings notify={notify} />}
-          {active === "interview" && <InterviewPractice notify={notify} go={go} resumeId={activeResumeId} />}
+          {active === "interview" && <InterviewStageEntry go={go} />}
           {active === "history" && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
@@ -2307,6 +2311,13 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [selectedVersionSnapshot, setSelectedVersionSnapshot] = useState(null);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
   const [versionHistoryError, setVersionHistoryError] = useState(null);
+  const [interviewSessions, setInterviewSessions] = useState([]);
+  const [selectedInterview, setSelectedInterview] = useState(null);
+  const [interviewFeedback, setInterviewFeedback] = useState({});
+  const [interviewLoading, setInterviewLoading] = useState(false);
+  const [interviewWorking, setInterviewWorking] = useState(false);
+  const [interviewError, setInterviewError] = useState(null);
+  const [activeInterviewQuestion, setActiveInterviewQuestion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
@@ -2396,6 +2407,68 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setSuggestionLoading(false);
     }
   }, [openSuggestionRun]);
+
+  const openInterviewSession = useCallback(async (sessionId) => {
+    if (!sessionId) return null;
+    try {
+      setInterviewLoading(true);
+      setInterviewError(null);
+      const request = interviewApiRequest("session", { sessionId });
+      const data = await apiRequest(request.path);
+      const session = data.item || null;
+      const feedbackEntries = await Promise.all((session?.questions || []).filter((question) => question.answerId).map(async (question) => {
+        try {
+          const feedbackRequest = interviewApiRequest("feedback", { sessionId: session.id, answerId: question.answerId });
+          const result = await apiRequest(feedbackRequest.path);
+          return [question.id, { answer: result.answer, feedback: result.item }];
+        } catch (error) {
+          return [question.id, { answer: null, feedback: null, error: { code: error.failureCode, message: error.message } }];
+        }
+      }));
+      setSelectedInterview(session);
+      setInterviewFeedback(Object.fromEntries(feedbackEntries));
+      setActiveInterviewQuestion(nextInterviewQuestionIndex(session?.questions || []));
+      return session;
+    } catch (error) {
+      setSelectedInterview(null);
+      setInterviewFeedback({});
+      setInterviewError({ code: error.failureCode || "INTERVIEW_SESSION_NOT_FOUND", message: error.message });
+      return null;
+    } finally {
+      setInterviewLoading(false);
+    }
+  }, []);
+
+  const loadInterviewSessions = useCallback(async (applicationId, { autoSelect = true } = {}) => {
+    if (!applicationId) {
+      setInterviewSessions([]);
+      setSelectedInterview(null);
+      setInterviewFeedback({});
+      return [];
+    }
+    try {
+      setInterviewLoading(true);
+      setInterviewError(null);
+      const request = interviewApiRequest("history", { applicationId });
+      const data = await apiRequest(request.path);
+      const items = data.items || [];
+      setInterviewSessions(items);
+      if (autoSelect && items[0]?.id) await openInterviewSession(items[0].id);
+      if (!items.length) {
+        setSelectedInterview(null);
+        setInterviewFeedback({});
+      }
+      return items;
+    } catch (error) {
+      setInterviewSessions([]);
+      setSelectedInterview(null);
+      setInterviewFeedback({});
+      setInterviewError({ code: error.failureCode || "INTERVIEW_RETRIEVAL_FAILED", message: error.message });
+      return [];
+    } finally {
+      setInterviewLoading(false);
+    }
+  }, [openInterviewSession]);
 
   const openGroundedReport = useCallback(async (reportId) => {
     try {
@@ -2493,9 +2566,14 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setSuggestionSuccess("");
       setResumeVersionHistory([]);
       setSelectedVersionSnapshot(null);
+      setInterviewSessions([]);
+      setSelectedInterview(null);
+      setInterviewFeedback({});
+      setInterviewError(null);
       if (nextApplication?.id) await Promise.all([
         loadMatches(String(nextApplication.id), { autoSelectCompleted: true }),
         loadGroundedReports(String(nextApplication.id)),
+        loadInterviewSessions(String(nextApplication.id)),
       ]);
       setMode("detail");
     } catch (error) {
@@ -2504,7 +2582,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     } finally {
       setLoading(false);
     }
-  }, [activeResumeId, loadGroundedReports, loadMatches, notify]);
+  }, [activeResumeId, loadGroundedReports, loadInterviewSessions, loadMatches, notify]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
   useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
@@ -2536,10 +2614,16 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     setSuggestionSuccess("");
     setResumeVersionHistory([]);
     setSelectedVersionSnapshot(null);
+    setInterviewSessions([]);
+    setSelectedInterview(null);
+    setInterviewFeedback({});
+    setInterviewError(null);
+    setActiveInterviewQuestion(0);
     if (!applicationId) return;
     await Promise.all([
       loadMatches(applicationId, { autoSelectCompleted }),
       loadGroundedReports(applicationId),
+      loadInterviewSessions(applicationId),
     ]);
   };
 
@@ -2720,6 +2804,72 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     }
   };
 
+  const createInterviewSession = async () => {
+    const application = applications.find((item) => item.id === Number(selectedApplicationId));
+    if (!application || !selectedReport?.id || !["COMPLETED", "DEGRADED"].includes(selectedReport.status)) {
+      setInterviewError({ code: "INTERVIEW_REPORT_NOT_READY", message: "请先打开一份已完成或降级可用的 AI 岗位匹配报告。" });
+      return;
+    }
+    setInterviewWorking(true);
+    setInterviewError(null);
+    try {
+      const request = interviewApiRequest("create", { applicationId: application.id, matchReportId: selectedReport.id });
+      const data = await apiRequest(request.path, request.options);
+      const session = data.item || null;
+      setSelectedInterview(session);
+      setInterviewFeedback({});
+      setActiveInterviewQuestion(0);
+      await loadInterviewSessions(String(application.id), { autoSelect: false });
+      notify(session?.status === "DEGRADED" ? "模拟面试已创建，知识检索降级但仍可继续。" : "模拟面试已创建，题目已绑定当前简历版本与岗位报告。");
+    } catch (error) {
+      await loadInterviewSessions(String(application.id), { autoSelect: false });
+      setInterviewError({ code: error.failureCode || "INTERVIEW_GENERATION_FAILED", message: error.message });
+    } finally {
+      setInterviewWorking(false);
+    }
+  };
+
+  const submitInterviewAnswer = async (question, answerText) => {
+    if (!selectedInterview || !question || !answerText.trim()) return;
+    setInterviewWorking(true);
+    setInterviewError(null);
+    try {
+      const request = interviewApiRequest("answer", { sessionId: selectedInterview.id, questionId: question.id, answerText: answerText.trim() });
+      const data = await apiRequest(request.path, request.options);
+      const nextSession = {
+        ...selectedInterview,
+        answeredCount: Number(selectedInterview.answeredCount || 0) + 1,
+        questions: selectedInterview.questions.map((item) => item.id === question.id ? { ...item, answerId: data.item.id } : item),
+      };
+      setSelectedInterview(nextSession);
+      setInterviewFeedback((current) => ({ ...current, [question.id]: { answer: data.item, feedback: data.feedback } }));
+      await loadInterviewSessions(String(selectedInterview.jobApplicationId), { autoSelect: false });
+      notify(data.feedback?.status === "DEGRADED" ? "本题反馈已保存，但知识依据处于降级状态。" : "本题回答与 AI 反馈已保存。");
+    } catch (error) {
+      await openInterviewSession(selectedInterview.id);
+      setInterviewError({ code: error.failureCode || "FEEDBACK_GENERATION_FAILED", message: error.message });
+    } finally {
+      setInterviewWorking(false);
+    }
+  };
+
+  const completeInterviewSession = async () => {
+    if (!selectedInterview) return;
+    setInterviewWorking(true);
+    setInterviewError(null);
+    try {
+      const request = interviewApiRequest("complete", { sessionId: selectedInterview.id });
+      const data = await apiRequest(request.path, request.options);
+      setSelectedInterview(data.item || null);
+      await loadInterviewSessions(String(selectedInterview.jobApplicationId), { autoSelect: false });
+      notify("模拟面试已完成，最终成绩来自后端保存结果。");
+    } catch (error) {
+      setInterviewError({ code: error.failureCode || "INTERVIEW_SESSION_INCOMPLETE", message: error.message });
+    } finally {
+      setInterviewWorking(false);
+    }
+  };
+
   if (mode === "create") {
     return (
       <section className="job-page job-editor-page">
@@ -2806,6 +2956,23 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           onDecision={decideSuggestion}
           onRefresh={() => selectedReport?.id && loadSuggestionRuns(selectedReport.id)}
           onSelectVersion={openResumeVersionSnapshot}
+        />
+        <MockInterviewWorkspace
+          applicationId={selectedApplicationId}
+          report={selectedReport}
+          sessions={interviewSessions}
+          session={selectedInterview}
+          feedbackByQuestion={interviewFeedback}
+          activeQuestionIndex={activeInterviewQuestion}
+          loading={interviewLoading}
+          working={interviewWorking}
+          error={interviewError}
+          onCreate={createInterviewSession}
+          onSelectSession={openInterviewSession}
+          onSelectQuestion={setActiveInterviewQuestion}
+          onSubmitAnswer={submitInterviewAnswer}
+          onComplete={completeInterviewSession}
+          onRefresh={() => selectedApplicationId && loadInterviewSessions(selectedApplicationId)}
         />
       </section>
     );
@@ -2925,6 +3092,139 @@ function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working
 function SuggestionDiff({ before, after }) {
   const parts = buildSuggestionDiff(before, after);
   return <section className="suggestion-diff" aria-label="修改差异预览"><h4>差异预览</h4><p><span className="diff-legend diff-removed">删除</span><span className="diff-legend diff-added">新增</span></p><pre>{parts.map((part, index) => <span className={`diff-${part.type}`} key={`${part.type}-${index}`}>{part.text}</span>)}</pre></section>;
+}
+
+export function MockInterviewWorkspace({
+  applicationId,
+  report,
+  sessions = [],
+  session,
+  feedbackByQuestion = {},
+  activeQuestionIndex = 0,
+  loading = false,
+  working = false,
+  error = null,
+  onCreate,
+  onSelectSession,
+  onSelectQuestion,
+  onSubmitAnswer,
+  onComplete,
+  onRefresh,
+}) {
+  const [answerDraft, setAnswerDraft] = useState("");
+  const [showSources, setShowSources] = useState(false);
+  const questions = session?.questions || [];
+  const currentQuestion = questions[activeQuestionIndex] || questions[0] || null;
+  const currentRecord = currentQuestion ? feedbackByQuestion[currentQuestion.id] : null;
+  const currentFeedback = currentRecord?.feedback || null;
+  const currentAnswer = currentRecord?.answer || null;
+  const firstUnansweredIndex = questions.findIndex((question) => !question.answerId);
+  const allAnswered = questions.length > 0 && questions.every((question) => question.answerId);
+  const allFeedbackReady = allAnswered && questions.every((question) => ["COMPLETED", "DEGRADED"].includes(feedbackByQuestion[question.id]?.feedback?.status));
+  const isCompleted = Boolean(session?.completedAt) || session?.status === "COMPLETED";
+  const safeSources = safeKnowledgeSources([
+    ...(currentQuestion?.sourceRefs || []),
+    ...(currentFeedback?.sourceRefs || []),
+    ...(currentFeedback?.strengths || []).flatMap((item) => item.sourceRefs || []),
+    ...(currentFeedback?.weaknesses || []).flatMap((item) => item.sourceRefs || []),
+    ...(currentFeedback?.missingPoints || []).flatMap((item) => item.sourceRefs || []),
+  ]).filter((source, index, items) => items.findIndex((item) => item.title === source.title && item.summary === source.summary) === index);
+
+  useEffect(() => {
+    setAnswerDraft("");
+    setShowSources(false);
+  }, [session?.id, currentQuestion?.id]);
+
+  const nextQuestion = () => {
+    const nextIndex = questions.findIndex((question, index) => index > activeQuestionIndex && !question.answerId);
+    if (nextIndex >= 0) onSelectQuestion?.(nextIndex);
+  };
+
+  return (
+    <section className="mock-interview-panel" aria-labelledby="mock-interview-title">
+      <div className="job-match-head">
+        <div>
+          <span className="section-kicker">RAG 模拟面试</span>
+          <h3 id="mock-interview-title">围绕岗位报告逐题练习</h3>
+          <p>{applicationId ? "题目绑定当前求职任务的简历版本、JD、匹配缺口与知识检索结果；刷新后可从后端恢复。" : "请先选择一个求职分析任务。"}</p>
+        </div>
+        <button className="black-small" disabled={working || loading || !applicationId || !["COMPLETED", "DEGRADED"].includes(report?.status)} onClick={onCreate}>
+          {working && !session ? <LoaderCircle className="spin" size={16} /> : <MessageSquareText size={16} />}
+          {working && !session ? "正在生成题目" : "开始新的模拟面试"}
+        </button>
+      </div>
+
+      {error && <div className="interview-state-error" role="alert"><div><strong>面试操作未完成</strong><p>{interviewFailureMessage(error.code, error.message)}</p>{error.code && <small>错误代码：{error.code}</small>}</div><button className="white-small" disabled={loading || working} onClick={onRefresh}>从后端刷新</button></div>}
+      {loading && <div className="interview-state-loading" role="status"><strong>正在恢复面试记录</strong><ResultSkeleton lines={4} /></div>}
+
+      {!loading && sessions.length > 0 && <div className="interview-session-history"><strong>当前求职任务的历史面试</strong><div>{sessions.map((item) => <button key={item.id} className={session?.id === item.id ? "active" : ""} onClick={() => onSelectSession?.(item.id)}><span><b>面试 #{item.id}</b><em className={`interview-status status-${String(item.status || "pending").toLowerCase()}`}>{interviewStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {item.answeredCount || 0}/{item.questionCount || 0} 题 · {formatResumeDate(item.createdAt)}</small></button>)}</div></div>}
+
+      {!loading && !session && !sessions.length && <div className="job-empty"><strong>尚未开始岗位模拟面试</strong><p>{["COMPLETED", "DEGRADED"].includes(report?.status) ? "从当前 AI 岗位匹配报告生成第一组可追溯题目。" : "先完成并打开一份 AI 岗位匹配报告，才可生成面试题。"}</p></div>}
+
+      {!loading && session && <div className="interview-session-shell">
+        <header className="interview-session-summary">
+          <div><span className={`interview-status status-${String(session.status || "pending").toLowerCase()}`}>{interviewStatusLabel(session.status)}</span><strong>面试 #{session.id}</strong><small>锁定简历 v{session.resumeVersion} · {session.answeredCount || 0}/{session.questionCount || questions.length} 题</small></div>
+          {session.status === "DEGRADED" && <p role="status">知识检索或反馈依据处于降级状态；已保存的可用题目仍可继续，来源状态会明确标注。</p>}
+          {session.status === "FAILED" && <p role="alert">本次题目生成失败，系统没有把失败结果显示为正常面试。{session.failureCode ? ` 错误代码：${session.failureCode}` : ""}</p>}
+        </header>
+
+        {session.status !== "FAILED" && questions.length > 0 && <div className="interview-workspace">
+          <nav aria-label="面试题目进度">
+            {questions.map((question, index) => {
+              const feedbackStatus = feedbackByQuestion[question.id]?.feedback?.status;
+              const canOpen = isCompleted || question.answerId || firstUnansweredIndex < 0 || index <= firstUnansweredIndex;
+              return <button key={question.id} className={index === activeQuestionIndex ? "active" : ""} disabled={!canOpen} onClick={() => onSelectQuestion?.(index)}><span>{index + 1}</span><div><strong>{interviewCategoryLabel(question.category)}</strong><small>{question.answerId ? feedbackStatus === "FAILED" ? "反馈失败" : "已回答" : "待回答"}</small></div></button>;
+            })}
+          </nav>
+
+          <div className="interview-question-column">
+            <article className="interview-question-detail">
+              <header><span>{interviewCategoryLabel(currentQuestion?.category)}</span><span>{interviewDifficultyLabel(currentQuestion?.difficulty)}</span></header>
+              <h4>{currentQuestion?.question}</h4>
+              <div className="interview-rationale"><strong>为什么问这题</strong><p>{currentQuestion?.rationale}</p><small>来源类型：{interviewCategoryLabel(currentQuestion?.category)}</small></div>
+            </article>
+
+            <div className="interview-answer-area">
+              <label htmlFor={`interview-answer-${currentQuestion?.id}`}>你的回答</label>
+              {currentAnswer ? <p className="saved-interview-answer">{currentAnswer.answerText}</p> : <textarea id={`interview-answer-${currentQuestion?.id}`} value={answerDraft} maxLength={12000} disabled={working || Boolean(currentQuestion?.answerId) || isCompleted} placeholder="结合真实经历或说明你的分析思路；不确定的经历不要编造。" onChange={(event) => setAnswerDraft(event.target.value)} />}
+              {!currentQuestion?.answerId && !isCompleted && <div className="interview-answer-actions"><small>{answerDraft.length}/12000</small><button className="black-small" disabled={working || !answerDraft.trim()} onClick={() => onSubmitAnswer?.(currentQuestion, answerDraft)}>{working ? <><LoaderCircle className="spin" size={16} />AI 正在评估</> : <><Send size={16} />提交本题回答</>}</button></div>}
+              {currentQuestion?.answerId && !currentRecord && <p className="interview-inline-note">回答已保存，正在从后端恢复反馈。</p>}
+            </div>
+          </div>
+
+          <aside className="interview-feedback-column" aria-live="polite">
+            {!currentFeedback && !currentQuestion?.answerId && <div className="interview-feedback-empty"><Bot size={20} /><strong>提交后查看 AI 反馈</strong><p>评分依据包括问题、你的回答、预期要点与可用 RAG 证据。</p></div>}
+            {currentRecord?.error && <div className="interview-feedback-failed" role="alert"><strong>反馈读取失败</strong><p>{interviewFailureMessage(currentRecord.error.code, currentRecord.error.message)}</p></div>}
+            {currentFeedback?.status === "FAILED" && <div className="interview-feedback-failed" role="alert"><strong>本题反馈未通过校验</strong><p>{interviewFailureMessage(currentFeedback.failureCode, currentFeedback.failureMessage)}</p><small>失败内容不会作为建议回答展示。</small></div>}
+            {currentFeedback && ["COMPLETED", "DEGRADED"].includes(currentFeedback.status) && <div className="interview-feedback-content">
+              <header><div><strong>{currentFeedback.score}</strong><span>本题得分</span></div><span className={`interview-status status-${String(currentFeedback.status).toLowerCase()}`}>{interviewStatusLabel(currentFeedback.status)}</span></header>
+              <FeedbackList title="表达优势（AI 反馈）" items={currentFeedback.strengths} />
+              <FeedbackList title="可改进处（AI 反馈）" items={currentFeedback.weaknesses} />
+              <FeedbackList title="遗漏要点（AI 反馈）" items={currentFeedback.missingPoints} />
+              <section className="suggested-answer"><div><strong>建议回答</strong><span>不会写回简历</span></div><p>{currentFeedback.improvedAnswer}</p><small>这是基于锁定简历版本与本题回答整理的表达建议，不代表新增或已验证的用户经历。</small></section>
+              {currentFeedback.followUpQuestion && <section className="follow-up-question"><strong>可继续追问</strong><p>{currentFeedback.followUpQuestion}</p></section>}
+              {safeSources.length > 0 && <section className="interview-source-viewer"><button className="white-small" onClick={() => setShowSources((current) => !current)}>{showSources ? "收起知识来源" : `查看知识来源（${safeSources.length}）`}</button>{showSources && <div>{safeSources.map((source, index) => <article key={`${source.title}-${index}`}><header><strong>{source.title}</strong><span>{source.sourceType} · {source.availability === "AVAILABLE" ? "可用" : "当前不可用"}</span></header><p>{source.summary || "该来源未提供可展示摘要。"}</p></article>)}</div>}</section>}
+              {!isCompleted && !allAnswered && <button className="black-small" onClick={nextQuestion}>下一题</button>}
+            </div>}
+          </aside>
+        </div>}
+
+        {!isCompleted && allFeedbackReady && <div className="interview-complete-action"><div><strong>所有题目均已取得有效反馈</strong><p>完成后由后端汇总并保存最终平均分。</p></div><button className="black-small" disabled={working} onClick={onComplete}>{working ? "正在完成" : "完成本次面试"}</button></div>}
+        {isCompleted && <InterviewCompletionSummary session={session} questions={questions} feedbackByQuestion={feedbackByQuestion} onSelectQuestion={onSelectQuestion} />}
+      </div>}
+    </section>
+  );
+}
+
+function FeedbackList({ title, items = [] }) {
+  const values = feedbackTextItems(items);
+  return <section className="interview-feedback-list"><strong>{title}</strong>{values.length ? <ul>{values.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p>本题暂无该项反馈。</p>}</section>;
+}
+
+function InterviewCompletionSummary({ session, questions, feedbackByQuestion, onSelectQuestion }) {
+  const strengths = feedbackTextItems(questions.flatMap((question) => feedbackByQuestion[question.id]?.feedback?.strengths || [])).slice(0, 4);
+  const weaknesses = feedbackTextItems(questions.flatMap((question) => feedbackByQuestion[question.id]?.feedback?.weaknesses || [])).slice(0, 4);
+  return <section className="interview-completion" aria-labelledby="interview-completion-title"><div className="interview-completion-score"><span>后端最终平均分</span><strong>{Number.isFinite(Number(session.averageScore)) ? session.averageScore : "--"}</strong><small id="interview-completion-title">本次模拟面试已保存，可从历史记录恢复回看。</small></div><div className="interview-completion-summary"><FeedbackList title="本次优势摘要（AI 反馈）" items={strengths} /><FeedbackList title="本次改进摘要（AI 反馈）" items={weaknesses} /></div><div className="interview-score-list">{questions.map((question, index) => <button key={question.id} onClick={() => onSelectQuestion?.(index)}><span>第 {index + 1} 题 · {interviewCategoryLabel(question.category)}</span><strong>{feedbackByQuestion[question.id]?.feedback?.score ?? "--"} 分</strong></button>)}</div></section>;
 }
 
 function ResumeVersionHistoryPanel({ versions, loading, error, selectedVersion, onSelect }) {
@@ -3099,6 +3399,10 @@ function ProviderSettings({ notify }) {
       </div>
     </section>
   );
+}
+
+function InterviewStageEntry({ go }) {
+  return <section className="interview-stage-entry"><MessageSquareText size={28} /><div><span className="section-kicker">RAG 模拟面试</span><h2>从真实岗位匹配报告开始</h2><p>选择岗位 JD 与已锁定的求职分析任务，在可引用匹配报告下创建、恢复和完成模拟面试。题目不会脱离简历版本与岗位依据单独生成。</p></div><button className="black-small" onClick={() => go("jobs")}><BriefcaseBusiness size={16} />进入岗位 JD</button></section>;
 }
 
 function InterviewPractice({ notify, go, resumeId }) {
