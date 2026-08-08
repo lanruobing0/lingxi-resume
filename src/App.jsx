@@ -44,6 +44,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCountUp } from "./hooks/useCountUp";
 import { useInViewOnce } from "./hooks/useInViewOnce";
 import { selectHistoryMatch, selectLatestFailedMatch } from "./matchState";
+import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, suggestionFailureMessage, suggestionStatusLabel, versionSourceLabel } from "./suggestionUiState";
 import { usePresence } from "./hooks/usePresence";
 
 const appNav = [
@@ -2296,6 +2297,16 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [selectedReport, setSelectedReport] = useState(null);
   const [reportFailure, setReportFailure] = useState(null);
   const [reportWorking, setReportWorking] = useState(false);
+  const [suggestionRuns, setSuggestionRuns] = useState([]);
+  const [selectedSuggestionRun, setSelectedSuggestionRun] = useState(null);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [suggestionWorking, setSuggestionWorking] = useState(false);
+  const [suggestionError, setSuggestionError] = useState(null);
+  const [suggestionSuccess, setSuggestionSuccess] = useState("");
+  const [resumeVersionHistory, setResumeVersionHistory] = useState([]);
+  const [selectedVersionSnapshot, setSelectedVersionSnapshot] = useState(null);
+  const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
+  const [versionHistoryError, setVersionHistoryError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
@@ -2313,23 +2324,101 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     }
   }, [notify]);
 
+  const loadResumeVersionHistory = useCallback(async (resumeId) => {
+    if (!resumeId) {
+      setResumeVersionHistory([]);
+      setSelectedVersionSnapshot(null);
+      return [];
+    }
+    try {
+      setVersionHistoryLoading(true);
+      setVersionHistoryError(null);
+      const data = await apiRequest(`/api/resumes/${resumeId}/versions`);
+      const items = data.items || [];
+      setResumeVersionHistory(items);
+      return items;
+    } catch (error) {
+      setResumeVersionHistory([]);
+      setVersionHistoryError(error.message);
+      return [];
+    } finally {
+      setVersionHistoryLoading(false);
+    }
+  }, []);
+
+  const openResumeVersionSnapshot = useCallback(async (resumeId, versionId) => {
+    if (!resumeId || !versionId) return;
+    try {
+      setVersionHistoryError(null);
+      const data = await apiRequest(`/api/resumes/${resumeId}/versions/${versionId}`);
+      setSelectedVersionSnapshot(data.item || null);
+    } catch (error) {
+      setSelectedVersionSnapshot(null);
+      setVersionHistoryError(`读取版本内容失败：${error.message}`);
+    }
+  }, []);
+
+  const openSuggestionRun = useCallback(async (runId) => {
+    if (!runId) return;
+    try {
+      setSuggestionError(null);
+      const data = await apiRequest(`/api/suggestion-runs/${runId}`);
+      const item = data.item || null;
+      setSelectedSuggestionRun(item);
+      if (item?.resumeId) await loadResumeVersionHistory(item.resumeId);
+    } catch (error) {
+      setSelectedSuggestionRun(null);
+      setSuggestionError({ code: error.failureCode || "SUGGESTION_RUN_NOT_FOUND", message: error.message });
+    }
+  }, [loadResumeVersionHistory]);
+
+  const loadSuggestionRuns = useCallback(async (reportId, { autoSelect = true } = {}) => {
+    if (!reportId) {
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
+      return [];
+    }
+    try {
+      setSuggestionLoading(true);
+      setSuggestionError(null);
+      const data = await apiRequest(`/api/match-reports/${reportId}/resume-suggestions`);
+      const items = data.items || [];
+      setSuggestionRuns(items);
+      if (autoSelect && items[0]?.id) await openSuggestionRun(items[0].id);
+      if (!items.length) setSelectedSuggestionRun(null);
+      return items;
+    } catch (error) {
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
+      setSuggestionError({ code: error.failureCode || "SUGGESTION_RETRIEVAL_FAILED", message: error.message });
+      return [];
+    } finally {
+      setSuggestionLoading(false);
+    }
+  }, [openSuggestionRun]);
+
   const openGroundedReport = useCallback(async (reportId) => {
     try {
       setReportFailure(null);
       const data = await apiRequest(`/api/match-reports/${reportId}`);
       setSelectedReport(data.item || null);
+      await loadSuggestionRuns(reportId);
     } catch (error) {
       setSelectedReport(null);
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
       const code = error.failureCode || "REPORT_RETRIEVAL_FAILED";
       setReportFailure({ code, message: error.message });
       notify(`读取 AI 岗位匹配报告失败: ${reportFailureMessage(code)}`);
     }
-  }, [notify]);
+  }, [loadSuggestionRuns, notify]);
 
   const loadGroundedReports = useCallback(async (applicationId, { autoSelect = true } = {}) => {
     if (!applicationId) {
       setReports([]);
       setSelectedReport(null);
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
       return [];
     }
     try {
@@ -2341,6 +2430,8 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     } catch (error) {
       setReports([]);
       setSelectedReport(null);
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
       const code = error.failureCode || "REPORT_RETRIEVAL_FAILED";
       setReportFailure({ code, message: error.message });
       notify(`读取 AI 岗位匹配报告历史失败: ${reportFailureMessage(code)}`);
@@ -2396,6 +2487,12 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setReports([]);
       setSelectedReport(null);
       setReportFailure(null);
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
+      setSuggestionError(null);
+      setSuggestionSuccess("");
+      setResumeVersionHistory([]);
+      setSelectedVersionSnapshot(null);
       if (nextApplication?.id) await Promise.all([
         loadMatches(String(nextApplication.id), { autoSelectCompleted: true }),
         loadGroundedReports(String(nextApplication.id)),
@@ -2433,6 +2530,12 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     setSelectedReport(null);
     setReportFailure(null);
     setReports([]);
+    setSuggestionRuns([]);
+    setSelectedSuggestionRun(null);
+    setSuggestionError(null);
+    setSuggestionSuccess("");
+    setResumeVersionHistory([]);
+    setSelectedVersionSnapshot(null);
     if (!applicationId) return;
     await Promise.all([
       loadMatches(applicationId, { autoSelectCompleted }),
@@ -2541,6 +2644,9 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
         body: JSON.stringify({ matchId: selectedMatch.id, searchMode: "HYBRID", useReranker: false }),
       });
       setSelectedReport(data.item || null);
+      setSuggestionRuns([]);
+      setSelectedSuggestionRun(null);
+      setSuggestionSuccess("");
       await loadGroundedReports(String(application.id), { autoSelect: false });
       notify("AI 岗位匹配报告已生成并保存为新版本。");
     } catch (error) {
@@ -2550,6 +2656,67 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       notify(`AI 岗位匹配报告生成失败: ${reportFailureMessage(failure.code)}`);
     } finally {
       setReportWorking(false);
+    }
+  };
+
+  const createResumeSuggestions = async () => {
+    if (!selectedReport?.id || !["COMPLETED", "DEGRADED"].includes(selectedReport.status)) {
+      notify("请先打开一份已完成或已降级的 AI 岗位匹配报告。");
+      return;
+    }
+    setSuggestionWorking(true);
+    setSuggestionError(null);
+    setSuggestionSuccess("");
+    try {
+      const data = await apiRequest(`/api/match-reports/${selectedReport.id}/resume-suggestions`, { method: "POST" });
+      const run = data.item || null;
+      if (run) {
+        setSelectedSuggestionRun(run);
+        await loadResumeVersionHistory(run.resumeId);
+      }
+      await loadSuggestionRuns(selectedReport.id, { autoSelect: false });
+      if (run?.id) await openSuggestionRun(run.id);
+      notify("简历优化建议已生成，请逐条查看差异后决定是否接受。");
+    } catch (error) {
+      const code = error.failureCode || "SUGGESTION_INVALID_OUTPUT";
+      setSuggestionError({ code, message: error.message });
+      notify(`生成简历优化建议失败：${suggestionFailureMessage(code)}`);
+    } finally {
+      setSuggestionWorking(false);
+    }
+  };
+
+  const decideSuggestion = async (suggestion, action) => {
+    if (!selectedSuggestionRun || !suggestion) return;
+    const request = suggestionDecisionRequest(suggestion, action, selectedSuggestionRun.baseResumeVersion);
+    if (!request) return;
+    setSuggestionWorking(true);
+    setSuggestionError(null);
+    setSuggestionSuccess("");
+    try {
+      const data = await apiRequest(request.path, {
+        method: "POST",
+        ...(request.body ? { body: JSON.stringify(request.body) } : {}),
+      });
+      if (action === "accept") {
+        const createdVersion = data.resumeVersion;
+        setSuggestionSuccess(`已生成新简历版本 v${createdVersion?.resumeVersion || createdVersion?.version || Number(selectedSuggestionRun.baseResumeVersion) + 1}。同一轮其余待处理建议已失效。`);
+        const refreshedVersions = await loadResumeVersionHistory(selectedSuggestionRun.resumeId);
+        if (String(selectedResumeId) === String(selectedSuggestionRun.resumeId)) {
+          setResumeVersions(refreshedVersions);
+          setSelectedResumeVersionId(String(createdVersion?.id || refreshedVersions.find((item) => Number(item.resumeVersion || item.version) === Number(createdVersion?.resumeVersion || createdVersion?.version))?.id || ""));
+        }
+      } else {
+        setSuggestionSuccess("已拒绝该建议，简历版本未发生变化。");
+      }
+      await loadSuggestionRuns(selectedReport?.id, { autoSelect: false });
+      await openSuggestionRun(selectedSuggestionRun.id);
+    } catch (error) {
+      const code = error.failureCode || "SUGGESTION_ACTION_FAILED";
+      setSuggestionError({ code, message: error.message });
+      notify(`${action === "accept" ? "接受" : "拒绝"}建议失败：${suggestionFailureMessage(code)}`);
+    } finally {
+      setSuggestionWorking(false);
     }
   };
 
@@ -2622,6 +2789,24 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           {!reportWorking && !selectedReport && !reportFailure && !reports.length && <div className="job-empty"><strong>尚未生成 AI 岗位匹配报告</strong><p>选择明确的求职分析任务与基础匹配报告后，再生成基于本地可验证引用的报告。</p></div>}
           {reports.length > 0 && <GroundedReportHistory reports={reports} selectedReportId={selectedReport?.id} onSelect={openGroundedReport} />}
         </section>
+        <ResumeSuggestionWorkspace
+          report={selectedReport}
+          runs={suggestionRuns}
+          selectedRun={selectedSuggestionRun}
+          loading={suggestionLoading}
+          working={suggestionWorking}
+          error={suggestionError}
+          success={suggestionSuccess}
+          versions={resumeVersionHistory}
+          versionLoading={versionHistoryLoading}
+          versionError={versionHistoryError}
+          selectedVersion={selectedVersionSnapshot}
+          onGenerate={createResumeSuggestions}
+          onSelectRun={openSuggestionRun}
+          onDecision={decideSuggestion}
+          onRefresh={() => selectedReport?.id && loadSuggestionRuns(selectedReport.id)}
+          onSelectVersion={openResumeVersionSnapshot}
+        />
       </section>
     );
   }
@@ -2677,6 +2862,76 @@ function formatEvidenceCoverage(coverage) {
   if (!coverage || !Number.isFinite(Number(coverage.ratio))) return "--";
   return `${Math.round(Number(coverage.ratio) * 100)}%`;
 }
+
+function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, onGenerate, onSelectRun, onDecision, onRefresh, onSelectVersion }) {
+  const [diffSuggestionId, setDiffSuggestionId] = useState(null);
+  const canGenerate = ["COMPLETED", "DEGRADED"].includes(report?.status);
+
+  useEffect(() => { setDiffSuggestionId(null); }, [selectedRun?.id]);
+
+  return (
+    <section className="resume-suggestion-panel" aria-labelledby="resume-suggestion-title">
+      <div className="job-match-head">
+        <div>
+          <span className="section-kicker">简历优化建议</span>
+          <h3 id="resume-suggestion-title">逐条确认，不会自动改写简历</h3>
+          <p>{canGenerate ? `建议绑定报告 v${report.reportVersion} 与简历 v${report.resumeVersion}。接受前请核对每一处差异。` : "先打开一份已完成或已降级的 AI 岗位匹配报告，才能生成建议。"}</p>
+        </div>
+        <button className="black-small" disabled={working || !canGenerate} onClick={onGenerate}>
+          {working ? <><LoaderCircle className="spin" size={16} />正在处理</> : <><Sparkles size={16} />生成简历优化建议</>}
+        </button>
+      </div>
+
+      {success && <div className="suggestion-success" role="status">{success}</div>}
+      {error && <div className="suggestion-error" role="alert"><div><strong>建议操作未完成</strong><p>{suggestionFailureMessage(error.code)}</p><small>错误代码：{error.code}</small></div><button className="white-small" onClick={onRefresh} disabled={loading || working}>刷新建议</button></div>}
+      {loading && <div className="suggestion-loading" role="status"><strong>正在读取建议记录</strong><ResultSkeleton lines={4} /></div>}
+
+      {!loading && canGenerate && !error && !runs.length && <div className="job-empty"><strong>尚未生成简历优化建议</strong><p>建议会以当前匹配报告和锁定简历版本为依据生成；不会自动应用。</p></div>}
+
+      {!loading && runs.length > 0 && <div className="suggestion-run-history"><strong>Suggestion Run 历史</strong><div>{runs.map((run) => <button key={run.id} className={selectedRun?.id === run.id ? "active" : ""} onClick={() => onSelectRun(run.id)}><span><b>运行 #{run.id}</b><em className={`suggestion-status suggestion-run-${String(run.status || "").toLowerCase()}`}>{run.status === "COMPLETED" ? "已完成" : run.status === "FAILED" ? "生成失败" : "处理中"}</em></span><small>简历 v{run.baseResumeVersion} · {formatResumeDate(run.createdAt)} · {run.suggestions?.length || 0} 条建议</small></button>)}</div></div>}
+
+      {!loading && selectedRun?.status === "PENDING" && <div className="suggestion-loading" role="status"><strong>建议处理中</strong><p>请勿重复提交，完成后可从本报告的历史结果重新打开。</p><ResultSkeleton lines={3} /></div>}
+      {!loading && selectedRun?.status === "FAILED" && <div className="suggestion-error" role="alert"><div><strong>本次建议生成失败</strong><p>{suggestionFailureMessage(selectedRun.failureCode)}</p><small>错误代码：{selectedRun.failureCode || "SUGGESTION_INVALID_OUTPUT"}</small></div></div>}
+
+      {!loading && selectedRun?.status === "COMPLETED" && <div className="suggestion-content">
+        <div className="suggestion-run-summary"><span>本轮绑定简历版本 <b>v{selectedRun.baseResumeVersion}</b></span><span>生成于 {formatResumeDate(selectedRun.completedAt || selectedRun.createdAt)}</span></div>
+        {!selectedRun.suggestions?.length && <div className="job-empty"><strong>本轮未返回可展示的建议</strong><p>系统没有将缺少安全校验的结果当作可应用修改。</p></div>}
+        <div className="suggestion-list">{(selectedRun.suggestions || []).map((suggestion) => {
+          const actions = suggestionActions(suggestion);
+          const displayStatus = actions.factRequired ? "FACT_REQUIRED" : suggestion.status;
+          const showDiff = diffSuggestionId === suggestion.id;
+          return <article key={suggestion.id} className="suggestion-item">
+            <header><div><strong>{suggestion.sectionType}</strong><small>{suggestion.suggestionType}</small></div><em className={`suggestion-status suggestion-${String(displayStatus || "").toLowerCase()}`}>{suggestionStatusLabel(displayStatus)}</em></header>
+            <p className="suggestion-rationale">{suggestion.rationale}</p>
+            {actions.factRequired ? <div className="fact-required-note"><strong>需要补充真实信息</strong><p>该建议需要你补充真实信息后才能应用。</p></div> : <>
+              <dl className="suggestion-before-after"><div><dt>修改前</dt><dd>{suggestion.before || "—"}</dd></div><div><dt>修改后</dt><dd>{suggestion.after || "—"}</dd></div></dl>
+              {actions.invalidated && <p className="suggestion-invalidated">该建议已失效：同一轮中已有建议被接受并生成新简历版本，原基础版本不再可安全应用。</p>}
+              <div className="suggestion-actions">
+                {actions.canPreview && <button className="white-small" onClick={() => setDiffSuggestionId(showDiff ? null : suggestion.id)}>{showDiff ? "收起差异" : "查看差异"}</button>}
+                {actions.canAccept && <button className="black-small" disabled={working} onClick={() => onDecision(suggestion, "accept")}>{working ? "处理中" : "接受并生成新版本"}</button>}
+                {actions.canReject && <button className="link-button" disabled={working} onClick={() => onDecision(suggestion, "reject")}>拒绝</button>}
+              </div>
+              {showDiff && <SuggestionDiff before={suggestion.before} after={suggestion.after} />}
+            </>}
+          </article>;
+        })}</div>
+      </div>}
+
+      <ResumeVersionHistoryPanel versions={versions} loading={versionLoading} error={versionError} selectedVersion={selectedVersion} onSelect={onSelectVersion} />
+    </section>
+  );
+}
+
+function SuggestionDiff({ before, after }) {
+  const parts = buildSuggestionDiff(before, after);
+  return <section className="suggestion-diff" aria-label="修改差异预览"><h4>差异预览</h4><p><span className="diff-legend diff-removed">删除</span><span className="diff-legend diff-added">新增</span></p><pre>{parts.map((part, index) => <span className={`diff-${part.type}`} key={`${part.type}-${index}`}>{part.text}</span>)}</pre></section>;
+}
+
+function ResumeVersionHistoryPanel({ versions, loading, error, selectedVersion, onSelect }) {
+  return <section className="resume-version-history" aria-labelledby="resume-version-history-title"><div><h4 id="resume-version-history-title">简历版本历史（只读）</h4><p>查看由接受建议生成的版本及原始快照；此处不能回写或覆盖内容。</p></div>{loading && <ResultSkeleton lines={2} />}{error && <p className="job-error">{error}</p>}{!loading && !error && !versions.length && <p className="grounded-empty-claims">暂无可读取的版本历史。</p>}{!loading && versions.length > 0 && <div className="resume-version-list">{versions.map((version) => <button key={version.id} className={selectedVersion?.id === version.id ? "active" : ""} onClick={() => onSelect(version.resumeId, version.id)}><span><b>v{version.resumeVersion || version.version}</b><small>{formatResumeDate(version.createdAt)}</small></span><em>{versionSourceLabel(version)}</em></button>)}</div>}{selectedVersion?.snapshot && <div className="resume-version-snapshot"><div><strong>v{selectedVersion.resumeVersion || selectedVersion.version} 内容快照</strong><small>{selectedVersion.summary || "历史版本"}</small></div><pre>{JSON.stringify(selectedVersion.snapshot, null, 2)}</pre></div>}</section>;
+}
+
+export { ResumeSuggestionWorkspace, SuggestionDiff, ResumeVersionHistoryPanel };
 
 function GroundedMatchReport({ report, match }) {
   const [citation, setCitation] = useState(null);
