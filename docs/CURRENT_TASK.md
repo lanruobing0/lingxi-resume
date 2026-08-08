@@ -1,3 +1,3 @@
 # 当前任务
 
-阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁；Stage 7 尚未开始。
+Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。
