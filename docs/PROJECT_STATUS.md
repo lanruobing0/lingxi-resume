@@ -1,6 +1,6 @@
 # 项目状态
 
-最后核实：2026-08-09（Stage 8 已正式完成；Stage 9 尚未开始）。
+最后核实：2026-08-09（Stage 9A Bounded Agentic RAG backend 已通过；Stage 9B UI 尚未开始）。
 
 ## 当前技术栈与数据层
 
@@ -22,7 +22,8 @@
 - 阶段 5B ADMIN 知识检索闭环：稳定查询规范化、关键词与当前有效向量召回、服务端一致过滤、确定性 RRF、可选且可回退的 Reranker、可持久化的 RetrievalRun、最小黄金集评测入口和真实 Qdrant smoke。仅供管理员检索实验室使用，不生成 RAG 回答。
 - Stage 7 已正式完成：7A 的锁定 MatchReport 后端闭环、Evidence-backed Rewrite、受限 JSON Patch、乐观并发校验和策略 A 失效，已由 7B 的 Resume Suggestion UI 闭环呈现。UI 支持 SuggestionRun 历史、逐条 before/after diff、Accept/Reject、FACT_REQUIRED 限制、INVALIDATED 原因和只读 ResumeVersion 历史；7A 的 ownership、版本冲突、patch/evidence validation 安全边界未削弱。Claude 独立验收结论为 A. 通过，无高/中问题，全部发布门禁 exit 0；L1-L4 作为低优先级后续项保留。
 - Stage 8A RAG Mock Interview backend 已通过 Claude 最终独立验收：JobApplication/MatchReport/锁定 ResumeVersion 输入绑定、四类可追溯问题、Stage 5B RetrievalRun 复用、逐题回答、grounded feedback、失败/降级审计、跨用户 404，以及 question/expectedPoints/improvedAnswer 用户事实 grounding 均已完成。
-- Stage 8B RAG Mock Interview UI 已通过 Claude 最终独立验收，结论 A：从岗位报告创建/恢复 session、四类逐题展示、answer/feedback、建议回答事实边界提示、安全知识来源、FAILED/DEGRADED、后端完成分数与当前 JobApplication 历史回看均已接通；未修改 Stage 8A grounding/security。Stage 8 已正式完成；Stage 9 尚未开始。
+- Stage 8B RAG Mock Interview UI 已通过 Claude 最终独立验收，结论 A：从岗位报告创建/恢复 session、四类逐题展示、answer/feedback、建议回答事实边界提示、安全知识来源、FAILED/DEGRADED、后端完成分数与当前 JobApplication 历史回看均已接通；未修改 Stage 8A grounding/security。Stage 8 已正式完成。
+- Stage 9A Bounded Agentic RAG backend 已通过 Claude 第二次独立验收，结论 A，无高/中问题。`VERIFIED_RESUME_FACT` 已改为 unconditional claim-support，实际引用的锁定 Resume quote 必须实质支持 claim，真实但无关的 RESUME source laundering 已关闭；原有 allowlist、bounded loop、Stage 5B RetrievalRun、Prompt Injection、其他 finalResult 类型及 Stage 5–8 边界保持不变。全部发布门禁和真实 Qdrant 双 smoke exit 0；Stage 9B UI 尚未开始。
 
 ## RAG 升级阶段
 
@@ -40,6 +41,7 @@
 | 7B | Resume Suggestion UI | 已通过 Claude 独立验收；Stage 7 正式完成。 |
 | 8A | RAG Mock Interview Backend | 已通过 Claude 最终独立验收。 |
 | 8B | Mock Interview UI | 已通过 Claude 最终独立验收；Stage 8 正式完成。 |
+| 9A | Bounded Agentic RAG Backend | 已通过 Claude 第二次独立验收，结论 A；无高/中问题，全部门禁及真实 Qdrant 双 smoke exit 0。 |
 
 阶段 5B 只新增 ADMIN 知识检索，不提供用户侧检索、RAG Prompt、生成式回答、引用式回答、简历修改或 Agent 工作流。
 
@@ -54,6 +56,7 @@
 - 知识库管理（仅 ADMIN）：`/api/admin/knowledge-documents`、`/api/admin/knowledge-chunks/*`
 - 知识检索（仅 ADMIN）：`/api/admin/knowledge-retrieval/{status,search,runs}`
 - 可引用报告：`POST /api/job-applications/:id/reports`、`GET /api/match-reports/:id`
+- Bounded Agentic RAG：`POST /api/job-applications/:id/agent-runs`、`GET /api/agent-runs/:id`、`GET /api/agent-runs/:id/steps`
 
 ## 已有测试与验证命令
 
@@ -67,10 +70,13 @@
 - `tests/grounded-match-report.integration.mjs`：报告输入绑定、生产检索、严格 JSON、引用攻击、降级/失败、权限、重启、撤回与隐私。
 - `tests/resume-suggestions.integration.mjs`：SuggestionRun 绑定、所有权、最小 Provider 输入、事实差异阻断、Patch allowlist、ACCEPT/REJECT、冲突、失效、失败持久化与 ResumeVersion 语义。
 - `tests/rag-mock-interview.integration.mjs`：Session/ResumeVersion 绑定、四类问题、RetrievalRun/sourceRefs、回答、grounded feedback、Provider 失败、retrieval 降级、跨用户 404、四类 question/expectedPoints 伪造归因、improvedAnswer 虚构事实、当前 UserAnswer 合法支持与跨 session 隔离。
+- `tests/bounded-agentic-rag.integration.mjs`：AgentRun/AgentStep 固定输入、tool allowlist、maxSteps、Stage 5B retrieval reuse/sourceRefs、Prompt Injection、未知 action、循环检索、伪造 sourceId、外部知识冒充经历、Provider/检索失败、ownership、隐私与逐步审计。
 - `corepack pnpm test`、`corepack pnpm test:retrieval-eval`、`corepack pnpm test:qdrant`、`corepack pnpm test:qdrant-retrieval`、`node --check backend/server.js`、`corepack pnpm build`。
 
 ## 尚未实现与技术债务
 
+- Stage 9 UI、异步队列/worker、恢复中断 run、多 Agent 与任何 autonomous write 均未实现；需后续单独批准，Stage 10 前不生产化。
+- Stage 9A 低优先级后续：个别合法中文句式可能因 bigram 阈值被保守误拒；“百万级”等中文数字目前由技术实体/ngram coverage 兜底，尚未进入独立数值解析。
 - Stage 8A 低优先级后续：`strengths/weaknesses/missingPoints` 文本 user-fact grounding 加固、retrieval `FAILED -> DEGRADED`、`questionCount=3` KNOWLEDGE 覆盖、feedback retry。
 - Stage 8B 低优先级后续：duplicate code 映射 `INTERVIEW_ANSWER_DUPLICATE` / `EXISTS` 不一致；submit 成功后 refresh 失败可能显示 retrieval failed；缺少真实点击交互测试；completed 隐藏提交按钮缺显式断言；history 切换缺独立测试。
 - 阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签；本轮未执行合并或打标签。

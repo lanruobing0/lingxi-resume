@@ -26,6 +26,20 @@ import {
   normalizeAnswerFeedback,
   normalizeInterviewQuestions,
 } from "./mock-interview-service.js";
+import {
+  agentAllowedActions,
+  agentFailure,
+  agentFinalPlanSchema,
+  agentGenerationConfigHash,
+  agentPlannerSchema,
+  agentPromptVersion,
+  agentServerMaxSteps,
+  buildAgentFinalPlanPrompt,
+  buildAgentPlannerPrompt,
+  normalizeAgentFinalPlan,
+  normalizePlannerDecision,
+  safeEvidenceSummary,
+} from "./agentic-rag-service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
@@ -211,6 +225,8 @@ const seedData = {
   knowledgeRetrievalRuns: [],
   interviewSessions: [],
   interviewSessionQuestions: [],
+  agentRuns: [],
+  agentSteps: [],
   mockInterviews: [],
   interviewAnswers: [],
   answerFeedbacks: [],
@@ -701,6 +717,8 @@ async function readStore() {
     knowledgeRetrievalRuns: store.knowledgeRetrievalRuns || [],
     interviewSessions: store.interviewSessions || [],
     interviewSessionQuestions: store.interviewSessionQuestions || [],
+    agentRuns: store.agentRuns || [],
+    agentSteps: store.agentSteps || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     answerFeedbacks: store.answerFeedbacks || [],
@@ -2356,6 +2374,13 @@ function deleteInterviewSessions(store, predicate) {
   store.answerFeedbacks = store.answerFeedbacks.filter((item) => !sessionIds.has(item.sessionId) && !answerIds.has(item.answerId));
 }
 
+function deleteAgentRuns(store, predicate) {
+  const runIds = new Set(store.agentRuns.filter(predicate).map((item) => item.id));
+  if (!runIds.size) return;
+  store.agentRuns = store.agentRuns.filter((item) => !runIds.has(item.id));
+  store.agentSteps = store.agentSteps.filter((item) => !runIds.has(item.agentRunId));
+}
+
 function resolveInterviewContext(store, user, application, report) {
   if (!report || report.userId !== user.id) throw interviewFailure(404, "INTERVIEW_REPORT_NOT_FOUND", "岗位匹配报告不存在");
   if (report.jobApplicationId !== application.id) throw interviewFailure(409, "INTERVIEW_INPUT_INVALID", "岗位匹配报告不属于该求职分析任务");
@@ -2457,6 +2482,307 @@ async function executeInterviewSession(store, user, application, report, options
     store.interviewSessionQuestions = store.interviewSessionQuestions.filter((item) => item.sessionId !== session.id);
     await writeStore(store);
     throw interviewFailure(error.status || 502, session.failureCode, session.failureMessage);
+  }
+}
+
+function publicAgentSourceRef(store, source) {
+  return {
+    ...source,
+    availability: source.sourceType === "KNOWLEDGE" ? (sourceAvailability(store, source) ? "AVAILABLE" : "UNAVAILABLE") : "AVAILABLE",
+  };
+}
+
+function publicAgentStep(store, step) {
+  return { ...step, sourceRefs: (step.sourceRefs || []).map((source) => publicAgentSourceRef(store, source)) };
+}
+
+function publicAgentRun(store, run, { includeSteps = false } = {}) {
+  const item = {
+    ...run,
+    finalResult: run.finalResult ? Object.fromEntries(Object.entries(run.finalResult).map(([category, rows]) => [
+      category,
+      rows.map((row) => ({ ...row, sourceRefs: row.sourceRefs.map((source) => publicAgentSourceRef(store, source)) })),
+    ])) : null,
+  };
+  if (includeSteps) item.steps = store.agentSteps.filter((step) => step.agentRunId === run.id && step.userId === run.userId).sort((left, right) => left.stepIndex - right.stepIndex).map((step) => publicAgentStep(store, step));
+  return item;
+}
+
+function flattenAgentText(value, output = []) {
+  if (typeof value === "string") {
+    const normalized = value.replace(/[\r\n\t ]+/g, " ").trim();
+    if (normalized) output.push(normalized);
+  } else if (Array.isArray(value)) {
+    value.forEach((item) => flattenAgentText(item, output));
+  } else if (value && typeof value === "object") {
+    Object.values(value).forEach((item) => flattenAgentText(item, output));
+  }
+  return [...new Set(output)].slice(0, 80);
+}
+
+function appendAgentSource(sources, sourceType, refId, quote, metadata = {}) {
+  const normalized = String(quote || "").replace(/[\r\n\t ]+/g, " ").trim();
+  if (!normalized) return null;
+  const duplicate = sources.find((source) => source.sourceType === sourceType
+    && source.refId === String(refId)
+    && source.quote === normalized.slice(0, 1200)
+    && (sourceType !== "KNOWLEDGE" || source.retrievalRunId === metadata.retrievalRunId));
+  if (duplicate) return duplicate;
+  const source = {
+    sourceId: `${sourceType}-${sources.filter((item) => item.sourceType === sourceType).length + 1}`,
+    sourceType,
+    refId: String(refId),
+    quote: normalized.slice(0, 1200),
+    ...metadata,
+  };
+  sources.push(source);
+  return source;
+}
+
+function addResumeAgentSources(sources, aiResume) {
+  return interviewResumeFacts(aiResume)
+    .map((fact) => appendAgentSource(sources, "RESUME", `resume-version:${aiResume.resumeVersion}`, fact))
+    .filter(Boolean);
+}
+
+function addJobAgentSources(sources, jobDescription, parseResult) {
+  return [
+    appendAgentSource(sources, "JD", `job-description:${jobDescription.id}`, jobDescription.rawText, { sourceTitle: jobDescription.title || "岗位描述" }),
+    ...flattenAgentText(parseResult.parsedData || {}).map((fact) => appendAgentSource(sources, "JD", `job-parse-result:${parseResult.id}`, fact, { sourceTitle: jobDescription.title || "岗位解析" })),
+  ].filter(Boolean);
+}
+
+function addMatchReportAgentSources(sources, report, match) {
+  const values = [
+    ...(report.content?.gaps || []),
+    ...(report.content?.recommendations || []),
+    ...(report.content?.claims || []).map((claim) => claim.text),
+    ...(match.report?.risks || []),
+    ...(match.report?.prioritizedSuggestions || []),
+    ...(match.report?.dimensions || []).flatMap((dimension) => dimension.missingEvidence || []),
+  ];
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 80)
+    .map((fact) => appendAgentSource(sources, "MATCH_REPORT", `match-report:${report.id}`, fact, { sourceTitle: "岗位匹配报告" }))
+    .filter(Boolean);
+}
+
+function addKnowledgeAgentSources(sources, retrieval) {
+  const stepSources = [];
+  for (const item of retrieval?.results || []) {
+    const source = appendAgentSource(sources, "KNOWLEDGE", `knowledge-chunk:${item.chunkId}`, item.content, {
+      sourceTitle: item.documentTitle || "知识库",
+      retrievalRunId: retrieval.run.id,
+      chunkId: item.chunkId,
+      documentId: item.documentId,
+      processingVersion: item.processingVersion,
+      contentHash: item.contentHash,
+      indexRunId: item.indexRunId,
+    });
+    if (source) stepSources.push(source);
+  }
+  return stepSources;
+}
+
+function resolveAgentContext(store, user, application, report) {
+  try {
+    return resolveInterviewContext(store, user, application, report);
+  } catch (error) {
+    const code = String(error.code || "").replace(/^INTERVIEW_/, "AGENT_");
+    throw agentFailure(error.status || 409, code || "AGENT_INPUT_INVALID", error.message || "Agent 输入绑定无效");
+  }
+}
+
+async function executeAgentRun(store, user, application, report, options) {
+  const context = resolveAgentContext(store, user, application, report);
+  const aiResume = buildAiResumeContext(context.resumeSnapshot);
+  const config = getAiConfig(store, user.id);
+  const run = {
+    id: nextId(store.agentRuns),
+    userId: user.id,
+    jobApplicationId: application.id,
+    resumeId: application.resumeId,
+    resumeVersionId: application.resumeVersionId,
+    resumeVersion: application.resumeVersion,
+    resumeContentHash: application.resumeContentHash,
+    jobDescriptionId: application.jobDescriptionId,
+    jobDescriptionParseResultId: application.jobDescriptionParseResultId,
+    matchReportId: report.id,
+    status: "PENDING",
+    objective: options.objective,
+    maxSteps: options.maxSteps,
+    currentStep: 0,
+    provider: config.provider,
+    model: config.modelId,
+    promptVersion: agentPromptVersion,
+    generationConfigHash: agentGenerationConfigHash(options),
+    allowedActions: [...agentAllowedActions],
+    finalResult: null,
+    failureCode: null,
+    failureMessage: null,
+    createdAt: now(),
+    completedAt: null,
+  };
+  store.agentRuns.push(run);
+  await writeStore(store);
+  run.status = "RUNNING";
+  await writeStore(store);
+  const sources = [];
+  let degraded = report.status === "DEGRADED";
+  let activeStep = null;
+  try {
+    for (let stepIndex = 1; stepIndex <= run.maxSteps; stepIndex += 1) {
+      run.currentStep = stepIndex;
+      activeStep = {
+        id: nextId(store.agentSteps),
+        userId: user.id,
+        agentRunId: run.id,
+        stepIndex,
+        actionType: "PLANNER",
+        reason: "",
+        input: { objectiveHash: contentHash(run.objective) },
+        output: null,
+        sourceRefs: [],
+        retrievalRunId: null,
+        status: "RUNNING",
+        startedAt: now(),
+        completedAt: null,
+      };
+      store.agentSteps.push(activeStep);
+      await writeStore(store);
+
+      const plannerPrompt = buildAgentPlannerPrompt({
+        objective: run.objective,
+        maxSteps: run.maxSteps,
+        currentStep: stepIndex,
+        previousSteps: store.agentSteps.filter((step) => step.agentRunId === run.id && step.id !== activeStep.id),
+        sources,
+      });
+      const planner = await runAiJson(store, user.id, {
+        schemaName: "bounded_agent_planner",
+        schema: agentPlannerSchema,
+        system: plannerPrompt.system,
+        user: plannerPrompt.user,
+        strictJson: true,
+      });
+      if (!planner.ok) {
+        const code = planner.code === "AI_NOT_CONFIGURED" ? "AGENT_PROVIDER_NOT_CONFIGURED" : "AGENT_PROVIDER_UNAVAILABLE";
+        throw agentFailure(planner.status || 502, code, planner.error || "Agent planner provider 不可用");
+      }
+
+      let decision;
+      try {
+        decision = normalizePlannerDecision(planner.data);
+      } catch (error) {
+        activeStep.actionType = "ACTION_VALIDATION";
+        activeStep.reason = String(planner.data?.reason || "").slice(0, 1000);
+        activeStep.input = { requestedAction: String(planner.data?.action || "").slice(0, 200) };
+        throw error;
+      }
+      activeStep.actionType = decision.action;
+      activeStep.reason = decision.reason;
+      let stepSources = [];
+
+      if (decision.action === "READ_RESUME") {
+        activeStep.input = { resumeId: run.resumeId, resumeVersionId: run.resumeVersionId, resumeVersion: run.resumeVersion, resumeContentHash: run.resumeContentHash };
+        stepSources = addResumeAgentSources(sources, aiResume);
+        activeStep.output = { lockedResumeVersion: run.resumeVersion, resumeContentHash: run.resumeContentHash, factCount: stepSources.length };
+      } else if (decision.action === "READ_JOB") {
+        activeStep.input = { jobDescriptionId: run.jobDescriptionId, jobDescriptionParseResultId: run.jobDescriptionParseResultId };
+        stepSources = addJobAgentSources(sources, context.jobDescription, context.parseResult);
+        activeStep.output = { jobDescriptionId: run.jobDescriptionId, parseResultId: run.jobDescriptionParseResultId, factCount: stepSources.length };
+      } else if (decision.action === "READ_MATCH_REPORT") {
+        activeStep.input = { matchReportId: run.matchReportId };
+        stepSources = addMatchReportAgentSources(sources, report, context.match);
+        activeStep.output = { matchReportId: run.matchReportId, factCount: stepSources.length };
+      } else if (decision.action === "RETRIEVE_KNOWLEDGE") {
+        activeStep.input = { query: decision.query, mode: options.searchMode, useReranker: options.useReranker };
+        const retrievalOffset = store.knowledgeRetrievalRuns.length;
+        try {
+          const retrieval = await knowledgeRetrievalService().search(store, {
+            query: decision.query,
+            mode: options.searchMode,
+            topK: 8,
+            keywordLimit: 24,
+            vectorLimit: 24,
+            rrfK: 60,
+            useReranker: options.useReranker,
+            filters: { documentType: ["ROLE_SKILL_DESCRIPTION", "STAR_CASE", "INTERVIEW_RUBRIC", "RESUME_GUIDE", "OTHER"], language: ["zh-CN"] },
+          }, user.id);
+          activeStep.retrievalRunId = retrieval.run.id;
+          stepSources = addKnowledgeAgentSources(sources, retrieval);
+          activeStep.output = { query: retrieval.normalizedQuery, resultCount: retrieval.results.length, degraded: retrieval.degraded || retrieval.rerankerFallback };
+          if (retrieval.degraded || retrieval.rerankerFallback) {
+            degraded = true;
+            activeStep.status = "DEGRADED";
+            run.failureCode ||= retrieval.rerankerFailureCode || retrieval.run.failureCode || "AGENT_RETRIEVAL_DEGRADED";
+            run.failureMessage ||= "知识检索已降级，Agent 使用剩余可用证据继续。";
+          }
+        } catch (error) {
+          const failedRun = store.knowledgeRetrievalRuns.slice(retrievalOffset).find((item) => item.createdBy === user.id && item.status === "FAILED");
+          activeStep.retrievalRunId = failedRun?.id || null;
+          activeStep.output = { resultCount: 0, degraded: true, failureCode: error.code || "AGENT_RETRIEVAL_FAILED" };
+          activeStep.status = "DEGRADED";
+          degraded = true;
+          run.failureCode ||= error.code || "AGENT_RETRIEVAL_FAILED";
+          run.failureMessage ||= "知识检索失败，Agent 使用已有证据降级继续。";
+        }
+      } else if (decision.action === "SUMMARIZE_EVIDENCE") {
+        activeStep.input = { evidenceCount: sources.length };
+        activeStep.output = safeEvidenceSummary(sources);
+        stepSources = [...sources];
+      } else if (decision.action === "PRODUCE_PLAN") {
+        activeStep.input = { evidenceCount: sources.length, categories: ["VERIFIED_RESUME_FACT", "EXTERNAL_KNOWLEDGE", "MATCH_GAP", "RECOMMENDATION"] };
+        const finalPrompt = buildAgentFinalPlanPrompt({ objective: run.objective, sources });
+        const finalResponse = await runAiJson(store, user.id, {
+          schemaName: "bounded_agent_final_plan",
+          schema: agentFinalPlanSchema,
+          system: finalPrompt.system,
+          user: finalPrompt.user,
+          strictJson: true,
+        });
+        if (!finalResponse.ok) {
+          const code = finalResponse.code === "AI_NOT_CONFIGURED" ? "AGENT_PROVIDER_NOT_CONFIGURED" : "AGENT_PROVIDER_UNAVAILABLE";
+          throw agentFailure(finalResponse.status || 502, code, finalResponse.error || "Agent final plan provider 不可用");
+        }
+        run.finalResult = normalizeAgentFinalPlan(finalResponse.data, sources, interviewResumeFacts(aiResume));
+        activeStep.output = { categoryCounts: Object.fromEntries(Object.entries(run.finalResult).map(([category, items]) => [category, items.length])) };
+        stepSources = [...sources];
+      }
+
+      activeStep.sourceRefs = stepSources;
+      if (activeStep.status === "RUNNING") activeStep.status = "COMPLETED";
+      activeStep.completedAt = now();
+      await writeStore(store);
+      if (decision.action === "PRODUCE_PLAN") {
+        run.status = degraded ? "DEGRADED" : "COMPLETED";
+        if (!degraded) {
+          run.failureCode = null;
+          run.failureMessage = null;
+        }
+        run.completedAt = now();
+        await writeStore(store);
+        return run;
+      }
+      activeStep = null;
+    }
+    run.status = "STOPPED_LIMIT";
+    run.failureCode = "AGENT_STEP_LIMIT_REACHED";
+    run.failureMessage = `Agent 已达到服务器限制的 ${run.maxSteps} 步。`;
+    run.completedAt = now();
+    await writeStore(store);
+    return run;
+  } catch (error) {
+    if (activeStep && activeStep.status === "RUNNING") {
+      activeStep.status = "FAILED";
+      activeStep.output = { failureCode: error.code || "AGENT_EXECUTION_FAILED", message: String(error.message || "Agent step failed").slice(0, 500) };
+      activeStep.completedAt = now();
+    }
+    run.status = "FAILED";
+    run.failureCode = error.code || "AGENT_EXECUTION_FAILED";
+    run.failureMessage = String(error.message || "Agent 执行失败").slice(0, 500);
+    run.completedAt = now();
+    await writeStore(store);
+    throw Object.assign(error, { agentRunId: run.id });
   }
 }
 
@@ -2949,6 +3275,7 @@ async function handleApi(req, res) {
     if (!item) return send(res, 404, { message: "岗位 JD 不存在" });
     const applicationIds = new Set(store.jobApplications.filter((application) => application.jobDescriptionId === item.id).map((application) => application.id));
     deleteInterviewSessions(store, (session) => applicationIds.has(session.jobApplicationId) || session.jobDescriptionId === item.id);
+    deleteAgentRuns(store, (run) => applicationIds.has(run.jobApplicationId) || run.jobDescriptionId === item.id);
     store.jobDescriptions = store.jobDescriptions.filter((candidate) => candidate.id !== item.id);
     store.jobDescriptionParseResults = store.jobDescriptionParseResults.filter((result) => result.jobDescriptionId !== item.id);
     store.jobApplications = store.jobApplications.filter((application) => application.jobDescriptionId !== item.id);
@@ -3086,6 +3413,49 @@ async function handleApi(req, res) {
     } catch (error) {
       return send(res, error.status || 502, { message: error.message || "报告生成失败", failureCode: error.code || "REPORT_RETRIEVAL_FAILED" });
     }
+  }
+
+  const applicationAgentRuns = pathname.match(/^\/api\/job-applications\/(\d+)\/agent-runs$/);
+  if (applicationAgentRuns && method === "POST") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationAgentRuns[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "AGENT_APPLICATION_NOT_FOUND" });
+    const body = await readJson(req);
+    const matchReportId = Number(body.matchReportId);
+    if (!Number.isInteger(matchReportId) || matchReportId < 1) return send(res, 400, { message: "matchReportId 必须是正整数", failureCode: "AGENT_INPUT_INVALID" });
+    const objective = String(body.objective || "").trim();
+    if (!objective || objective.length > 2000) return send(res, 400, { message: "objective 必须为 1 到 2000 字符", failureCode: "AGENT_INPUT_INVALID" });
+    const maxSteps = body.maxSteps === undefined ? agentServerMaxSteps : Number(body.maxSteps);
+    if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > agentServerMaxSteps) return send(res, 400, { message: `maxSteps 必须是 1 到 ${agentServerMaxSteps} 的整数`, failureCode: "AGENT_INPUT_INVALID" });
+    const searchMode = String(body.searchMode || "HYBRID").toUpperCase();
+    if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "AGENT_INPUT_INVALID" });
+    if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "AGENT_INPUT_INVALID" });
+    const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
+    try {
+      const item = await executeAgentRun(store, user, application, report, { objective, maxSteps, searchMode, useReranker: body.useReranker === true });
+      return send(res, 201, { item: publicAgentRun(store, item, { includeSteps: true }) });
+    } catch (error) {
+      return send(res, error.status || 502, { message: error.message || "Agent 执行失败", failureCode: error.code || "AGENT_EXECUTION_FAILED", agentRunId: error.agentRunId || null });
+    }
+  }
+
+  const agentRunSteps = pathname.match(/^\/api\/agent-runs\/(\d+)\/steps$/);
+  if (agentRunSteps && method === "GET") {
+    const user = requireUser(store, req);
+    const runId = Number(agentRunSteps[1]);
+    const run = Number.isInteger(runId) ? store.agentRuns.find((item) => item.id === runId && item.userId === user.id) : null;
+    if (!run) return send(res, 404, { message: "AgentRun 不存在", failureCode: "AGENT_RUN_NOT_FOUND" });
+    const items = store.agentSteps.filter((step) => step.agentRunId === run.id && step.userId === user.id).sort((left, right) => left.stepIndex - right.stepIndex).map((step) => publicAgentStep(store, step));
+    return send(res, 200, { items });
+  }
+
+  const agentRunDetail = pathname.match(/^\/api\/agent-runs\/(\d+)$/);
+  if (agentRunDetail && method === "GET") {
+    const user = requireUser(store, req);
+    const runId = Number(agentRunDetail[1]);
+    const item = Number.isInteger(runId) ? store.agentRuns.find((run) => run.id === runId && run.userId === user.id) : null;
+    if (!item) return send(res, 404, { message: "AgentRun 不存在", failureCode: "AGENT_RUN_NOT_FOUND" });
+    return send(res, 200, { item: publicAgentRun(store, item) });
   }
 
   const applicationInterviewSessions = pathname.match(/^\/api\/job-applications\/(\d+)\/interview-sessions$/);
@@ -3338,6 +3708,7 @@ async function handleApi(req, res) {
     store.grammarRecords = store.grammarRecords.filter((item) => item.resumeId !== resume.id);
     store.mockInterviews = store.mockInterviews.filter((item) => item.resumeId !== resume.id);
     deleteInterviewSessions(store, (item) => item.resumeId === resume.id);
+    deleteAgentRuns(store, (item) => item.resumeId === resume.id);
     store.interviewAnswers = store.interviewAnswers.filter((item) => item.resumeId !== resume.id);
     const applicationIds = new Set(store.jobApplications.filter((item) => item.resumeId === resume.id).map((item) => item.id));
     store.jobApplications = store.jobApplications.filter((item) => item.resumeId !== resume.id);
