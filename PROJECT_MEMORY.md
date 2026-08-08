@@ -153,14 +153,14 @@ It is ignored by Git and must remain uncommitted.
 
 ## Latest Delivery
 
-- Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。后端从固定 MatchReport 创建 SuggestionRun 与逐条 ResumeSuggestion；接受建议会严格校验 base version/hash、before、受限 JSON Patch 以及从锁定 ResumeVersion 自行读取并复验的 `factEvidence[]`，创建新的 ResumeVersion 并使同 run 的待处理建议失效。coverage 保留完整中文 span 并执行全量 token 覆盖，不用单字 substring split；Claude 第八次验收为 A. 通过，未发现高、中优先级问题，全部门禁 exit 0。
+- Stage 7 已正式完成。Stage 7B 已通过 Claude 独立验收（A 通过、无高/中问题、全部门禁 exit 0）：MatchReport 下可查看 SuggestionRun 当前/历史结果、逐条建议与只读 before/after diff，逐条 Accept/Reject 会消费 7A API 并刷新 Strategy A INVALIDATED、当前 ResumeVersion 和只读版本历史。FACT_REQUIRED 只提示补充真实信息，不提供接受入口；前端不构造 patch，7A ownership、版本冲突、evidence/patch validation 边界未削弱。L1-L4 保留为低优先级后续项；Stage 8 尚未开始。
 - The public flow now starts in `简历模板`: every template carries the same sample-resume content for structural comparison. Guests who open `#resume` are redirected to templates; creating a personal resume requires login, and then opens the user's own empty resume workspace.
 - Resume editor now supports a personal summary and sortable modules through `dnd-kit`; moving modules updates the A4 preview.
 - AI keyword chips can be selected to append to the personal summary without duplicates.
 - Mock interviews are real AI sessions: target role input, resume-based opening question, answer score and feedback, AI follow-up questions, final report, and persisted history records.
 - Interview endpoints: `POST /api/interviews`, `POST /api/interviews/:id/answers`, `POST /api/interviews/:id/report`, and `GET /api/records/interviews`.
 
-## RAG Upgrade Progress (Stage 7A evidence-backed rewrite accepted)
+## RAG Upgrade Progress (Stage 7 completed)
 
 - Runtime persistence remains `backend/data/store.json`; `database.sql` is a production schema/migration reference only.
 - Phase 1 normalizes editor data into `buildResumeDTO`. Provider prompts use PII-filtered `buildAiResumeContext`, while history retains full DTO snapshots. AI records bind `userId`, `resumeId`, `resumeVersion`, and `resumeContentHash`.
@@ -177,7 +177,7 @@ It is ignored by Git and must remain uncommitted.
 - Stage 5B completed its real Qdrant retest on Docker Desktop (Docker Server 29.4.1, Compose v5.1.3): both Qdrant smoke commands exited 0, and syntax checks, the full mock integration suite, golden evaluation, build, and diff checks passed. All release gates now pass; merging master and creating a `rag-stage-5b-passed` tag are allowed, but were not performed in this verification run. RAG generation and Agentic RAG remain out of scope.
 - Stage 6A adds only the backend grounded-report loop. `matchReports` binds a completed `ResumeJobMatch`, frozen resume/JD hashes, provider/config/prompt versions and RetrievalRun IDs. The orchestrator calls the existing `KnowledgeRetrievalService`; its persisted candidate references plus local current source checks drive `citation-validator.js`. Knowledge claims with invalid Chunk/run/version/quote evidence are removed and marked `DEGRADED`; historic reports retain quote snapshots and report source availability after a document is withdrawn. `tests/grounded-match-report.integration.mjs` is the HTTP-level regression suite. No report UI, resume mutation, Agent or free user retrieval was added.
 - 阶段 6A 已通过 Claude 最终独立验收及全部发布门禁，已合并 master 并创建 rag-stage-6a-passed。`claim-support-v4` 从并列单元剔除纯引导语，仅校验实质单元，并继续拒绝跨引用因果/结果拼接；中英文逗号等句界后的明确他/她归因被拒绝，普通“其他”表达不受影响。连续 5 次真实 HTTP 重启集成和双 Qdrant smoke 均通过。
-- Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。SuggestionRun 固化报告、Application/Match、ResumeVersion/Hash、JD、Prompt 和 Provider 绑定；Patch、factEvidence 与确定性事实差异均在服务端复验；ACCEPT 创建新版本后按策略 A 失效同 run 的剩余待处理建议。
+- Stage 7 已正式完成：SuggestionRun 固化报告、Application/Match、ResumeVersion/Hash、JD、Prompt 和 Provider 绑定；Patch、factEvidence 与确定性事实差异均在服务端复验。Stage 7B UI 将 run 历史、受控 diff、Accept/Reject、FACT_REQUIRED、Strategy A INVALIDATED 和只读 ResumeVersion 历史串联为用户闭环；ACCEPT 创建新版本后同 run 剩余 PENDING 项失效。L1-L4 为低优先级后续项，Stage 8 尚未开始。
 
 ## Design Memory
 

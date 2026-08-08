@@ -1,6 +1,6 @@
 # AI_HANDOFF.md
 
-Last updated: 2026-08-06
+Last updated: 2026-08-08
 
 This is the quick continuation note for the next AI/Codex session.
 
@@ -124,13 +124,14 @@ Verified:
 - Run `node tests/grounded-match-report.integration.mjs`, then the complete stage command set in `docs/tasks/STAGE_06A_GROUNDED_REPORT.md`. The report test uses real HTTP backend and mocks only external Provider/Embedding/Qdrant/Reranker.
 - 阶段 6A 已通过 Claude 最终独立验收及全部发布门禁，并已完成 master 合并与 rag-stage-6a-passed 标签。`claim-support-v4` 从并列拆分单元中剔除纯引导语，保留每个实质单元至少一条本地 quote 的要求；“共同”“并”仍不视为因果。中英文逗号等句界后的明确他/她归因已拒绝，普通“其他”不误伤。真实 HTTP 报告断言、连续 5 次集成测试和双 Qdrant smoke 均通过。
 
-## Stage 7A evidence-backed rewrite – accepted
+## Stage 7 completed – accepted
 
-- Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。Evidence-backed Rewrite 实现位于 `backend/server.js` 和 `backend/resume-suggestion-prompt.js`，测试为 `tests/resume-suggestions.integration.mjs`，最终验收记录为 `docs/reviews/STAGE_07A_FINAL_REVIEW.md`。
+- Stage 7B 已通过 Claude 独立验收（A 通过、无高/中问题、全部发布门禁 exit 0）；Stage 7 正式完成，Stage 8 尚未开始。最终验收记录为 `docs/reviews/STAGE_07B_FINAL_REVIEW.md`，任务交接为 `docs/tasks/STAGE_07B_SUGGESTION_UI.md`。
 - 入口是 `POST /api/match-reports/:id/resume-suggestions`，只接受 owner 的 COMPLETED/DEGRADED Report，并从其固定 ResumeHistory、JD、Match 和 Report 绑定生成独立 `SuggestionRun`。
 - `POST /api/resume-suggestions/:id/accept` 需要 `expectedBaseResumeVersion`，重验 version/hash/before/patch 后创建新 ResumeVersion；同 run 其他 PENDING 项按策略 A 变为 INVALIDATED。`reject` 不创建版本。FACT_REQUIRED 永远不可直接 accept。
 - Patch 只允许单一 replace 或追加 highlight，路径使用稳定 entry ID；每个可执行建议必须携带服务端从锁定 ResumeVersion 自行读取、验证 sourcePath/sourceQuote/fact 的 `factEvidence[]`，并在 ACCEPT 时再次验证。factual-delta 仅保留数字、年份和完整规范化技术 token（`C++`、`C#`、`.NET`、Node/Vue/Next.js、Objective-C、React Native、Spring Cloud）作为 defense-in-depth，不再以中文关系句式或品牌/实体名单授权 REWRITE。
-- Stage 7B 尚未开始；应在单独批准的任务中实施。
+- 7B UI 位于 `src/App.jsx`、`src/styles.css` 与 `src/suggestionUiState.js`；测试为 `tests/suggestion-ui.unit.mjs`、`tests/suggestion-ui.render.mjs`。它展示 run 历史、建议状态和 before/after diff，逐条调用既有 Accept/Reject API，刷新新 ResumeVersion 与 Strategy A INVALIDATED；FACT_REQUIRED 无接受入口，前端不构造 patch。
+- L1-L4 作为低优先级后续项保留，不属于 Stage 7 阻断项。Stage 8 必须取得单独批准后才可开始。
 
 ## Historical Stage 3 delivery
 

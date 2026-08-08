@@ -3034,7 +3034,14 @@ async function handleApi(req, res) {
     if (!resume) return send(res, 404, { message: "简历不存在" });
     const items = store.resumeHistories
       .filter((item) => item.resumeId === resume.id)
-      .map(({ snapshot, ...item }) => ({ ...item, hasSnapshot: Boolean(snapshot) }));
+      .map(({ snapshot, ...item }) => {
+        const sourceSuggestion = store.resumeSuggestions.find((suggestion) => suggestion.userId === user.id && suggestion.appliedResumeVersionId === item.id && suggestion.status === "ACCEPTED");
+        return {
+          ...item,
+          hasSnapshot: Boolean(snapshot),
+          sourceSuggestion: sourceSuggestion ? { id: sourceSuggestion.id, suggestionRunId: sourceSuggestion.suggestionRunId, sectionType: sourceSuggestion.sectionType, suggestionType: sourceSuggestion.suggestionType } : null,
+        };
+      });
     return send(res, 200, { items });
   }
 
