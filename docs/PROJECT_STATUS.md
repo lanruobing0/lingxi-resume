@@ -20,7 +20,7 @@
 - 阶段 4 岗位知识库：管理员专用的文本资料 CRUD、来源/岗位元数据、原始 rawText 审计保存、标题路径识别、语义优先切片、hash 与近似 token 记录、处理历史、幂等重试、失败保留旧 chunks 与删除级联。短行标题采用上下文启发式，不将技能/职责短行一概视为标题。
 - 阶段 5A 向量索引生命周期：OpenAI Compatible Embedding Provider、Profile 隔离的 Qdrant Collection、稳定 embedding 输入哈希及 Point ID、写入验证、原子 active run 切换、旧 Point 清理追踪、删除同步和 ADMIN 索引管理。失败不会激活半成品索引；尚无检索或 RAG。
 - 阶段 5B ADMIN 知识检索闭环：稳定查询规范化、关键词与当前有效向量召回、服务端一致过滤、确定性 RRF、可选且可回退的 Reranker、可持久化的 RetrievalRun、最小黄金集评测入口和真实 Qdrant smoke。仅供管理员检索实验室使用，不生成 RAG 回答。
-- 阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁；Stage 7 尚未开始。`claim-support-v4` 保留实质并列单元逐项引用支持、跨引用因果/结果拼接拒绝，以及中文逗号等句界后的明确人物归因阻断。
+- Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。已实现基于锁定 MatchReport 的 SuggestionRun/ResumeSuggestion 后端闭环、Evidence-backed Rewrite、受限 JSON Patch、乐观并发校验、接受后新 ResumeVersion 与策略 A 失效。中文 coverage tokenizer 保留完整连续 span，不再通过 substring split 丢失“高并发”“高可用”“微服务”等事实片段；生成与 ACCEPT 均复验 evidence。Claude 第八次独立验收结论为 A. 通过，未发现高、中优先级问题，全部发布门禁 exit 0。
 
 ## RAG 升级阶段
 
@@ -33,7 +33,8 @@
 | 5A | Embedding Provider 与 Qdrant 向量索引生命周期 | 已完成，并通过 Claude 最终独立验收 |
 | 5B | 管理员关键词/向量混合检索与可选重排序 | 已完成真实 Qdrant 复验，全部发布门禁通过；允许合并 master 并创建 `rag-stage-5b-passed` 标签 |
 | 6A | 可引用岗位匹配报告后端闭环 | 已通过 Claude 最终独立验收及全部发布门禁，已合并 master 并创建 `rag-stage-6a-passed` 标签 |
-| 6B | Grounded Match Report UI | 阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁；Stage 7 尚未开始。 |
+| 6B | Grounded Match Report UI | 阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁。 |
+| 7A | Resume Suggestions & Versioning Backend | Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。 |
 
 阶段 5B 只新增 ADMIN 知识检索，不提供用户侧检索、RAG Prompt、生成式回答、引用式回答、简历修改或 Agent 工作流。
 
@@ -59,6 +60,7 @@
 - `tests/use-reranker-flag.integration.mjs`：严格 JSON boolean `useReranker` 契约。
 - `tests/retrieval-evaluation.mjs`：固定黄金集的 Recall@K 与 MRR@K 评测入口。
 - `tests/grounded-match-report.integration.mjs`：报告输入绑定、生产检索、严格 JSON、引用攻击、降级/失败、权限、重启、撤回与隐私。
+- `tests/resume-suggestions.integration.mjs`：SuggestionRun 绑定、所有权、最小 Provider 输入、事实差异阻断、Patch allowlist、ACCEPT/REJECT、冲突、失效、失败持久化与 ResumeVersion 语义。
 - `corepack pnpm test`、`corepack pnpm test:retrieval-eval`、`corepack pnpm test:qdrant`、`corepack pnpm test:qdrant-retrieval`、`node --check backend/server.js`、`corepack pnpm build`。
 
 ## 尚未实现与技术债务

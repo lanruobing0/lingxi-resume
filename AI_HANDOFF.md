@@ -124,11 +124,13 @@ Verified:
 - Run `node tests/grounded-match-report.integration.mjs`, then the complete stage command set in `docs/tasks/STAGE_06A_GROUNDED_REPORT.md`. The report test uses real HTTP backend and mocks only external Provider/Embedding/Qdrant/Reranker.
 - 阶段 6A 已通过 Claude 最终独立验收及全部发布门禁，并已完成 master 合并与 rag-stage-6a-passed 标签。`claim-support-v4` 从并列拆分单元中剔除纯引导语，保留每个实质单元至少一条本地 quote 的要求；“共同”“并”仍不视为因果。中英文逗号等句界后的明确他/她归因已拒绝，普通“其他”不误伤。真实 HTTP 报告断言、连续 5 次集成测试和双 Qdrant smoke 均通过。
 
-## Stage 6 complete – Stage 7 not started
+## Stage 7A evidence-backed rewrite – accepted
 
-- 阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁；Stage 7 尚未开始。
-- 报告 UI 仅在当前 Application 和已完成的当前 Match 上生成；没有 current/最近简历回退。报告详情使用 Stage 6A API，历史使用最小 owner/Application 限制的摘要 API。
-- Citation 抽屉只展示可信 quote 快照和本地安全元数据；历史撤回来源保持可见并标记当前不可用，绝不展示向量、Qdrant payload、RetrievalRun 内部信息或密钥。
+- Stage 7A 已通过 Claude 最终独立验收；Stage 7B 尚未开始。Evidence-backed Rewrite 实现位于 `backend/server.js` 和 `backend/resume-suggestion-prompt.js`，测试为 `tests/resume-suggestions.integration.mjs`，最终验收记录为 `docs/reviews/STAGE_07A_FINAL_REVIEW.md`。
+- 入口是 `POST /api/match-reports/:id/resume-suggestions`，只接受 owner 的 COMPLETED/DEGRADED Report，并从其固定 ResumeHistory、JD、Match 和 Report 绑定生成独立 `SuggestionRun`。
+- `POST /api/resume-suggestions/:id/accept` 需要 `expectedBaseResumeVersion`，重验 version/hash/before/patch 后创建新 ResumeVersion；同 run 其他 PENDING 项按策略 A 变为 INVALIDATED。`reject` 不创建版本。FACT_REQUIRED 永远不可直接 accept。
+- Patch 只允许单一 replace 或追加 highlight，路径使用稳定 entry ID；每个可执行建议必须携带服务端从锁定 ResumeVersion 自行读取、验证 sourcePath/sourceQuote/fact 的 `factEvidence[]`，并在 ACCEPT 时再次验证。factual-delta 仅保留数字、年份和完整规范化技术 token（`C++`、`C#`、`.NET`、Node/Vue/Next.js、Objective-C、React Native、Spring Cloud）作为 defense-in-depth，不再以中文关系句式或品牌/实体名单授权 REWRITE。
+- Stage 7B 尚未开始；应在单独批准的任务中实施。
 
 ## Historical Stage 3 delivery
 

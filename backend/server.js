@@ -10,6 +10,7 @@ import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
 import { validateKnowledgeClaims, sourceAvailability } from "./citation-validator.js";
 import { buildCandidatePromptPayload, buildReportRetrievalPlans, createReportInputHash, allowedBaseEvidence, reportGenerationConfigHash } from "./grounded-report-service.js";
 import { buildGroundedReportPrompt, groundedReportPromptVersion, groundedReportSchema } from "./grounded-report-prompt.js";
+import { buildResumeSuggestionPrompt, resumeSuggestionPromptVersion, resumeSuggestionSchema } from "./resume-suggestion-prompt.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
@@ -22,6 +23,7 @@ const passwordHashLength = 64;
 const scrypt = promisify(scryptCallback);
 const authRateLimits = new Map();
 const captchaChallenges = new Map();
+const suggestionDecisionLocks = new Set();
 const captchaLifetimeMs = 1000 * 60 * 5;
 const captchaAlphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const aiProviderDefaults = {
@@ -184,6 +186,8 @@ const seedData = {
   jobApplications: [],
   resumeJobMatches: [],
   matchReports: [],
+  suggestionRuns: [],
+  resumeSuggestions: [],
   knowledgeDocuments: [],
   knowledgeChunks: [],
   knowledgeProcessingRecords: [],
@@ -669,6 +673,8 @@ async function readStore() {
     jobApplications: store.jobApplications || [],
     resumeJobMatches: store.resumeJobMatches || [],
     matchReports: store.matchReports || [],
+    suggestionRuns: store.suggestionRuns || [],
+    resumeSuggestions: store.resumeSuggestions || [],
     knowledgeDocuments: store.knowledgeDocuments || [],
     knowledgeChunks: store.knowledgeChunks || [],
     knowledgeProcessingRecords: store.knowledgeProcessingRecords || [],
@@ -1800,6 +1806,449 @@ async function executeGroundedMatchReport(store, user, application, match, optio
   }
 }
 
+const resumeSuggestionTypes = new Set(["REWRITE", "CLARIFY", "KEYWORD_ALIGNMENT", "STRUCTURE", "FACT_REQUIRED"]);
+const resumeSuggestionStatuses = new Set(["PENDING", "ACCEPTED", "REJECTED", "INVALIDATED"]);
+const resumeSuggestionMaxTextLength = 4000;
+const resumeSuggestionMaxPatchOperations = 1;
+
+function resumeSuggestionFailure(status, code, message) {
+  return Object.assign(new Error(message), { status, code });
+}
+
+function suggestionHash(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function escapeJsonPointerSegment(value) {
+  return String(value).replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
+function decodeJsonPointer(pointer) {
+  if (typeof pointer !== "string" || !pointer.startsWith("/") || pointer.length > 600) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 路径不合法");
+  return pointer.slice(1).split("/").map((segment) => {
+    if (/~(?:[^01]|$)/.test(segment)) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 路径转义不合法");
+    return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+  });
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+// This document deliberately contains only editable resume content. Entry IDs, not
+// array positions, are used in paths so a suggestion cannot drift after reordering.
+function buildResumeSuggestionDocument(resumeSnapshot) {
+  const dto = buildResumeDTO(resumeSnapshot);
+  const sections = {};
+  for (const section of dto.sections) {
+    const entries = {};
+    for (const entry of section.entries || []) {
+      entries[String(entry.id)] = {
+        name: String(entry.name || ""), role: String(entry.role || ""), startDate: String(entry.startDate || ""), endDate: String(entry.endDate || ""), highlights: (entry.highlights || []).map((item) => String(item || "")),
+      };
+    }
+    sections[section.key] = { entries };
+  }
+  return { title: dto.title, targetPosition: dto.targetPosition, selfEvaluation: dto.selfEvaluation, sections };
+}
+
+function getSuggestionPathValue(document, segments) {
+  let value = document;
+  for (const segment of segments) {
+    if (!value || typeof value !== "object" || !Object.hasOwn(value, segment)) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 指向不存在的简历内容");
+    value = value[segment];
+  }
+  return value;
+}
+
+function validateResumeSuggestionPatch(document, patch, targetPath, before, after) {
+  if (!Array.isArray(patch) || patch.length !== resumeSuggestionMaxPatchOperations) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "每条可应用建议只能包含一项 patch 操作");
+  const operation = patch[0];
+  if (!operation || typeof operation !== "object" || !["replace", "add"].includes(operation.op) || typeof operation.path !== "string" || Object.keys(operation).some((key) => !["op", "path", "value"].includes(key))) {
+    throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 操作不合法");
+  }
+  if (operation.path !== targetPath || typeof operation.value !== "string" || operation.value.length > resumeSuggestionMaxTextLength || typeof before !== "string" || typeof after !== "string" || after.length > resumeSuggestionMaxTextLength || operation.value !== after) {
+    throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 内容与目标不一致");
+  }
+  const segments = decodeJsonPointer(operation.path);
+  let existingValue;
+  if (["title", "targetPosition", "selfEvaluation"].includes(segments[0]) && segments.length === 1) {
+    if (operation.op !== "replace") throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "基础字段只允许 replace");
+    existingValue = getSuggestionPathValue(document, segments);
+  } else if (segments[0] === "sections" && segments[2] === "entries" && segments.length >= 5) {
+    const [,, , entryId, field, index] = segments;
+    if (!entryId || !["name", "role", "startDate", "endDate", "highlights"].includes(field)) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 字段不在允许范围内");
+    const entry = getSuggestionPathValue(document, ["sections", segments[1], "entries", entryId]);
+    if (field === "highlights") {
+      if (segments.length !== 6 || !Array.isArray(entry.highlights)) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 高亮信息路径不合法");
+      if (operation.op === "add") {
+        if (index !== "-") throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "新增 highlight 只能追加到末尾");
+        existingValue = "";
+      } else {
+        if (!/^\d+$/.test(index) || Number(index) >= entry.highlights.length) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch highlight 下标不合法");
+        existingValue = entry.highlights[Number(index)];
+      }
+    } else {
+      if (segments.length !== 5 || operation.op !== "replace") throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "经历字段只允许 replace");
+      existingValue = entry[field];
+    }
+  } else {
+    throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 patch 试图修改非简历内容或受保护字段");
+  }
+  if (existingValue !== before) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_PATCH", "建议 before 与锁定简历内容不一致");
+  return { op: operation.op, path: operation.path, value: operation.value, segments };
+}
+
+function applyValidatedResumeSuggestionPatch(document, validatedPatch) {
+  const next = cloneJson(document);
+  const segments = validatedPatch.segments;
+  if (validatedPatch.op === "add") {
+    const values = getSuggestionPathValue(next, segments.slice(0, -1));
+    values.push(validatedPatch.value);
+    return next;
+  }
+  let target = next;
+  for (const segment of segments.slice(0, -1)) target = target[segment];
+  target[segments.at(-1)] = validatedPatch.value;
+  return next;
+}
+
+function normalizeSuggestionEvidenceText(value) {
+  return String(value || "").trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function readSuggestionEvidenceSource(baseDocument, sourcePath) {
+  const segments = decodeJsonPointer(sourcePath);
+  if (["title", "targetPosition", "selfEvaluation"].includes(segments[0]) && segments.length === 1) {
+    const value = getSuggestionPathValue(baseDocument, segments);
+    if (typeof value !== "string") throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "证据路径必须指向简历文本内容");
+    return value;
+  }
+  if (segments[0] !== "sections" || segments[2] !== "entries" || !segments[1] || !segments[3]) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "证据路径不在允许的简历内容字段内");
+  if (["name", "role", "startDate", "endDate"].includes(segments[4]) && segments.length === 5) {
+    const value = getSuggestionPathValue(baseDocument, segments);
+    if (typeof value !== "string") throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "证据路径必须指向简历文本内容");
+    return value;
+  }
+  if (segments[4] === "highlights" && segments.length === 6 && /^\d+$/.test(segments[5])) {
+    const value = getSuggestionPathValue(baseDocument, segments);
+    if (typeof value !== "string") throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "证据路径必须指向简历文本内容");
+    return value;
+  }
+  throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "证据路径不在允许的简历内容字段内");
+}
+
+function validateSuggestionEvidence({ baseDocument, after, factEvidence }) {
+  if (!Array.isArray(factEvidence) || !factEvidence.length) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_MISSING", "可应用建议缺少锁定简历事实证据");
+  if (factEvidence.length > 12) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "事实证据数量超出限制");
+  const afterText = normalizeSuggestionEvidenceText(after);
+  const evidence = [];
+  const seen = new Set();
+  for (const item of factEvidence) {
+    const fact = String(item?.fact || "").trim();
+    const sourcePath = String(item?.sourcePath || "").trim();
+    const sourceQuote = String(item?.sourceQuote || "");
+    if (!fact || fact.length > 500 || !sourcePath || !sourceQuote || sourceQuote.length > resumeSuggestionMaxTextLength) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "事实证据字段不合法");
+    let sourceValue;
+    try {
+      sourceValue = readSuggestionEvidenceSource(baseDocument, sourcePath);
+    } catch (error) {
+      throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "证据路径不在锁定简历内容中");
+    }
+    const normalizedFact = normalizeSuggestionEvidenceText(fact);
+    if (!sourceValue.includes(sourceQuote) || !normalizedFact || suggestionEvidenceNonFactTerms.has(normalizedFact) || !normalizeSuggestionEvidenceText(sourceQuote).includes(normalizedFact) || !afterText.includes(normalizedFact)) {
+      throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_INVALID", "事实证据无法证明改写中的用户事实");
+    }
+    const key = `${sourcePath}\u0000${fact}\u0000${sourceQuote}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      evidence.push({ fact, sourcePath, sourceQuote });
+    }
+  }
+  validateSuggestionEvidenceCoverage({ baseDocument, after, evidence });
+  return evidence;
+}
+
+const suggestionTechnicalAliases = new Map([
+  ["js", "javascript"],
+  ["nodejs", "node.js"],
+  ["dotnet", ".net"],
+]);
+const suggestionCompoundTechnicalPattern = /(?<![A-Za-z0-9+#.-])(?:c\+\+|c#|\.net|node\.js|vue\.js|next\.js|objective-c|react\s+native|spring\s+cloud)(?![A-Za-z0-9+#.-])/gi;
+const suggestionTechnicalIgnoredTerms = new Set(["and", "the", "with", "for", "from", "into", "using", "api", "ui", "to"]);
+const suggestionEvidenceNonFactTerms = new Set([
+  "完成", "完善", "优化", "提升", "提高", "改进", "加强", "推进", "作为", "开发", "维护", "建设", "负责", "参与", "协助", "配合", "对接", "承担", "支持", "提供", "服务", "管理", "主导", "涉及", "接触", "使用", "熟练", "编写", "持续", "进行", "主要", "日常", "长期", "当前", "此前", "曾", "曾将", "梳理", "简洁", "清晰", "表达更聚焦前端岗位", "表达更简洁清晰", "将接口响应时间降低", "并持续优化", "工作内容", "任务", "目标", "重点", "问题", "职责", "人员", "前端", "后端", "前后端", "移动端", "核心", "系统", "平台", "项目", "团队", "客户", "接口", "模块", "业务", "技术", "性能", "需求", "设计", "协作", "稳定性", "文档", "具备", "经验", "表达", "聚焦", "岗位", "组件", "基于", "构建", "缓存", "响应时间", "降低", "改写", "调整", "补充", "增强", "改善", "实现", "处理", "保障", "负责", "参与", "相关", "联调", "适配", "部署", "测试", "方案", "能力", "效果", "质量", "效率", "逻辑", "流程", "内容", "结果", "说明", "描述", "背景", "情况", "事项", "方向", "领域", "功能", "服务端", "客户端", "体验", "可维护性", "可用性", "可靠性", "复杂度", "风险", "沟通", "协调", "合作", "对接方", "服务对象", "合作对象", "客户方", "业务方", "合作方", "工作", "是", "为", "的", "与", "和", "及", "并", "将", "把", "从", "通过", "针对", "由", "我", "本人", "更", "较", "也", "还", "会", "能", "可", "在", "等",
+]);
+
+const suggestionEvidenceGenericChineseTerms = [...suggestionEvidenceNonFactTerms]
+  .filter((term) => /^[\u3400-\u9fff]+$/u.test(term))
+  .sort((left, right) => right.length - left.length);
+
+function isGenericSuggestionChineseSpan(span) {
+  // This is an all-or-nothing word break over the intact span. Functional
+  // one-character tokens may bridge generic phrases, but are never removed from
+  // inside an otherwise unsupported fact such as 高并发、高可用 or 微服务.
+  const reachable = new Array(span.length + 1).fill(false);
+  reachable[0] = true;
+  for (let index = 0; index < span.length; index += 1) {
+    if (!reachable[index]) continue;
+    for (const term of suggestionEvidenceGenericChineseTerms) {
+      if (span.startsWith(term, index)) reachable[index + term.length] = true;
+    }
+  }
+  return reachable[span.length];
+}
+
+function validateSuggestionEvidenceCoverage({ baseDocument, after, evidence }) {
+  const baseText = normalizeSuggestionEvidenceText(JSON.stringify(baseDocument));
+  const evidenceFacts = evidence.map((item) => normalizeSuggestionEvidenceText(item.fact));
+  const chineseSpans = normalizeSuggestionEvidenceText(after).match(/[\u3400-\u9fff]{2,}/g) || [];
+  for (const span of chineseSpans) {
+    const supported = baseText.includes(span) || evidenceFacts.some((fact) => fact.includes(span) || span.includes(fact));
+    if (!supported && !isGenericSuggestionChineseSpan(span)) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_MISSING", "改写中的新增事实缺少锁定简历证据");
+  }
+}
+
+function normalizeSuggestionEntity(value) {
+  const normalized = String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return suggestionTechnicalAliases.get(normalized) || normalized;
+}
+
+function extractSuggestionTechnicalEntities(value) {
+  const entities = new Set();
+  const source = String(value || "");
+  const compoundRanges = [];
+  for (const match of source.matchAll(suggestionCompoundTechnicalPattern)) {
+    entities.add(normalizeSuggestionEntity(match[0]));
+    compoundRanges.push([match.index, match.index + match[0].length]);
+  }
+  for (const match of source.matchAll(/[A-Za-z][A-Za-z0-9.+#/-]*/g)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (compoundRanges.some(([compoundStart, compoundEnd]) => start < compoundEnd && end > compoundStart)) continue;
+    const entity = normalizeSuggestionEntity(match[0]);
+    if (suggestionTechnicalIgnoredTerms.has(entity)) continue;
+    // One-letter C is an unambiguous language entity. Other one-letter prose is
+    // deliberately ignored so normal wording does not become a claimed fact.
+    if (entity.length > 1 || entity === "c") entities.add(entity);
+  }
+  return entities;
+}
+
+function firstUnsupportedEntity(afterEntities, beforeEntities, baseEntities) {
+  for (const entity of afterEntities) {
+    if (!beforeEntities.has(entity) && !baseEntities.has(entity)) return entity;
+  }
+  return "";
+}
+
+function factualDeltaFailure(before, after, baseDocument) {
+  const baseText = JSON.stringify(baseDocument).toLowerCase();
+  const beforeText = String(before || "").toLowerCase();
+  const afterText = String(after || "").toLowerCase();
+  const numberTokens = afterText.match(/(?:\b\d+(?:\.\d+)?%?|\d+年)/g) || [];
+  const unsupportedNumber = [...new Set(numberTokens.filter((token) => !beforeText.includes(token)))].find((token) => !baseText.includes(token));
+  if (unsupportedNumber) return `新增事实“${unsupportedNumber}”未在锁定简历中找到依据`;
+
+  const baseTechnicalEntities = extractSuggestionTechnicalEntities(JSON.stringify(baseDocument));
+  const unsupportedTechnicalEntity = firstUnsupportedEntity(
+    extractSuggestionTechnicalEntities(after),
+    extractSuggestionTechnicalEntities(before),
+    baseTechnicalEntities,
+  );
+  if (unsupportedTechnicalEntity) return `新增技术实体“${unsupportedTechnicalEntity}”未在锁定简历中找到依据`;
+
+  // Evidence from the locked ResumeVersion is the primary proof boundary. Chinese
+  // relationship/entity heuristics intentionally do not authorize or reject a
+  // REWRITE; numeric and complete technical-token checks remain deterministic
+  // defense-in-depth blockers above.
+  return "";
+}
+
+function normalizeSuggestionReferences(item, report) {
+  const claimIds = new Set((report.content?.claims || []).map((claim) => String(claim.claimId || "")));
+  const recommendations = new Set((report.content?.recommendations || []).map((value) => String(value || "")));
+  const sourceClaimIds = [...new Set((Array.isArray(item.sourceClaimIds) ? item.sourceClaimIds : []).map((value) => String(value || "").trim()).filter(Boolean))];
+  const recommendationRefs = [...new Set((Array.isArray(item.recommendationRefs) ? item.recommendationRefs : []).map((value) => String(value || "").trim()).filter(Boolean))];
+  if (sourceClaimIds.some((id) => !claimIds.has(id)) || recommendationRefs.some((value) => !recommendations.has(value))) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_OUTPUT", "建议引用了未绑定的报告事实或建议");
+  if (!sourceClaimIds.length && !recommendationRefs.length) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_OUTPUT", "建议缺少报告依据");
+  return { sourceClaimIds, recommendationRefs };
+}
+
+function normalizeGeneratedResumeSuggestions(data, { baseDocument, report }) {
+  if (!data || typeof data !== "object" || !Array.isArray(data.suggestions) || data.suggestions.length > 12) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_OUTPUT", "AI 建议输出结构不合法");
+  return data.suggestions.map((item, index) => {
+    const suggestionType = String(item?.suggestionType || "").trim();
+    const sectionType = String(item?.sectionType || "").trim();
+    const targetPath = String(item?.targetPath || "").trim();
+    const rationale = String(item?.rationale || "").trim();
+    const before = String(item?.before ?? "");
+    const after = String(item?.after ?? "");
+    if (!resumeSuggestionTypes.has(suggestionType) || !sectionType || !rationale || rationale.length > resumeSuggestionMaxTextLength || before.length > resumeSuggestionMaxTextLength) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_OUTPUT", `AI 建议 ${index + 1} 字段不合法`);
+    const refs = normalizeSuggestionReferences(item, report);
+    if (suggestionType === "FACT_REQUIRED") {
+      if (after || !Array.isArray(item.patch) || item.patch.length || !Array.isArray(item.factEvidence) || item.factEvidence.length) throw resumeSuggestionFailure(422, "SUGGESTION_INVALID_OUTPUT", "FACT_REQUIRED 不得包含可直接应用的虚构正文或事实证据");
+      // The location itself must still be a real editable field, even though this
+      // suggestion intentionally has no patch and cannot be accepted.
+      validateResumeSuggestionPatch(baseDocument, [{ op: "replace", path: targetPath, value: before }], targetPath, before, before);
+      return { sectionType, targetPath, suggestionType, rationale, before, after: "", patch: [], factEvidence: [], ...refs, failureCode: null };
+    }
+    const validatedPatch = validateResumeSuggestionPatch(baseDocument, item.patch, targetPath, before, after);
+    const factualFailure = factualDeltaFailure(before, after, baseDocument);
+    if (factualFailure) {
+      return { sectionType, targetPath, suggestionType: "FACT_REQUIRED", rationale: `${rationale}；${factualFailure}，请由用户补充后再修改。`, before, after: "", patch: [], factEvidence: [], ...refs, failureCode: "SUGGESTION_UNSUPPORTED_FACT" };
+    }
+    try {
+      const factEvidence = validateSuggestionEvidence({ baseDocument, before, after, factEvidence: item.factEvidence });
+      return { sectionType, targetPath, suggestionType, rationale, before, after, patch: [{ op: validatedPatch.op, path: validatedPatch.path, value: validatedPatch.value }], factEvidence, ...refs, failureCode: null };
+    } catch (error) {
+      if (!["SUGGESTION_EVIDENCE_MISSING", "SUGGESTION_EVIDENCE_INVALID"].includes(error.code)) throw error;
+      return { sectionType, targetPath, suggestionType: "FACT_REQUIRED", rationale: `${rationale}；${error.message}，请由用户补充后再修改。`, before, after: "", patch: [], factEvidence: [], ...refs, failureCode: error.code };
+    }
+  });
+}
+
+function materializeSuggestionDocument(baseResume, document, nextVersion) {
+  const dto = buildResumeDTO(baseResume);
+  const baseDocument = buildResumeSuggestionDocument(baseResume);
+  const next = { ...baseResume, title: document.title, targetPosition: document.targetPosition, selfEvaluation: document.selfEvaluation, version: nextVersion, resumeVersion: nextVersion, updatedAt: now() };
+  const sectionDetails = { ...(baseResume.sectionDetails || {}) };
+  const sectionContent = { ...(baseResume.sectionContent || {}) };
+  for (const section of dto.sections) {
+    const updatedEntries = document.sections[section.key]?.entries;
+    if (!updatedEntries) continue;
+    if (JSON.stringify(updatedEntries) === JSON.stringify(baseDocument.sections[section.key]?.entries || {})) continue;
+    const entries = section.entries.map((entry) => ({ ...entry, ...updatedEntries[String(entry.id)], isCurrent: Boolean(entry.isCurrent) }));
+    if (Array.isArray(baseResume.sectionDetails?.[section.label])) sectionDetails[section.label] = entries;
+    else if (Array.isArray(baseResume.sectionContent?.[section.label])) sectionContent[section.label] = entries.flatMap((entry) => entry.highlights || []);
+    else if (section.key === "skills" || section.key === "work" || section.key === "projects") {
+      next.sections = { ...(baseResume.sections || {}), [section.key]: entries.map((entry) => entry.highlights || []).flat() };
+    } else sectionDetails[section.label] = entries;
+  }
+  if (Object.keys(sectionDetails).length) next.sectionDetails = sectionDetails;
+  if (Object.keys(sectionContent).length) next.sectionContent = sectionContent;
+  return next;
+}
+
+function resolveSuggestionReportContext(store, user, report) {
+  if (!report || report.userId !== user.id) throw resumeSuggestionFailure(404, "SUGGESTION_REPORT_NOT_FOUND", "岗位匹配报告不存在");
+  if (!new Set(["COMPLETED", "DEGRADED"]).has(report.status) || !report.content) throw resumeSuggestionFailure(409, "SUGGESTION_REPORT_NOT_READY", "只有已完成或降级的报告可以生成简历建议");
+  const application = getOwnedJobApplication(store, user, report.jobApplicationId);
+  const match = getOwnedResumeJobMatch(store, user, report.resumeJobMatchId);
+  const fields = ["userId", "resumeId", "resumeVersionId", "resumeVersion", "resumeContentHash", "jobDescriptionId", "jobDescriptionParseResultId"];
+  if (!application || !match || fields.some((field) => report[field] === undefined || application[field] !== report[field] || match[field] !== report[field]) || match.jobApplicationId !== application.id) throw resumeSuggestionFailure(409, "SUGGESTION_INPUT_INVALID", "报告的固化输入不完整或不一致");
+  const history = store.resumeHistories.find((item) => item.id === report.resumeVersionId && item.resumeId === report.resumeId && item.resumeVersion === report.resumeVersion && item.contentHash === report.resumeContentHash && item.snapshot);
+  const jobDescription = getOwnedJobDescription(store, user, report.jobDescriptionId);
+  const parseResult = store.jobDescriptionParseResults.find((item) => item.id === report.jobDescriptionParseResultId && item.userId === user.id && item.jobDescriptionId === report.jobDescriptionId && item.status === "SUCCEEDED");
+  if (!history || buildResumeDTO(history.snapshot).contentHash !== report.resumeContentHash || !jobDescription || jobDescription.rawTextHash !== report.jobDescriptionRawTextHash || !parseResult || parseResult.rawTextHash !== report.jobDescriptionRawTextHash) throw resumeSuggestionFailure(409, "SUGGESTION_INPUT_INVALID", "报告绑定的简历版本或 JD 已失效");
+  return { application, match, history, jobDescription: { title: jobDescription.title, rawText: jobDescription.rawText, parsedData: parseResult.parsedData || {} } };
+}
+
+async function executeResumeSuggestionRun(store, user, report) {
+  const context = resolveSuggestionReportContext(store, user, report);
+  const config = getAiConfig(store, user.id);
+  const generationConfigHash = suggestionHash({ promptVersion: resumeSuggestionPromptVersion, schema: "resume-suggestions-v2-evidence", maxPatchOperations: resumeSuggestionMaxPatchOperations, maxTextLength: resumeSuggestionMaxTextLength });
+  const run = {
+    id: nextId(store.suggestionRuns), userId: user.id, jobApplicationId: report.jobApplicationId, resumeJobMatchId: report.resumeJobMatchId, matchReportId: report.id,
+    resumeId: report.resumeId, baseResumeVersionId: report.resumeVersionId, baseResumeVersion: report.resumeVersion, baseResumeContentHash: report.resumeContentHash,
+    jobDescriptionId: report.jobDescriptionId, reportVersion: report.reportVersion, promptVersion: resumeSuggestionPromptVersion, provider: config.provider, model: config.modelId,
+    generationConfigHash, inputHash: suggestionHash({ matchReportId: report.id, reportVersion: report.reportVersion, resumeId: report.resumeId, resumeVersionId: report.resumeVersionId, resumeContentHash: report.resumeContentHash, jobDescriptionId: report.jobDescriptionId, promptVersion: resumeSuggestionPromptVersion, generationConfigHash }),
+    status: "PENDING", failureCode: null, failureMessage: null, createdAt: now(), completedAt: null,
+  };
+  store.suggestionRuns.push(run);
+  await writeStore(store);
+  try {
+    const baseDocument = buildResumeSuggestionDocument(context.history.snapshot);
+    const prompt = buildResumeSuggestionPrompt({ resumeDocument: baseDocument, jobDescription: context.jobDescription, report });
+    const ai = await runAiJson(store, user.id, { schemaName: "resume_suggestions", schema: resumeSuggestionSchema, system: prompt.system, user: prompt.user, strictJson: true });
+    if (!ai.ok) throw resumeSuggestionFailure(ai.status || 502, ai.code === "AI_NOT_CONFIGURED" ? "SUGGESTION_PROVIDER_NOT_CONFIGURED" : "SUGGESTION_PROVIDER_UNAVAILABLE", ai.error || "建议生成服务不可用");
+    const normalized = normalizeGeneratedResumeSuggestions(ai.data, { baseDocument, report });
+    for (const item of normalized) store.resumeSuggestions.push({ id: nextId(store.resumeSuggestions), userId: user.id, suggestionRunId: run.id, ...item, status: "PENDING", createdAt: now(), decidedAt: null, appliedResumeVersion: null, appliedResumeVersionId: null });
+    run.status = "COMPLETED";
+    run.completedAt = now();
+    await writeStore(store);
+    return run;
+  } catch (error) {
+    run.status = "FAILED";
+    run.failureCode = error.code || "SUGGESTION_INVALID_OUTPUT";
+    run.failureMessage = String(error.message || "简历建议生成失败").slice(0, 500);
+    run.completedAt = now();
+    await writeStore(store);
+    throw resumeSuggestionFailure(error.status || 422, run.failureCode, run.failureMessage);
+  }
+}
+
+function publicSuggestionRun(store, run) {
+  return { ...run, suggestions: store.resumeSuggestions.filter((item) => item.suggestionRunId === run.id) };
+}
+
+async function acceptResumeSuggestion(store, user, suggestionId, body) {
+  const suggestion = store.resumeSuggestions.find((item) => item.id === suggestionId && item.userId === user.id);
+  if (!suggestion) throw resumeSuggestionFailure(404, "SUGGESTION_NOT_FOUND", "简历建议不存在");
+  if (suggestion.status !== "PENDING") throw resumeSuggestionFailure(409, "SUGGESTION_ALREADY_DECIDED", "该简历建议已处理，不能重复接受");
+  if (suggestion.suggestionType === "FACT_REQUIRED") throw resumeSuggestionFailure(409, "SUGGESTION_FACT_REQUIRED", "该建议需要用户先补充事实，不能直接应用");
+  const expectedBaseResumeVersion = Number(body?.expectedBaseResumeVersion);
+  if (!Number.isInteger(expectedBaseResumeVersion) || expectedBaseResumeVersion < 1) throw resumeSuggestionFailure(400, "SUGGESTION_INPUT_INVALID", "expectedBaseResumeVersion 必须为正整数");
+  const run = store.suggestionRuns.find((item) => item.id === suggestion.suggestionRunId && item.userId === user.id);
+  if (!run || run.status !== "COMPLETED" || run.baseResumeVersion !== expectedBaseResumeVersion) throw resumeSuggestionFailure(409, "RESUME_VERSION_CONFLICT", "建议绑定的简历版本已变化");
+  const resume = getOwnedResume(store, user, run.resumeId);
+  if (!resume || Number(resume.version) !== run.baseResumeVersion || buildResumeDTO(resume).contentHash !== run.baseResumeContentHash) throw resumeSuggestionFailure(409, "RESUME_VERSION_CONFLICT", "当前简历版本或内容已变化，不能覆盖后续修改");
+  const history = store.resumeHistories.find((item) => item.id === run.baseResumeVersionId && item.resumeId === run.resumeId && item.resumeVersion === run.baseResumeVersion && item.contentHash === run.baseResumeContentHash && item.snapshot);
+  if (!history) throw resumeSuggestionFailure(409, "RESUME_VERSION_CONFLICT", "建议的基础简历版本不可用");
+  const baseDocument = buildResumeSuggestionDocument(history.snapshot);
+  let validatedPatch;
+  try {
+    validatedPatch = validateResumeSuggestionPatch(baseDocument, suggestion.patch, suggestion.targetPath, suggestion.before, suggestion.after);
+  } catch (error) {
+    throw resumeSuggestionFailure(409, error.code || "SUGGESTION_INVALID_PATCH", "建议 patch 已失效或不安全");
+  }
+  const currentDocument = buildResumeSuggestionDocument(resume);
+  let currentValue;
+  try {
+    currentValue = validatedPatch.op === "add" ? "" : getSuggestionPathValue(currentDocument, validatedPatch.segments);
+  } catch {
+    throw resumeSuggestionFailure(409, "RESUME_VERSION_CONFLICT", "建议目标路径已变化");
+  }
+  if (currentValue !== suggestion.before) throw resumeSuggestionFailure(409, "RESUME_VERSION_CONFLICT", "建议目标内容已被修改");
+  try {
+    validateSuggestionEvidence({ baseDocument, before: suggestion.before, after: suggestion.after, factEvidence: suggestion.factEvidence });
+  } catch (error) {
+    throw resumeSuggestionFailure(409, error.code || "SUGGESTION_EVIDENCE_INVALID", "建议的锁定简历事实证据无效，不能应用");
+  }
+  if (factualDeltaFailure(suggestion.before, suggestion.after, baseDocument)) throw resumeSuggestionFailure(409, "SUGGESTION_UNSUPPORTED_FACT", "建议包含无依据的新事实，不能应用");
+  const patchedDocument = applyValidatedResumeSuggestionPatch(baseDocument, validatedPatch);
+  const nextResume = materializeSuggestionDocument(resume, patchedDocument, Number(resume.version) + 1);
+  const resumeIndex = store.resumes.findIndex((item) => item.id === resume.id && item.userId === user.id);
+  if (resumeIndex < 0) throw resumeSuggestionFailure(409, "RESUME_VERSION_CONFLICT", "当前简历不可用");
+  store.resumes[resumeIndex] = nextResume;
+  createResumeHistoryRecord(store, nextResume, "接受岗位匹配报告简历建议");
+  const appliedHistory = store.resumeHistories.at(-1);
+  suggestion.status = "ACCEPTED";
+  suggestion.decidedAt = now();
+  suggestion.appliedResumeVersion = appliedHistory.resumeVersion;
+  suggestion.appliedResumeVersionId = appliedHistory.id;
+  // Stage 7A strategy A: a newly created version invalidates every remaining
+  // pending suggestion from this run rather than silently rebasing patches.
+  for (const item of store.resumeSuggestions) {
+    if (item.suggestionRunId === run.id && item.id !== suggestion.id && item.status === "PENDING") {
+      item.status = "INVALIDATED";
+      item.decidedAt = suggestion.decidedAt;
+    }
+  }
+  await writeStore(store);
+  return { suggestion, resumeVersion: { id: appliedHistory.id, version: appliedHistory.resumeVersion, contentHash: appliedHistory.contentHash } };
+}
+
+async function rejectResumeSuggestion(store, user, suggestionId) {
+  const suggestion = store.resumeSuggestions.find((item) => item.id === suggestionId && item.userId === user.id);
+  if (!suggestion) throw resumeSuggestionFailure(404, "SUGGESTION_NOT_FOUND", "简历建议不存在");
+  if (suggestion.status !== "PENDING") throw resumeSuggestionFailure(409, "SUGGESTION_ALREADY_DECIDED", "该简历建议已处理，不能重复拒绝");
+  suggestion.status = "REJECTED";
+  suggestion.decidedAt = now();
+  await writeStore(store);
+  return suggestion;
+}
+
 function publicMatchReport(store, report) {
   const content = report.content ? {
     ...report.content,
@@ -2279,6 +2728,9 @@ async function handleApi(req, res) {
     store.jobApplications = store.jobApplications.filter((application) => application.jobDescriptionId !== item.id);
     store.resumeJobMatches = store.resumeJobMatches.filter((match) => !applicationIds.has(match.jobApplicationId) && match.jobDescriptionId !== item.id);
     store.matchReports = store.matchReports.filter((report) => !applicationIds.has(report.jobApplicationId) && report.jobDescriptionId !== item.id);
+    const suggestionRunIds = new Set(store.suggestionRuns.filter((run) => applicationIds.has(run.jobApplicationId) || run.jobDescriptionId === item.id).map((run) => run.id));
+    store.suggestionRuns = store.suggestionRuns.filter((run) => !suggestionRunIds.has(run.id));
+    store.resumeSuggestions = store.resumeSuggestions.filter((suggestion) => !suggestionRunIds.has(suggestion.suggestionRunId));
     await writeStore(store);
     return send(res, 204, {});
   }
@@ -2410,6 +2862,64 @@ async function handleApi(req, res) {
     }
   }
 
+  const reportSuggestionsMatch = pathname.match(/^\/api\/match-reports\/(\d+)\/resume-suggestions$/);
+  if (reportSuggestionsMatch && method === "GET") {
+    const user = requireUser(store, req);
+    const reportId = Number(reportSuggestionsMatch[1]);
+    const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id) : null;
+    if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "SUGGESTION_REPORT_NOT_FOUND" });
+    const items = store.suggestionRuns.filter((item) => item.userId === user.id && item.matchReportId === report.id).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || ""))).map((item) => publicSuggestionRun(store, item));
+    return send(res, 200, { items });
+  }
+
+  if (reportSuggestionsMatch && method === "POST") {
+    const user = requireUser(store, req);
+    const reportId = Number(reportSuggestionsMatch[1]);
+    const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id) : null;
+    try {
+      const item = await executeResumeSuggestionRun(store, user, report);
+      return send(res, 201, { item: publicSuggestionRun(store, item) });
+    } catch (error) {
+      return send(res, error.status || 422, { message: error.message || "简历建议生成失败", failureCode: error.code || "SUGGESTION_INVALID_OUTPUT" });
+    }
+  }
+
+  const suggestionRunDetail = pathname.match(/^\/api\/suggestion-runs\/(\d+)$/);
+  if (suggestionRunDetail && method === "GET") {
+    const user = requireUser(store, req);
+    const runId = Number(suggestionRunDetail[1]);
+    const item = Number.isInteger(runId) ? store.suggestionRuns.find((run) => run.id === runId && run.userId === user.id) : null;
+    if (!item) return send(res, 404, { message: "简历建议生成记录不存在", failureCode: "SUGGESTION_RUN_NOT_FOUND" });
+    return send(res, 200, { item: publicSuggestionRun(store, item) });
+  }
+
+  const suggestionDecision = pathname.match(/^\/api\/resume-suggestions\/(\d+)\/(accept|reject)$/);
+  if (suggestionDecision && method === "POST") {
+    const user = requireUser(store, req);
+    const suggestionId = Number(suggestionDecision[1]);
+    const action = suggestionDecision[2];
+    if (!Number.isInteger(suggestionId) || suggestionId < 1) return send(res, 400, { message: "suggestionId 必须是正整数", failureCode: "SUGGESTION_INPUT_INVALID" });
+    if (action === "reject") {
+      try {
+        const item = await rejectResumeSuggestion(store, user, suggestionId);
+        return send(res, 200, { item });
+      } catch (error) {
+        return send(res, error.status || 409, { message: error.message || "拒绝简历建议失败", failureCode: error.code || "SUGGESTION_ALREADY_DECIDED" });
+      }
+    }
+    if (suggestionDecisionLocks.has(suggestionId)) return send(res, 409, { message: "建议正在被处理，请刷新后重试", failureCode: "RESUME_VERSION_CONFLICT" });
+    suggestionDecisionLocks.add(suggestionId);
+    try {
+      const body = await readJson(req);
+      const result = await acceptResumeSuggestion(store, user, suggestionId, body);
+      return send(res, 201, { item: result.suggestion, resumeVersion: result.resumeVersion });
+    } catch (error) {
+      return send(res, error.status || 409, { message: error.message || "接受简历建议失败", failureCode: error.code || "RESUME_VERSION_CONFLICT" });
+    } finally {
+      suggestionDecisionLocks.delete(suggestionId);
+    }
+  }
+
   const matchReportDetail = pathname.match(/^\/api\/match-reports\/(\d+)$/);
   if (matchReportDetail && method === "GET") {
     const user = requireUser(store, req);
@@ -2502,6 +3012,9 @@ async function handleApi(req, res) {
     store.jobApplications = store.jobApplications.filter((item) => item.resumeId !== resume.id);
     store.resumeJobMatches = store.resumeJobMatches.filter((item) => item.resumeId !== resume.id);
     store.matchReports = store.matchReports.filter((item) => !applicationIds.has(item.jobApplicationId) && item.resumeId !== resume.id);
+    const suggestionRunIds = new Set(store.suggestionRuns.filter((run) => applicationIds.has(run.jobApplicationId) || run.resumeId === resume.id).map((run) => run.id));
+    store.suggestionRuns = store.suggestionRuns.filter((run) => !suggestionRunIds.has(run.id));
+    store.resumeSuggestions = store.resumeSuggestions.filter((suggestion) => !suggestionRunIds.has(suggestion.suggestionRunId));
     await writeStore(store);
     return send(res, 204, {});
   }
