@@ -1,3 +1,3 @@
 # 当前任务
 
-Stage 8 已正式完成；Stage 9 尚未开始。
+Stage 9A Bounded Agentic RAG backend 已通过；Stage 9B UI 尚未开始。

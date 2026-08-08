@@ -30,6 +30,13 @@ function cjkNgrams(value) {
   return unique(output);
 }
 
+function cjkBigrams(value) {
+  const groups = normalize(value).match(/[\u4e00-\u9fff]+/g) || [];
+  const output = [];
+  for (const group of groups) for (let index = 0; index + 2 <= group.length; index += 1) output.push(group.slice(index, index + 2));
+  return unique(output);
+}
+
 function coverage(value, quote) {
   const terms = cjkNgrams(value);
   const quoteTerms = new Set(cjkNgrams(quote));
@@ -126,4 +133,38 @@ export function validateClaimSupport({ claimText, citations, localQuotes }) {
   if (adviceLanguage.test(quoteText) && factEscalation.test(claim)) return failure("POLARITY_MISMATCH", resultMetrics);
   if (!resultMetrics.parallelSupported && resultMetrics.semanticCoverage < minimumSemanticCoverage) return failure("INSUFFICIENT_SEMANTIC_OVERLAP", resultMetrics);
   return { supported: true, claimSupportVersion, supportStatus: "SUPPORTED", supportFailureCode: "", supportMetrics: resultMetrics };
+}
+
+const verifiedResumeSubjectPrefix = /^(?:用户|候选人|候选者|该候选者|简历持有人|简历作者|应聘者|该应聘者|求职者|申请人|本人|其本人)(?:的)?/;
+const verifiedResumePossessionPrefix = /^(?:(?:曾经|曾)?有|具备|拥有)/;
+const verifiedResumeExperienceSuffix = /(?:相关)?经验$/;
+
+function verifiedResumeSupportText(value) {
+  const original = String(value || "").trim();
+  const normalized = original
+    .replace(/[。.!！?？]+$/g, "")
+    .replace(verifiedResumeSubjectPrefix, "")
+    .replace(verifiedResumePossessionPrefix, "")
+    .replace(verifiedResumeExperienceSuffix, "")
+    .trim();
+  return normalized || original;
+}
+
+export function validateVerifiedResumeFactSupport({ claimText, citations, localQuotes }) {
+  const supportText = verifiedResumeSupportText(claimText);
+  const result = validateClaimSupport({ claimText: supportText, citations, localQuotes });
+  if (result.supported || result.supportFailureCode !== "INSUFFICIENT_SEMANTIC_OVERLAP") return result;
+  const quotes = unique((localQuotes || citations?.map((citation) => citation.quote) || []).map((quote) => String(quote || "").trim()));
+  const claimBigrams = cjkBigrams(supportText);
+  const quoteBigrams = new Set(cjkBigrams(quotes.join("\n")));
+  const supportedBigramCount = claimBigrams.filter((term) => quoteBigrams.has(term)).length;
+  const bigramCoverage = claimBigrams.length ? Number((supportedBigramCount / claimBigrams.length).toFixed(4)) : 0;
+  if (!claimBigrams.length || bigramCoverage < minimumSemanticCoverage) return result;
+  return {
+    ...result,
+    supported: true,
+    supportStatus: "SUPPORTED",
+    supportFailureCode: "",
+    supportMetrics: { ...result.supportMetrics, verifiedResumeBigramCount: claimBigrams.length, verifiedResumeSupportedBigramCount: supportedBigramCount, verifiedResumeBigramCoverage: bigramCoverage },
+  };
 }

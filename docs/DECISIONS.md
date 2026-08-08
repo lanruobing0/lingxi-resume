@@ -17,3 +17,8 @@
 | 本地 activeIndexRunId 是有效向量的权威来源 | 外部 Point 可能在清理失败后暂留 | 只有写入验证完成后才切换；旧 Point 残留不得被后续检索视为有效 | 阶段 5A |
 | 阶段 5B 以本地当前状态复核 Qdrant 命中 | Qdrant payload 可能陈旧或孤立 | 仅返回当前 PROCESSED/INDEXED 文档、当前 Chunk 版本且 Point `indexRunId` 等于 `activeIndexRunId` 的结果 | 阶段 5B |
 | 混合检索默认使用确定性 RRF | 关键词分数与 cosine 分数不可直接相加 | 保留两路排名/贡献，Reranker 默认关闭且失败回退 RRF | 阶段 5B |
+| Stage 9A Agent tool policy 完全由服务器持有 | 检索内容和模型输出都可能包含 Prompt Injection 或任意工具名 | 只执行六项固定只读 action；模型只返回 action/reason/query/done，未知 action 以 `AGENT_ACTION_NOT_ALLOWED` 停止 | 阶段 9A |
+| Stage 9A 同步 run 最多执行 6 个单 action step | 第一版需要可审计、可预测地终止，不能由模型扩大预算或递归 | maxSteps 由 API 校验并受服务器硬上限约束；超限状态为 `STOPPED_LIMIT`，不做无限 retry 或 recursive agent | 阶段 9A |
+| Agent 最终输出按四类事实边界持久化且只读 | JD、MatchReport 和 Knowledge 不能证明用户已有经历 | VERIFIED_RESUME_FACT 只能引用锁定 ResumeVersion；外部知识、匹配缺口和建议分层保存，禁止自动写回 Resume 或 JobApplication | 阶段 9A |
+| Stage 9A 检索只复用 Stage 5B KnowledgeRetrievalService | 避免第二套检索逻辑和不可追溯 sourceId | AgentStep 保存真实 retrievalRunId 与候选 sourceRefs；失败/降级 RetrievalRun 仍保留审计 | 阶段 9A |
+| VERIFIED_RESUME_FACT 类型本身触发完整 Resume claim-support | 真实 RESUME sourceId 可能引用无关 quote，sourceType 不能自动授权用户事实 | 每条 claim 必须由其实际引用的锁定 Resume quote 支持；不依赖 action verb，失败使用 `AGENT_UNSUPPORTED_RESUME_FACT` | 阶段 9A 首验整改 |

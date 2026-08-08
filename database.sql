@@ -504,3 +504,39 @@ INSERT INTO system_notice (title, content) VALUES
 --   UNIQUE KEY uq_rag_feedback_answer (answer_id),
 --   INDEX idx_rag_feedback_owner_session (user_id, session_id)
 -- );
+
+-- Phase 9A bounded Agentic RAG production reference. The Node runtime uses
+-- agentRuns and agentSteps in the local JSON store. Inputs/outputs are safe,
+-- bounded audit summaries; API keys, hidden prompts, vectors and embeddings
+-- must never be persisted in these tables.
+-- CREATE TABLE agent_run (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   job_application_id BIGINT NOT NULL, resume_id BIGINT NOT NULL,
+--   resume_version_id BIGINT NOT NULL, resume_version INT NOT NULL,
+--   resume_content_hash CHAR(64) NOT NULL, job_description_id BIGINT NOT NULL,
+--   job_description_parse_result_id BIGINT NOT NULL, match_report_id BIGINT NOT NULL,
+--   status VARCHAR(24) NOT NULL, objective TEXT NOT NULL,
+--   max_steps INT NOT NULL, current_step INT NOT NULL DEFAULT 0,
+--   provider VARCHAR(80) NULL, model VARCHAR(160) NULL,
+--   prompt_version VARCHAR(80) NOT NULL, generation_config_hash CHAR(64) NOT NULL,
+--   allowed_actions_json JSON NOT NULL, final_result_json JSON NULL,
+--   failure_code VARCHAR(100) NULL, failure_message TEXT NULL,
+--   created_at DATETIME NOT NULL, completed_at DATETIME NULL,
+--   CONSTRAINT fk_agent_run_user FOREIGN KEY (user_id) REFERENCES user(id),
+--   CONSTRAINT fk_agent_run_application FOREIGN KEY (job_application_id) REFERENCES job_application(id),
+--   CONSTRAINT fk_agent_run_report FOREIGN KEY (match_report_id) REFERENCES match_report(id),
+--   INDEX idx_agent_run_owner_created (user_id, created_at),
+--   INDEX idx_agent_run_application_created (job_application_id, created_at)
+-- );
+-- CREATE TABLE agent_step (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   agent_run_id BIGINT NOT NULL, step_index INT NOT NULL,
+--   action_type VARCHAR(64) NOT NULL, reason TEXT NOT NULL,
+--   input_json JSON NOT NULL, output_json JSON NULL, source_refs_json JSON NOT NULL,
+--   retrieval_run_id BIGINT NULL, status VARCHAR(24) NOT NULL,
+--   started_at DATETIME NOT NULL, completed_at DATETIME NULL,
+--   CONSTRAINT fk_agent_step_run FOREIGN KEY (agent_run_id) REFERENCES agent_run(id),
+--   CONSTRAINT fk_agent_step_retrieval FOREIGN KEY (retrieval_run_id) REFERENCES knowledge_retrieval_run(id),
+--   UNIQUE KEY uq_agent_step_run_index (agent_run_id, step_index),
+--   INDEX idx_agent_step_owner_run (user_id, agent_run_id)
+-- );
