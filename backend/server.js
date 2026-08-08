@@ -11,6 +11,21 @@ import { validateKnowledgeClaims, sourceAvailability } from "./citation-validato
 import { buildCandidatePromptPayload, buildReportRetrievalPlans, createReportInputHash, allowedBaseEvidence, reportGenerationConfigHash } from "./grounded-report-service.js";
 import { buildGroundedReportPrompt, groundedReportPromptVersion, groundedReportSchema } from "./grounded-report-prompt.js";
 import { buildResumeSuggestionPrompt, resumeSuggestionPromptVersion, resumeSuggestionSchema } from "./resume-suggestion-prompt.js";
+import {
+  answerFeedbackSchema,
+  buildAnswerFeedbackPrompt,
+  buildInterviewQuestionPrompt,
+  buildInterviewRetrievalRequest,
+  buildInterviewSources,
+  interviewFailure,
+  interviewGenerationConfigHash,
+  interviewQuestionsSchema,
+  interviewResumeFacts,
+  mockInterviewFeedbackPromptVersion,
+  mockInterviewPromptVersion,
+  normalizeAnswerFeedback,
+  normalizeInterviewQuestions,
+} from "./mock-interview-service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
@@ -194,8 +209,11 @@ const seedData = {
   knowledgeIndexRuns: [],
   knowledgeVectorRecords: [],
   knowledgeRetrievalRuns: [],
+  interviewSessions: [],
+  interviewSessionQuestions: [],
   mockInterviews: [],
   interviewAnswers: [],
+  answerFeedbacks: [],
   systemNotices: [
     {
       id: 1,
@@ -681,8 +699,11 @@ async function readStore() {
     knowledgeIndexRuns: store.knowledgeIndexRuns || [],
     knowledgeVectorRecords: store.knowledgeVectorRecords || [],
     knowledgeRetrievalRuns: store.knowledgeRetrievalRuns || [],
+    interviewSessions: store.interviewSessions || [],
+    interviewSessionQuestions: store.interviewSessionQuestions || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
+    answerFeedbacks: store.answerFeedbacks || [],
     systemNotices: store.systemNotices || seedData.systemNotices,
     aiConfig: store.aiConfig || seedData.aiConfig,
     aiProviderConfigs: store.aiProviderConfigs || {},
@@ -2293,6 +2314,210 @@ function publicMatchReportSummary(report) {
   };
 }
 
+function publicInterviewSourceRef(store, source) {
+  return {
+    ...source,
+    availability: source.sourceType === "KNOWLEDGE" ? (sourceAvailability(store, source) ? "AVAILABLE" : "UNAVAILABLE") : "AVAILABLE",
+  };
+}
+
+function publicInterviewQuestion(store, question) {
+  return {
+    ...question,
+    sourceRefs: question.sourceRefs.map((source) => publicInterviewSourceRef(store, source)),
+    expectedPoints: question.expectedPoints.map((point) => ({ ...point, sourceRefs: point.sourceRefs.map((source) => publicInterviewSourceRef(store, source)) })),
+  };
+}
+
+function publicAnswerFeedback(store, feedback) {
+  const mapItems = (items) => (items || []).map((item) => ({ ...item, sourceRefs: item.sourceRefs.map((source) => publicInterviewSourceRef(store, source)) }));
+  return { ...feedback, strengths: mapItems(feedback.strengths), weaknesses: mapItems(feedback.weaknesses), missingPoints: mapItems(feedback.missingPoints) };
+}
+
+function publicInterviewSession(store, session, { includeQuestions = false } = {}) {
+  const questions = store.interviewSessionQuestions.filter((item) => item.sessionId === session.id && item.userId === session.userId).sort((left, right) => left.sequence - right.sequence);
+  const answers = store.interviewAnswers.filter((item) => item.sessionId === session.id && item.userId === session.userId);
+  const item = {
+    ...session,
+    questionCount: questions.length || session.questionCount,
+    answeredCount: answers.length,
+  };
+  if (includeQuestions) item.questions = questions.map((question) => ({ ...publicInterviewQuestion(store, question), answerId: answers.find((answer) => answer.questionId === question.id)?.id || null }));
+  return item;
+}
+
+function deleteInterviewSessions(store, predicate) {
+  const sessionIds = new Set(store.interviewSessions.filter(predicate).map((item) => item.id));
+  if (!sessionIds.size) return;
+  store.interviewSessions = store.interviewSessions.filter((item) => !sessionIds.has(item.id));
+  store.interviewSessionQuestions = store.interviewSessionQuestions.filter((item) => !sessionIds.has(item.sessionId));
+  const answerIds = new Set(store.interviewAnswers.filter((item) => sessionIds.has(item.sessionId)).map((item) => item.id));
+  store.interviewAnswers = store.interviewAnswers.filter((item) => !sessionIds.has(item.sessionId));
+  store.answerFeedbacks = store.answerFeedbacks.filter((item) => !sessionIds.has(item.sessionId) && !answerIds.has(item.answerId));
+}
+
+function resolveInterviewContext(store, user, application, report) {
+  if (!report || report.userId !== user.id) throw interviewFailure(404, "INTERVIEW_REPORT_NOT_FOUND", "岗位匹配报告不存在");
+  if (report.jobApplicationId !== application.id) throw interviewFailure(409, "INTERVIEW_INPUT_INVALID", "岗位匹配报告不属于该求职分析任务");
+  if (!["COMPLETED", "DEGRADED"].includes(report.status) || !report.content) throw interviewFailure(409, "INTERVIEW_REPORT_NOT_READY", "只有已完成或降级完成的匹配报告可以生成模拟面试");
+  const match = store.resumeJobMatches.find((item) => item.id === report.resumeJobMatchId && item.userId === user.id);
+  const context = resolveMatchReportContext(store, user, application, match);
+  const bindingFields = ["resumeId", "resumeVersionId", "resumeVersion", "resumeContentHash", "jobDescriptionId", "jobDescriptionParseResultId"];
+  if (bindingFields.some((field) => report[field] !== application[field])) throw interviewFailure(409, "INTERVIEW_INPUT_INVALID", "匹配报告与锁定简历/JD 输入不一致");
+  return { ...context, match };
+}
+
+async function executeInterviewSession(store, user, application, report, options) {
+  const context = resolveInterviewContext(store, user, application, report);
+  const aiResume = buildAiResumeContext(context.resumeSnapshot);
+  const config = getAiConfig(store, user.id);
+  const generationConfigHash = interviewGenerationConfigHash(options);
+  const session = {
+    id: nextId(store.interviewSessions),
+    userId: user.id,
+    jobApplicationId: application.id,
+    resumeId: application.resumeId,
+    resumeVersionId: application.resumeVersionId,
+    resumeVersion: application.resumeVersion,
+    resumeContentHash: application.resumeContentHash,
+    jobDescriptionId: application.jobDescriptionId,
+    jobDescriptionParseResultId: application.jobDescriptionParseResultId,
+    matchReportId: report.id,
+    status: "PENDING",
+    provider: config.provider,
+    model: config.modelId,
+    promptVersion: mockInterviewPromptVersion,
+    feedbackPromptVersion: mockInterviewFeedbackPromptVersion,
+    generationConfigHash,
+    inputHash: "",
+    questionCount: options.questionCount,
+    retrievalRunIds: [],
+    retrievalStatus: "PENDING",
+    failureCode: null,
+    failureMessage: null,
+    createdAt: now(),
+    completedAt: null,
+  };
+  store.interviewSessions.push(session);
+  await writeStore(store);
+  try {
+    let retrieval = null;
+    const retrievalRunOffset = store.knowledgeRetrievalRuns.length;
+    try {
+      retrieval = await knowledgeRetrievalService().search(store, buildInterviewRetrievalRequest({ aiResume, parseResult: context.parseResult, matchReport: report, match: context.match, ...options }), user.id);
+      session.retrievalRunIds = [retrieval.run.id];
+      session.retrievalStatus = retrieval.degraded || retrieval.rerankerFallback ? "DEGRADED" : "COMPLETED";
+      if (retrieval.rerankerFallback && !retrieval.run.degraded) {
+        session.retrievalStatus = "DEGRADED";
+        session.failureCode = retrieval.rerankerFailureCode || "INTERVIEW_RERANKER_DEGRADED";
+      }
+    } catch (error) {
+      const failedRun = store.knowledgeRetrievalRuns.slice(retrievalRunOffset).find((item) => item.createdBy === user.id && item.status === "FAILED");
+      if (failedRun) session.retrievalRunIds = [failedRun.id];
+      session.retrievalStatus = "FAILED";
+      session.failureCode = error.code || "INTERVIEW_RETRIEVAL_FAILED";
+      session.failureMessage = String(error.message || "面试知识检索失败").slice(0, 500);
+    }
+    const sources = buildInterviewSources({ aiResume, parseResult: context.parseResult, matchReport: report, match: context.match, retrieval });
+    for (const sourceType of ["RESUME", "JD", "MATCH_GAP"]) {
+      if (!sources.some((source) => source.sourceType === sourceType)) throw interviewFailure(409, "INTERVIEW_SOURCE_UNAVAILABLE", `缺少可追溯的 ${sourceType} 问题来源`);
+    }
+    const prompt = buildInterviewQuestionPrompt({ aiResume, jobDescription: context.jobDescription, parseResult: context.parseResult, matchReport: report, sources, questionCount: options.questionCount });
+    const ai = await runAiJson(store, user.id, { schemaName: "rag_mock_interview_questions", schema: interviewQuestionsSchema, system: prompt.system, user: prompt.user, strictJson: true });
+    if (!ai.ok) {
+      const code = ai.code === "AI_NOT_CONFIGURED" ? "INTERVIEW_PROVIDER_NOT_CONFIGURED" : ai.code === "REPORT_INVALID_RESPONSE" ? "INTERVIEW_INVALID_RESPONSE" : "INTERVIEW_PROVIDER_UNAVAILABLE";
+      throw interviewFailure(ai.status || 502, code, ai.error || "面试题生成服务不可用");
+    }
+    const generated = normalizeInterviewQuestions(ai.data, sources, options.questionCount);
+    generated.forEach((question, index) => store.interviewSessionQuestions.push({
+      id: nextId(store.interviewSessionQuestions), userId: user.id, sessionId: session.id, sequence: index + 1,
+      ...question, createdAt: now(),
+    }));
+    session.inputHash = contentHash(JSON.stringify({
+      jobApplicationId: application.id,
+      matchReportId: report.id,
+      resumeVersionId: application.resumeVersionId,
+      resumeContentHash: application.resumeContentHash,
+      jobDescriptionParseResultId: application.jobDescriptionParseResultId,
+      retrievalRunIds: session.retrievalRunIds,
+      promptVersion: session.promptVersion,
+      generationConfigHash,
+    }));
+    const degraded = report.status === "DEGRADED" || session.retrievalStatus !== "COMPLETED" || !sources.some((source) => source.sourceType === "KNOWLEDGE");
+    session.status = degraded ? "DEGRADED" : "IN_PROGRESS";
+    if (degraded && !session.failureCode) session.failureCode = !sources.some((source) => source.sourceType === "KNOWLEDGE") ? "INTERVIEW_NO_KNOWLEDGE_EVIDENCE" : "INTERVIEW_RETRIEVAL_DEGRADED";
+    if (degraded && !session.failureMessage) session.failureMessage = "面试已降级生成；检索状态或知识证据不完整。";
+    await writeStore(store);
+    return session;
+  } catch (error) {
+    session.status = "FAILED";
+    session.failureCode = error.code || "INTERVIEW_GENERATION_FAILED";
+    session.failureMessage = String(error.message || "模拟面试生成失败").slice(0, 500);
+    session.completedAt = now();
+    store.interviewSessionQuestions = store.interviewSessionQuestions.filter((item) => item.sessionId !== session.id);
+    await writeStore(store);
+    throw interviewFailure(error.status || 502, session.failureCode, session.failureMessage);
+  }
+}
+
+async function submitInterviewAnswer(store, user, session, question, answerText) {
+  if (!["IN_PROGRESS", "DEGRADED"].includes(session.status) || session.completedAt) throw interviewFailure(409, "INTERVIEW_SESSION_NOT_ACTIVE", "当前模拟面试不可继续回答");
+  if (store.interviewAnswers.some((item) => item.sessionId === session.id && item.questionId === question.id)) throw interviewFailure(409, "INTERVIEW_ANSWER_EXISTS", "该面试题已提交回答");
+  const lockedResumeHistory = store.resumeHistories.find((item) => item.id === session.resumeVersionId
+    && item.resumeId === session.resumeId
+    && item.resumeVersion === session.resumeVersion
+    && item.contentHash === session.resumeContentHash
+    && item.snapshot);
+  if (!lockedResumeHistory || buildResumeDTO(lockedResumeHistory.snapshot).contentHash !== session.resumeContentHash) throw interviewFailure(409, "INTERVIEW_INPUT_INVALID", "模拟面试锁定的 ResumeVersion 已失效");
+  const lockedResumeFacts = interviewResumeFacts(buildAiResumeContext(lockedResumeHistory.snapshot));
+  const answer = {
+    id: nextId(store.interviewAnswers), userId: user.id, sessionId: session.id, questionId: question.id,
+    resumeId: session.resumeId, resumeVersionId: session.resumeVersionId, resumeVersion: session.resumeVersion, resumeContentHash: session.resumeContentHash,
+    answerText, status: "SUBMITTED", createdAt: now(),
+  };
+  const config = getAiConfig(store, user.id);
+  const feedback = {
+    id: nextId(store.answerFeedbacks), userId: user.id, sessionId: session.id, questionId: question.id, answerId: answer.id,
+    status: "PENDING", score: null, strengths: [], weaknesses: [], missingPoints: [], improvedAnswer: "", improvedAnswerIsSuggestion: true, followUpQuestion: "",
+    provider: config.provider, model: config.modelId, promptVersion: mockInterviewFeedbackPromptVersion,
+    sourceRefs: question.sourceRefs, failureCode: null, failureMessage: null, createdAt: now(), completedAt: null,
+  };
+  store.interviewAnswers.push(answer);
+  store.answerFeedbacks.push(feedback);
+  await writeStore(store);
+  try {
+    const prompt = buildAnswerFeedbackPrompt({ question, answerText });
+    const ai = await runAiJson(store, user.id, { schemaName: "rag_mock_interview_feedback", schema: answerFeedbackSchema, system: prompt.system, user: prompt.user, strictJson: true });
+    if (!ai.ok) {
+      const code = ai.code === "AI_NOT_CONFIGURED" ? "FEEDBACK_PROVIDER_NOT_CONFIGURED" : ai.code === "REPORT_INVALID_RESPONSE" ? "FEEDBACK_INVALID_RESPONSE" : "FEEDBACK_PROVIDER_UNAVAILABLE";
+      throw interviewFailure(ai.status || 502, code, ai.error || "面试反馈服务不可用");
+    }
+    const answerSource = { sourceId: "USER_ANSWER", sourceType: "USER_ANSWER", refId: `answer:${answer.id}`, quote: answerText };
+    const normalized = normalizeAnswerFeedback(ai.data, [...question.sourceRefs, answerSource], { userFactEvidence: [...lockedResumeFacts, answerText] });
+    if (question.category === "KNOWLEDGE") {
+      const ungrounded = [...normalized.strengths, ...normalized.weaknesses, ...normalized.missingPoints].some((item) => !item.sourceRefs.some((source) => source.sourceType === "KNOWLEDGE"));
+      if (ungrounded) throw interviewFailure(422, "FEEDBACK_KNOWLEDGE_SOURCE_REQUIRED", "知识题反馈的判断必须引用 RAG knowledge 来源");
+    }
+    Object.assign(feedback, normalized);
+    feedback.status = session.status === "DEGRADED" || question.sourceRefs.some((source) => source.sourceType === "KNOWLEDGE" && !sourceAvailability(store, source)) ? "DEGRADED" : "COMPLETED";
+    feedback.completedAt = now();
+    answer.status = "FEEDBACK_COMPLETED";
+    await writeStore(store);
+    return { answer, feedback };
+  } catch (error) {
+    feedback.status = "FAILED";
+    feedback.failureCode = error.code || "FEEDBACK_GENERATION_FAILED";
+    feedback.failureMessage = String(error.message || "面试反馈生成失败").slice(0, 500);
+    feedback.completedAt = now();
+    answer.status = "FEEDBACK_FAILED";
+    await writeStore(store);
+    const failure = interviewFailure(error.status || 502, feedback.failureCode, feedback.failureMessage);
+    failure.answerId = answer.id;
+    failure.feedbackId = feedback.id;
+    throw failure;
+  }
+}
+
 async function generateAiAnalysis(store, userId, resume, position) {
   const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
@@ -2723,6 +2948,7 @@ async function handleApi(req, res) {
     const item = getOwnedJobDescription(store, user, jobDescriptionMatch[1]);
     if (!item) return send(res, 404, { message: "岗位 JD 不存在" });
     const applicationIds = new Set(store.jobApplications.filter((application) => application.jobDescriptionId === item.id).map((application) => application.id));
+    deleteInterviewSessions(store, (session) => applicationIds.has(session.jobApplicationId) || session.jobDescriptionId === item.id);
     store.jobDescriptions = store.jobDescriptions.filter((candidate) => candidate.id !== item.id);
     store.jobDescriptionParseResults = store.jobDescriptionParseResults.filter((result) => result.jobDescriptionId !== item.id);
     store.jobApplications = store.jobApplications.filter((application) => application.jobDescriptionId !== item.id);
@@ -2860,6 +3086,110 @@ async function handleApi(req, res) {
     } catch (error) {
       return send(res, error.status || 502, { message: error.message || "报告生成失败", failureCode: error.code || "REPORT_RETRIEVAL_FAILED" });
     }
+  }
+
+  const applicationInterviewSessions = pathname.match(/^\/api\/job-applications\/(\d+)\/interview-sessions$/);
+  if (applicationInterviewSessions && method === "GET") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationInterviewSessions[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "INTERVIEW_APPLICATION_NOT_FOUND" });
+    const items = store.interviewSessions.filter((item) => item.userId === user.id && item.jobApplicationId === application.id)
+      .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
+      .map((item) => publicInterviewSession(store, item));
+    return send(res, 200, { items });
+  }
+
+  if (applicationInterviewSessions && method === "POST") {
+    const user = requireUser(store, req);
+    const application = getOwnedJobApplication(store, user, applicationInterviewSessions[1]);
+    if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "INTERVIEW_APPLICATION_NOT_FOUND" });
+    const body = await readJson(req);
+    const matchReportId = Number(body.matchReportId);
+    if (!Number.isInteger(matchReportId) || matchReportId < 1) return send(res, 400, { message: "matchReportId 必须是正整数", failureCode: "INTERVIEW_INPUT_INVALID" });
+    const questionCount = body.questionCount === undefined ? 4 : Number(body.questionCount);
+    if (!Number.isInteger(questionCount) || questionCount < 3 || questionCount > 8) return send(res, 400, { message: "questionCount 必须是 3 到 8 的整数", failureCode: "INTERVIEW_INPUT_INVALID" });
+    const searchMode = String(body.searchMode || "HYBRID").toUpperCase();
+    if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "INTERVIEW_INPUT_INVALID" });
+    if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "INTERVIEW_INPUT_INVALID" });
+    const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
+    try {
+      const item = await executeInterviewSession(store, user, application, report, { questionCount, searchMode, useReranker: body.useReranker === true });
+      return send(res, 201, { item: publicInterviewSession(store, item, { includeQuestions: true }) });
+    } catch (error) {
+      return send(res, error.status || 502, { message: error.message || "模拟面试生成失败", failureCode: error.code || "INTERVIEW_GENERATION_FAILED" });
+    }
+  }
+
+  const interviewSessionDetail = pathname.match(/^\/api\/interview-sessions\/(\d+)$/);
+  if (interviewSessionDetail && method === "GET") {
+    const user = requireUser(store, req);
+    const sessionId = Number(interviewSessionDetail[1]);
+    const item = Number.isInteger(sessionId) ? store.interviewSessions.find((session) => session.id === sessionId && session.userId === user.id) : null;
+    if (!item) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
+    return send(res, 200, { item: publicInterviewSession(store, item, { includeQuestions: true }) });
+  }
+
+  const interviewSessionQuestions = pathname.match(/^\/api\/interview-sessions\/(\d+)\/questions$/);
+  if (interviewSessionQuestions && method === "GET") {
+    const user = requireUser(store, req);
+    const sessionId = Number(interviewSessionQuestions[1]);
+    const session = Number.isInteger(sessionId) ? store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id) : null;
+    if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
+    const items = store.interviewSessionQuestions.filter((item) => item.sessionId === session.id && item.userId === user.id).sort((left, right) => left.sequence - right.sequence).map((item) => publicInterviewQuestion(store, item));
+    return send(res, 200, { items });
+  }
+
+  const interviewQuestionAnswer = pathname.match(/^\/api\/interview-sessions\/(\d+)\/questions\/(\d+)\/answers$/);
+  if (interviewQuestionAnswer && method === "POST") {
+    const user = requireUser(store, req);
+    const sessionId = Number(interviewQuestionAnswer[1]);
+    const questionId = Number(interviewQuestionAnswer[2]);
+    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id);
+    if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
+    const question = store.interviewSessionQuestions.find((item) => item.id === questionId && item.sessionId === session.id && item.userId === user.id);
+    if (!question) return send(res, 404, { message: "面试题不存在", failureCode: "INTERVIEW_QUESTION_NOT_FOUND" });
+    const body = await readJson(req);
+    let answerText;
+    try { answerText = requireNonEmptyText(body.answerText, "answerText"); }
+    catch (error) { return send(res, 400, { message: error.message, failureCode: "INTERVIEW_INPUT_INVALID" }); }
+    if (answerText.length > 12000) return send(res, 400, { message: "answerText 不能超过 12000 字符", failureCode: "INTERVIEW_INPUT_INVALID" });
+    try {
+      const result = await submitInterviewAnswer(store, user, session, question, answerText);
+      return send(res, 201, { item: result.answer, feedback: publicAnswerFeedback(store, result.feedback) });
+    } catch (error) {
+      return send(res, error.status || 502, { message: error.message || "面试反馈生成失败", failureCode: error.code || "FEEDBACK_GENERATION_FAILED", answerId: error.answerId || null, feedbackId: error.feedbackId || null });
+    }
+  }
+
+  const interviewAnswerFeedback = pathname.match(/^\/api\/interview-sessions\/(\d+)\/answers\/(\d+)\/feedback$/);
+  if (interviewAnswerFeedback && method === "GET") {
+    const user = requireUser(store, req);
+    const sessionId = Number(interviewAnswerFeedback[1]);
+    const answerId = Number(interviewAnswerFeedback[2]);
+    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id);
+    if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
+    const answer = store.interviewAnswers.find((item) => item.id === answerId && item.sessionId === session.id && item.userId === user.id);
+    const feedback = answer ? store.answerFeedbacks.find((item) => item.answerId === answer.id && item.sessionId === session.id && item.userId === user.id) : null;
+    if (!answer || !feedback) return send(res, 404, { message: "面试反馈不存在", failureCode: "FEEDBACK_NOT_FOUND" });
+    return send(res, 200, { item: publicAnswerFeedback(store, feedback), answer });
+  }
+
+  const completeInterviewSession = pathname.match(/^\/api\/interview-sessions\/(\d+)\/complete$/);
+  if (completeInterviewSession && method === "POST") {
+    const user = requireUser(store, req);
+    const sessionId = Number(completeInterviewSession[1]);
+    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id);
+    if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
+    if (session.completedAt) return send(res, 409, { message: "模拟面试已完成", failureCode: "INTERVIEW_SESSION_COMPLETED" });
+    const questions = store.interviewSessionQuestions.filter((item) => item.sessionId === session.id && item.userId === user.id);
+    const answers = store.interviewAnswers.filter((item) => item.sessionId === session.id && item.userId === user.id);
+    const feedbacks = store.answerFeedbacks.filter((item) => item.sessionId === session.id && item.userId === user.id);
+    if (!questions.length || answers.length !== questions.length || feedbacks.length !== questions.length || feedbacks.some((item) => !["COMPLETED", "DEGRADED"].includes(item.status))) return send(res, 409, { message: "请先完成全部问题并获得反馈", failureCode: "INTERVIEW_SESSION_INCOMPLETE" });
+    session.averageScore = Math.round(feedbacks.reduce((sum, item) => sum + item.score, 0) / feedbacks.length);
+    session.status = session.status === "DEGRADED" || feedbacks.some((item) => item.status === "DEGRADED") ? "DEGRADED" : "COMPLETED";
+    session.completedAt = now();
+    await writeStore(store);
+    return send(res, 200, { item: publicInterviewSession(store, session, { includeQuestions: true }) });
   }
 
   const reportSuggestionsMatch = pathname.match(/^\/api\/match-reports\/(\d+)\/resume-suggestions$/);
@@ -3007,6 +3337,7 @@ async function handleApi(req, res) {
     store.optimizeRecords = store.optimizeRecords.filter((item) => item.resumeId !== resume.id);
     store.grammarRecords = store.grammarRecords.filter((item) => item.resumeId !== resume.id);
     store.mockInterviews = store.mockInterviews.filter((item) => item.resumeId !== resume.id);
+    deleteInterviewSessions(store, (item) => item.resumeId === resume.id);
     store.interviewAnswers = store.interviewAnswers.filter((item) => item.resumeId !== resume.id);
     const applicationIds = new Set(store.jobApplications.filter((item) => item.resumeId === resume.id).map((item) => item.id));
     store.jobApplications = store.jobApplications.filter((item) => item.resumeId !== resume.id);

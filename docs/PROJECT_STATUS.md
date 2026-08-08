@@ -1,6 +1,6 @@
 # 项目状态
 
-最后核实：2026-08-08（Stage 7B 已通过 Claude 独立验收，Stage 7 正式完成，全部发布门禁通过）。
+最后核实：2026-08-08（Stage 8A RAG Mock Interview backend 已通过；Stage 8B UI 尚未开始）。
 
 ## 当前技术栈与数据层
 
@@ -20,7 +20,8 @@
 - 阶段 4 岗位知识库：管理员专用的文本资料 CRUD、来源/岗位元数据、原始 rawText 审计保存、标题路径识别、语义优先切片、hash 与近似 token 记录、处理历史、幂等重试、失败保留旧 chunks 与删除级联。短行标题采用上下文启发式，不将技能/职责短行一概视为标题。
 - 阶段 5A 向量索引生命周期：OpenAI Compatible Embedding Provider、Profile 隔离的 Qdrant Collection、稳定 embedding 输入哈希及 Point ID、写入验证、原子 active run 切换、旧 Point 清理追踪、删除同步和 ADMIN 索引管理。失败不会激活半成品索引；尚无检索或 RAG。
 - 阶段 5B ADMIN 知识检索闭环：稳定查询规范化、关键词与当前有效向量召回、服务端一致过滤、确定性 RRF、可选且可回退的 Reranker、可持久化的 RetrievalRun、最小黄金集评测入口和真实 Qdrant smoke。仅供管理员检索实验室使用，不生成 RAG 回答。
-- Stage 7 已正式完成：7A 的锁定 MatchReport 后端闭环、Evidence-backed Rewrite、受限 JSON Patch、乐观并发校验和策略 A 失效，已由 7B 的 Resume Suggestion UI 闭环呈现。UI 支持 SuggestionRun 历史、逐条 before/after diff、Accept/Reject、FACT_REQUIRED 限制、INVALIDATED 原因和只读 ResumeVersion 历史；7A 的 ownership、版本冲突、patch/evidence validation 安全边界未削弱。Claude 独立验收结论为 A. 通过，无高/中问题，全部发布门禁 exit 0；L1-L4 作为低优先级后续项保留，Stage 8 尚未开始。
+- Stage 7 已正式完成：7A 的锁定 MatchReport 后端闭环、Evidence-backed Rewrite、受限 JSON Patch、乐观并发校验和策略 A 失效，已由 7B 的 Resume Suggestion UI 闭环呈现。UI 支持 SuggestionRun 历史、逐条 before/after diff、Accept/Reject、FACT_REQUIRED 限制、INVALIDATED 原因和只读 ResumeVersion 历史；7A 的 ownership、版本冲突、patch/evidence validation 安全边界未削弱。Claude 独立验收结论为 A. 通过，无高/中问题，全部发布门禁 exit 0；L1-L4 作为低优先级后续项保留。
+- Stage 8A RAG Mock Interview backend 已通过 Claude 最终独立验收：JobApplication/MatchReport/锁定 ResumeVersion 输入绑定、四类可追溯问题、Stage 5B RetrievalRun 复用、逐题回答、grounded feedback、失败/降级审计、跨用户 404，以及 question/expectedPoints/improvedAnswer 用户事实 grounding 均已完成。Stage 8B UI 尚未开始。
 
 ## RAG 升级阶段
 
@@ -35,7 +36,9 @@
 | 6A | 可引用岗位匹配报告后端闭环 | 已通过 Claude 最终独立验收及全部发布门禁，已合并 master 并创建 `rag-stage-6a-passed` 标签 |
 | 6B | Grounded Match Report UI | 阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁。 |
 | 7A | Resume Suggestions & Versioning Backend | 已通过 Claude 最终独立验收。 |
-| 7B | Resume Suggestion UI | 已通过 Claude 独立验收；Stage 7 正式完成；Stage 8 尚未开始。 |
+| 7B | Resume Suggestion UI | 已通过 Claude 独立验收；Stage 7 正式完成。 |
+| 8A | RAG Mock Interview Backend | 已通过 Claude 最终独立验收。 |
+| 8B | Mock Interview UI | 尚未开始。 |
 
 阶段 5B 只新增 ADMIN 知识检索，不提供用户侧检索、RAG Prompt、生成式回答、引用式回答、简历修改或 Agent 工作流。
 
@@ -46,7 +49,7 @@
 - AI：`/api/resumes/:id/{analyze,optimize,grammar-check}`、`/api/ai-config`
 - JD 与申请：`/api/job-descriptions`、`/api/job-descriptions/:id/parse`、`/api/job-applications`
 - 基础匹配：`POST/GET /api/job-applications/:id/matches`、`GET /api/resume-job-matches/:matchId`、`POST /api/resume-job-matches/:matchId/retry`
-- 面试与记录：`/api/interviews`、`/api/records/*`
+- 面试与记录：旧版兼容 `/api/interviews`、`/api/records/*`；Stage 8 `/api/job-applications/:id/interview-sessions`、`/api/interview-sessions/:id/*`
 - 知识库管理（仅 ADMIN）：`/api/admin/knowledge-documents`、`/api/admin/knowledge-chunks/*`
 - 知识检索（仅 ADMIN）：`/api/admin/knowledge-retrieval/{status,search,runs}`
 - 可引用报告：`POST /api/job-applications/:id/reports`、`GET /api/match-reports/:id`
@@ -62,10 +65,12 @@
 - `tests/retrieval-evaluation.mjs`：固定黄金集的 Recall@K 与 MRR@K 评测入口。
 - `tests/grounded-match-report.integration.mjs`：报告输入绑定、生产检索、严格 JSON、引用攻击、降级/失败、权限、重启、撤回与隐私。
 - `tests/resume-suggestions.integration.mjs`：SuggestionRun 绑定、所有权、最小 Provider 输入、事实差异阻断、Patch allowlist、ACCEPT/REJECT、冲突、失效、失败持久化与 ResumeVersion 语义。
+- `tests/rag-mock-interview.integration.mjs`：Session/ResumeVersion 绑定、四类问题、RetrievalRun/sourceRefs、回答、grounded feedback、Provider 失败、retrieval 降级、跨用户 404、四类 question/expectedPoints 伪造归因、improvedAnswer 虚构事实、当前 UserAnswer 合法支持与跨 session 隔离。
 - `corepack pnpm test`、`corepack pnpm test:retrieval-eval`、`corepack pnpm test:qdrant`、`corepack pnpm test:qdrant-retrieval`、`node --check backend/server.js`、`corepack pnpm build`。
 
 ## 尚未实现与技术债务
 
+- Stage 8A 低优先级后续：`strengths/weaknesses/missingPoints` 文本 user-fact grounding 加固、retrieval `FAILED -> DEGRADED`、`questionCount=3` KNOWLEDGE 覆盖、feedback retry。
 - 阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签；本轮未执行合并或打标签。
 - `src/App.jsx` 与 `src/styles.css` 较大，应在已批准任务中渐进拆分。
 - JSON 单文件存储不适用于生产并发；迁移 MySQL/worker 需单独批准。
