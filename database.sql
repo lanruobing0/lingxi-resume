@@ -442,3 +442,65 @@ INSERT INTO system_notice (title, content) VALUES
 --   INDEX idx_match_report_owner_created (user_id, created_at),
 --   INDEX idx_match_report_application_version (job_application_id, report_version)
 -- );
+
+-- Phase 8 RAG mock-interview production reference. The Node runtime uses
+-- interviewSessions, interviewSessionQuestions, interviewAnswers and
+-- answerFeedbacks in the local JSON store. source_refs_json contains local
+-- identifiers/quotes only; prompts, provider keys, vectors and private profile
+-- fields must never be persisted here.
+-- CREATE TABLE rag_interview_session (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   job_application_id BIGINT NOT NULL, resume_id BIGINT NOT NULL,
+--   resume_version_id BIGINT NOT NULL, resume_version INT NOT NULL,
+--   resume_content_hash CHAR(64) NOT NULL, job_description_id BIGINT NOT NULL,
+--   job_description_parse_result_id BIGINT NOT NULL, match_report_id BIGINT NOT NULL,
+--   status VARCHAR(24) NOT NULL, provider VARCHAR(80) NULL, model VARCHAR(160) NULL,
+--   prompt_version VARCHAR(80) NOT NULL, feedback_prompt_version VARCHAR(80) NOT NULL,
+--   generation_config_hash CHAR(64) NOT NULL, input_hash CHAR(64) NULL,
+--   question_count INT NOT NULL, retrieval_run_ids_json JSON NOT NULL,
+--   retrieval_status VARCHAR(24) NOT NULL, average_score INT NULL,
+--   failure_code VARCHAR(100) NULL, failure_message TEXT NULL,
+--   created_at DATETIME NOT NULL, completed_at DATETIME NULL,
+--   CONSTRAINT fk_rag_interview_user FOREIGN KEY (user_id) REFERENCES user(id),
+--   CONSTRAINT fk_rag_interview_application FOREIGN KEY (job_application_id) REFERENCES job_application(id),
+--   CONSTRAINT fk_rag_interview_report FOREIGN KEY (match_report_id) REFERENCES match_report(id),
+--   INDEX idx_rag_interview_owner_created (user_id, created_at),
+--   INDEX idx_rag_interview_application_created (job_application_id, created_at)
+-- );
+-- CREATE TABLE rag_interview_question (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   session_id BIGINT NOT NULL, sequence_no INT NOT NULL, question TEXT NOT NULL,
+--   category VARCHAR(24) NOT NULL, difficulty VARCHAR(16) NOT NULL,
+--   rationale TEXT NOT NULL, source_refs_json JSON NOT NULL,
+--   expected_points_json JSON NOT NULL, created_at DATETIME NOT NULL,
+--   CONSTRAINT fk_rag_question_session FOREIGN KEY (session_id) REFERENCES rag_interview_session(id),
+--   UNIQUE KEY uq_rag_question_session_sequence (session_id, sequence_no),
+--   INDEX idx_rag_question_owner_session (user_id, session_id)
+-- );
+-- CREATE TABLE rag_interview_answer (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   session_id BIGINT NOT NULL, question_id BIGINT NOT NULL,
+--   resume_id BIGINT NOT NULL, resume_version_id BIGINT NOT NULL,
+--   resume_version INT NOT NULL, resume_content_hash CHAR(64) NOT NULL,
+--   answer_text MEDIUMTEXT NOT NULL, status VARCHAR(24) NOT NULL,
+--   created_at DATETIME NOT NULL,
+--   CONSTRAINT fk_rag_answer_session FOREIGN KEY (session_id) REFERENCES rag_interview_session(id),
+--   CONSTRAINT fk_rag_answer_question FOREIGN KEY (question_id) REFERENCES rag_interview_question(id),
+--   UNIQUE KEY uq_rag_answer_session_question (session_id, question_id),
+--   INDEX idx_rag_answer_owner_session (user_id, session_id)
+-- );
+-- CREATE TABLE rag_answer_feedback (
+--   id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL,
+--   session_id BIGINT NOT NULL, question_id BIGINT NOT NULL, answer_id BIGINT NOT NULL,
+--   status VARCHAR(24) NOT NULL, score INT NULL, strengths_json JSON NOT NULL,
+--   weaknesses_json JSON NOT NULL, missing_points_json JSON NOT NULL,
+--   improved_answer MEDIUMTEXT NULL, improved_answer_is_suggestion BOOLEAN NOT NULL DEFAULT TRUE,
+--   follow_up_question TEXT NULL, source_refs_json JSON NOT NULL,
+--   provider VARCHAR(80) NULL, model VARCHAR(160) NULL, prompt_version VARCHAR(80) NOT NULL,
+--   failure_code VARCHAR(100) NULL, failure_message TEXT NULL,
+--   created_at DATETIME NOT NULL, completed_at DATETIME NULL,
+--   CONSTRAINT fk_rag_feedback_session FOREIGN KEY (session_id) REFERENCES rag_interview_session(id),
+--   CONSTRAINT fk_rag_feedback_answer FOREIGN KEY (answer_id) REFERENCES rag_interview_answer(id),
+--   UNIQUE KEY uq_rag_feedback_answer (answer_id),
+--   INDEX idx_rag_feedback_owner_session (user_id, session_id)
+-- );
