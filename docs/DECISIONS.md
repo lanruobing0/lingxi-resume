@@ -22,3 +22,4 @@
 | Agent 最终输出按四类事实边界持久化且只读 | JD、MatchReport 和 Knowledge 不能证明用户已有经历 | VERIFIED_RESUME_FACT 只能引用锁定 ResumeVersion；外部知识、匹配缺口和建议分层保存，禁止自动写回 Resume 或 JobApplication | 阶段 9A |
 | Stage 9A 检索只复用 Stage 5B KnowledgeRetrievalService | 避免第二套检索逻辑和不可追溯 sourceId | AgentStep 保存真实 retrievalRunId 与候选 sourceRefs；失败/降级 RetrievalRun 仍保留审计 | 阶段 9A |
 | VERIFIED_RESUME_FACT 类型本身触发完整 Resume claim-support | 真实 RESUME sourceId 可能引用无关 quote，sourceType 不能自动授权用户事实 | 每条 claim 必须由其实际引用的锁定 Resume quote 支持；不依赖 action verb，失败使用 `AGENT_UNSUPPORTED_RESUME_FACT` | 阶段 9A 首验整改 |
+| Stage 9B UI 只消费服务器保存的 Agent 审计状态 | 前端不能成为第二个 planner 或放大 Agent 权限 | 创建请求不提交 action/tool/maxSteps；历史、详情、步骤均从 9A API 恢复，来源与摘要按显示字段白名单映射 | 阶段 9B |

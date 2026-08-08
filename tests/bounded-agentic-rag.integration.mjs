@@ -210,8 +210,13 @@ async function main() {
     const steps = await call(token, `/api/agent-runs/${run.id}/steps`, undefined, 200);
     assert.equal(steps.data.items.length, 6);
     assert.equal(steps.data.items.every((step) => step.reason && step.startedAt && step.completedAt && step.output), true);
+    const history = await call(token, "/api/job-applications/1/agent-runs", undefined, 200);
+    assert.equal(history.data.items.length, 1);
+    assert.equal(history.data.items[0].id, run.id);
+    assert.equal(history.data.items[0].resumeVersion, 1);
     assert.equal((await call(otherToken, `/api/agent-runs/${run.id}`, undefined, 404)).status, 404);
     assert.equal((await call(otherToken, `/api/agent-runs/${run.id}/steps`, undefined, 404)).status, 404);
+    assert.equal((await call(otherToken, "/api/job-applications/1/agent-runs", undefined, 404)).status, 404);
 
     prepare("raiseLimit", ["RETRIEVE_KNOWLEDGE"]);
     const limited = await call(token, "/api/job-applications/1/agent-runs", { matchReportId: 1, objective: "循环检索攻击", maxSteps: 3, searchMode: "KEYWORD" }, 201);
