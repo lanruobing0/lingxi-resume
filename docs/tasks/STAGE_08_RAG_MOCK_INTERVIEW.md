@@ -1,6 +1,6 @@
 # Stage 8：RAG Mock Interview Backend
 
-状态：Stage 8A RAG Mock Interview backend 已通过；Stage 8B UI 尚未开始。
+状态：Stage 8 已正式完成；Stage 9 尚未开始。
 
 ## 目标与范围
 

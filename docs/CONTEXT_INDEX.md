@@ -9,8 +9,8 @@
 - 当前任务边界：`docs/CURRENT_TASK.md`
 - 已确定架构决策：`docs/DECISIONS.md`
 - 阶段任务说明：`docs/tasks/`
-- 当前任务：`docs/tasks/STAGE_08_RAG_MOCK_INTERVIEW.md`
-- 当前阶段状态：Stage 8A RAG Mock Interview backend 已通过；Stage 8B UI 尚未开始。
+- 当前任务：Stage 8 Git 闭环；Stage 9 尚未开始。
+- 当前阶段状态：Stage 8 已正式完成；Stage 9 尚未开始。
 - Claude 独立验收记录：`docs/reviews/`
 - RAG 长期路线：`docs/RAG_UPGRADE_PLAN.md`
 - RAG 数据模型：`docs/RAG_DATA_MODEL.md`

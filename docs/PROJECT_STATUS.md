@@ -1,6 +1,6 @@
 # 项目状态
 
-最后核实：2026-08-08（Stage 8A RAG Mock Interview backend 已通过；Stage 8B UI 尚未开始）。
+最后核实：2026-08-09（Stage 8 已正式完成；Stage 9 尚未开始）。
 
 ## 当前技术栈与数据层
 
@@ -21,7 +21,8 @@
 - 阶段 5A 向量索引生命周期：OpenAI Compatible Embedding Provider、Profile 隔离的 Qdrant Collection、稳定 embedding 输入哈希及 Point ID、写入验证、原子 active run 切换、旧 Point 清理追踪、删除同步和 ADMIN 索引管理。失败不会激活半成品索引；尚无检索或 RAG。
 - 阶段 5B ADMIN 知识检索闭环：稳定查询规范化、关键词与当前有效向量召回、服务端一致过滤、确定性 RRF、可选且可回退的 Reranker、可持久化的 RetrievalRun、最小黄金集评测入口和真实 Qdrant smoke。仅供管理员检索实验室使用，不生成 RAG 回答。
 - Stage 7 已正式完成：7A 的锁定 MatchReport 后端闭环、Evidence-backed Rewrite、受限 JSON Patch、乐观并发校验和策略 A 失效，已由 7B 的 Resume Suggestion UI 闭环呈现。UI 支持 SuggestionRun 历史、逐条 before/after diff、Accept/Reject、FACT_REQUIRED 限制、INVALIDATED 原因和只读 ResumeVersion 历史；7A 的 ownership、版本冲突、patch/evidence validation 安全边界未削弱。Claude 独立验收结论为 A. 通过，无高/中问题，全部发布门禁 exit 0；L1-L4 作为低优先级后续项保留。
-- Stage 8A RAG Mock Interview backend 已通过 Claude 最终独立验收：JobApplication/MatchReport/锁定 ResumeVersion 输入绑定、四类可追溯问题、Stage 5B RetrievalRun 复用、逐题回答、grounded feedback、失败/降级审计、跨用户 404，以及 question/expectedPoints/improvedAnswer 用户事实 grounding 均已完成。Stage 8B UI 尚未开始。
+- Stage 8A RAG Mock Interview backend 已通过 Claude 最终独立验收：JobApplication/MatchReport/锁定 ResumeVersion 输入绑定、四类可追溯问题、Stage 5B RetrievalRun 复用、逐题回答、grounded feedback、失败/降级审计、跨用户 404，以及 question/expectedPoints/improvedAnswer 用户事实 grounding 均已完成。
+- Stage 8B RAG Mock Interview UI 已通过 Claude 最终独立验收，结论 A：从岗位报告创建/恢复 session、四类逐题展示、answer/feedback、建议回答事实边界提示、安全知识来源、FAILED/DEGRADED、后端完成分数与当前 JobApplication 历史回看均已接通；未修改 Stage 8A grounding/security。Stage 8 已正式完成；Stage 9 尚未开始。
 
 ## RAG 升级阶段
 
@@ -38,7 +39,7 @@
 | 7A | Resume Suggestions & Versioning Backend | 已通过 Claude 最终独立验收。 |
 | 7B | Resume Suggestion UI | 已通过 Claude 独立验收；Stage 7 正式完成。 |
 | 8A | RAG Mock Interview Backend | 已通过 Claude 最终独立验收。 |
-| 8B | Mock Interview UI | 尚未开始。 |
+| 8B | Mock Interview UI | 已通过 Claude 最终独立验收；Stage 8 正式完成。 |
 
 阶段 5B 只新增 ADMIN 知识检索，不提供用户侧检索、RAG Prompt、生成式回答、引用式回答、简历修改或 Agent 工作流。
 
@@ -71,6 +72,7 @@
 ## 尚未实现与技术债务
 
 - Stage 8A 低优先级后续：`strengths/weaknesses/missingPoints` 文本 user-fact grounding 加固、retrieval `FAILED -> DEGRADED`、`questionCount=3` KNOWLEDGE 覆盖、feedback retry。
+- Stage 8B 低优先级后续：duplicate code 映射 `INTERVIEW_ANSWER_DUPLICATE` / `EXISTS` 不一致；submit 成功后 refresh 失败可能显示 retrieval failed；缺少真实点击交互测试；completed 隐藏提交按钮缺显式断言；history 切换缺独立测试。
 - 阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过，允许合并 master 并创建 `rag-stage-5b-passed` 标签；本轮未执行合并或打标签。
 - `src/App.jsx` 与 `src/styles.css` 较大，应在已批准任务中渐进拆分。
 - JSON 单文件存储不适用于生产并发；迁移 MySQL/worker 需单独批准。
