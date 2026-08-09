@@ -1,6 +1,6 @@
 # 项目状态
 
-最后核实：2026-08-09（Stage 9 正式完成；Stage 10 尚未开始）。
+最后核实：2026-08-09（Stage 10 已通过最终验收；真实 MySQL Integration 已验证；Lingxi Resume Agentic RAG 项目正式完成）。
 
 ## 当前技术栈与数据层
 
@@ -24,7 +24,8 @@
 - Stage 8A RAG Mock Interview backend 已通过 Claude 最终独立验收：JobApplication/MatchReport/锁定 ResumeVersion 输入绑定、四类可追溯问题、Stage 5B RetrievalRun 复用、逐题回答、grounded feedback、失败/降级审计、跨用户 404，以及 question/expectedPoints/improvedAnswer 用户事实 grounding 均已完成。
 - Stage 8B RAG Mock Interview UI 已通过 Claude 最终独立验收，结论 A：从岗位报告创建/恢复 session、四类逐题展示、answer/feedback、建议回答事实边界提示、安全知识来源、FAILED/DEGRADED、后端完成分数与当前 JobApplication 历史回看均已接通；未修改 Stage 8A grounding/security。Stage 8 已正式完成。
 - Stage 9A Bounded Agentic RAG backend 已通过 Claude 第二次独立验收，结论 A，无高/中问题。`VERIFIED_RESUME_FACT` 已改为 unconditional claim-support，实际引用的锁定 Resume quote 必须实质支持 claim，真实但无关的 RESUME source laundering 已关闭；原有 allowlist、bounded loop、Stage 5B RetrievalRun、Prompt Injection、其他 finalResult 类型及 Stage 5–8 边界保持不变。全部发布门禁和真实 Qdrant 双 smoke exit 0。
-- Stage 9B Bounded Agentic RAG UI 已通过 Claude 最终独立验收，结论 A：可从岗位报告创建和恢复 AgentRun、查看六类 action 时间线与安全输入/输出摘要、展开白名单过滤后的检索来源，并按四类事实边界展示最终计划。`STOPPED_LIMIT`、`DEGRADED`、`FAILED` 均有独立语义；UI 不提交 action/tool/maxSteps，不提供自动写回或接受建议。Stage 9 正式完成；Stage 10 尚未开始。
+- Stage 9B Bounded Agentic RAG UI 已通过 Claude 最终独立验收，结论 A：可从岗位报告创建和恢复 AgentRun、查看六类 action 时间线与安全输入/输出摘要、展开白名单过滤后的检索来源，并按四类事实边界展示最终计划。`STOPPED_LIMIT`、`DEGRADED`、`FAILED` 均有独立语义；UI 不提交 action/tool/maxSteps，不提供自动写回或接受建议。Stage 9 正式完成。
+- Stage 10 Production Hardening 与真实 MySQL 8.4.11 Integration 已通过 Claude 最终验收，结论 A，无高/中问题。migration 010 幂等、transaction commit/rollback、核心实体真实投影、全链路 MySQL smoke、restart recovery、readiness、真实 `test:mysql` 与 SQL privacy 扫描均通过。Lingxi Resume Agentic RAG 项目正式完成。
 
 ## RAG 升级阶段
 
@@ -44,6 +45,7 @@
 | 8B | Mock Interview UI | 已通过 Claude 最终独立验收；Stage 8 正式完成。 |
 | 9A | Bounded Agentic RAG Backend | 已通过 Claude 第二次独立验收，结论 A；无高/中问题，全部门禁及真实 Qdrant 双 smoke exit 0。 |
 | 9B | Bounded Agentic RAG UI | 已通过 Claude 最终独立验收，结论 A；Stage 9 正式完成。 |
+| 10 | Production Hardening、Evaluation 与真实 MySQL Integration | 已通过 Claude 最终验收，结论 A；Lingxi Resume Agentic RAG 项目正式完成。 |
 
 阶段 5B 只新增 ADMIN 知识检索，不提供用户侧检索、RAG Prompt、生成式回答、引用式回答、简历修改或 Agent 工作流。
 
@@ -78,7 +80,8 @@
 
 ## 尚未实现与技术债务
 
-- Stage 10 尚未开始：异步队列/worker、恢复中断 run、多 Agent 与任何 autonomous write 均未实现，需后续单独批准。
+- Stage 10 已通过最终验收；真实 MySQL Integration 已验证；Lingxi Resume Agentic RAG 项目正式完成。MySQL 8.4.11、隔离测试库 `lingxi_resume_test`、`010_production_hardening.sql` 重复执行、事务 commit/rollback、核心实体投影、全链路、readiness 与后端重启恢复均通过；`corepack pnpm test:mysql` exit 0，未记录密码。
+- LOW：`/api/ready`、`/api/health` 在 MySQL 宕机时可能因路由前先执行 `readStore` 返回 500；规范端点 `/ready`、`/health` 行为正确，本阶段不修。
 - Stage 9B LOW：PENDING render 无直接断言；刷新按钮无点击测试；JobApplication 切换重载无直接测试；Qdrant smoke 必须串行运行。当前不处理。
 - Stage 9A 低优先级后续：个别合法中文句式可能因 bigram 阈值被保守误拒；“百万级”等中文数字目前由技术实体/ngram coverage 兜底，尚未进入独立数值解析。
 - Stage 8A 低优先级后续：`strengths/weaknesses/missingPoints` 文本 user-fact grounding 加固、retrieval `FAILED -> DEGRADED`、`questionCount=3` KNOWLEDGE 覆盖、feedback retry。

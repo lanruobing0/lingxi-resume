@@ -184,7 +184,33 @@ async function main() {
     assert.ok(result.data.item.reportVersion > 1, "new generation must create a new report version rather than overwrite history");
     assert.equal((await call(token, `/api/match-reports/${reportId}`, undefined, 200)).data.item.content.executiveSummary, "Java 岗位匹配报告。", "failed reports must not overwrite previous successful body");
     state.mode = "noKnowledge"; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201); assert.equal(result.data.item.status, "DEGRADED"); assert.equal(result.data.item.evidenceCoverage.validKnowledgeClaimCount, 0);
-    for (const mode of ["empty", "onlyInvalid", "badEnum", "invalidJson", "provider503", "timeout"]) { state.mode = mode; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }); assert.ok(result.status >= 400, mode); if (mode === "onlyInvalid") assert.equal(result.data.failureCode, "REPORT_NO_SUPPORTED_CLAIMS"); }
+    for (const mode of ["empty", "onlyInvalid", "badEnum", "invalidJson", "provider503"]) { state.mode = mode; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }); assert.ok(result.status >= 400, mode); if (mode === "onlyInvalid") assert.equal(result.data.failureCode, "REPORT_NO_SUPPORTED_CLAIMS"); }
+    state.mode = "timeout";
+    let providerRequestCount = state.providerBodies.length;
+    let timeoutStartedAt = Date.now();
+    result = await call(token, "/api/job-applications/1/reports", { matchId: 1 });
+    assert.equal(result.status, 504, JSON.stringify(result.data));
+    assert.equal(result.data.failureCode, "AI_PROVIDER_TIMEOUT");
+    assert.ok(Date.now() - timeoutStartedAt < 1500, "sync timeout must finish within a bounded interval");
+    assert.equal(state.providerBodies.length - providerRequestCount, 1, "timeout must not retry through the compatibility endpoint");
+    assert.equal(JSON.stringify(result.data).match(/provider-SECRET|PRIVATE-NAME|private@example.com|13800138000/) !== null, false, "sync timeout response leaked a key or resume content");
+
+    providerRequestCount = state.providerBodies.length;
+    timeoutStartedAt = Date.now();
+    const acceptedJob = await call(token, "/api/job-applications/1/reports", { matchId: 1, async: true }, 202);
+    const timeoutJobId = acceptedJob.data.job.id;
+    let timeoutJob;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      timeoutJob = (await call(token, `/api/jobs/${timeoutJobId}`, undefined, 200)).data.item;
+      if (timeoutJob.status === "FAILED") break;
+      await wait(20);
+    }
+    assert.equal(timeoutJob.status, "FAILED");
+    assert.equal(timeoutJob.failureCode, "AI_PROVIDER_TIMEOUT");
+    assert.ok(Date.now() - timeoutStartedAt < 2000, "async timeout Job must finish within a bounded interval");
+    assert.equal(state.providerBodies.length - providerRequestCount, 1, "async timeout must not retry indefinitely or call the compatibility endpoint");
+    assert.equal(JSON.stringify(timeoutJob).match(/provider-SECRET|PRIVATE-NAME|private@example.com|13800138000/) !== null, false, "timeout Job response leaked a key or resume content");
+    console.log("Timeout probe: sync timeout -> AI_PROVIDER_TIMEOUT; async job -> FAILED / AI_PROVIDER_TIMEOUT");
     state.mode = "valid"; state.vectorDown = true; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201); assert.equal(result.data.item.status, "DEGRADED", "keyword fallback must be visible"); state.vectorDown = false;
     result = await call(token, "/api/job-applications/1/reports", { matchId: 1, useReranker: true }, 201); assert.equal(result.data.item.status, "DEGRADED", "reranker fallback must be visible");
     assert.equal((await call(token, "/api/job-applications/1/reports", { matchId: 999 }, 404)).data.failureCode, "REPORT_MATCH_NOT_FOUND");

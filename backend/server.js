@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import { createPersistence, storageConfig } from "./persistence.js";
+import { InProcessJobQueue, publicJob } from "./job-queue.js";
 import { KnowledgeVectorIndexError, KnowledgeVectorIndexService } from "./knowledge-vector-index.js";
 import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
 import { validateKnowledgeClaims, sourceAvailability } from "./citation-validator.js";
@@ -43,8 +43,8 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
-const dataFile = path.join(dataDir, "store.json");
-const port = Number(process.env.API_PORT || 8787);
+const port = Number(process.env.PORT || process.env.API_PORT || 8787);
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw Object.assign(new Error("PORT must be a valid TCP port"), { code: "PORT_INVALID" });
 const maxJsonBodyBytes = 9 * 1024 * 1024;
 const sessionCookieName = "lingxi_session";
 const sessionLifetimeMs = 1000 * 60 * 60 * 24;
@@ -227,6 +227,7 @@ const seedData = {
   interviewSessionQuestions: [],
   agentRuns: [],
   agentSteps: [],
+  jobs: [],
   mockInterviews: [],
   interviewAnswers: [],
   answerFeedbacks: [],
@@ -248,6 +249,9 @@ const seedData = {
     updatedAt: "2026-06-26T08:00:00.000Z",
   },
 };
+
+const persistence = createPersistence({ dataDir, seedData });
+const startupConfig = storageConfig();
 
 function now() {
   return new Date().toISOString();
@@ -680,17 +684,8 @@ function normalizeJobDescriptionText(value) {
   return String(value || "").replace(/\r\n?/g, "\n").replace(/[\t ]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-async function ensureStore() {
-  await mkdir(dataDir, { recursive: true });
-  if (!existsSync(dataFile)) {
-    await writeFile(dataFile, JSON.stringify(seedData, null, 2), "utf8");
-  }
-}
-
 async function readStore() {
-  await ensureStore();
-  const raw = await readFile(dataFile, "utf8");
-  const store = JSON.parse(raw);
+  const store = await persistence.read();
   const normalizedStore = {
     ...seedData,
     ...store,
@@ -719,6 +714,7 @@ async function readStore() {
     interviewSessionQuestions: store.interviewSessionQuestions || [],
     agentRuns: store.agentRuns || [],
     agentSteps: store.agentSteps || [],
+    jobs: store.jobs || [],
     mockInterviews: store.mockInterviews || [],
     interviewAnswers: store.interviewAnswers || [],
     answerFeedbacks: store.answerFeedbacks || [],
@@ -735,36 +731,7 @@ async function readStore() {
 }
 
 async function writeStore(store) {
-  const temporaryFile = `${dataFile}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  const serializedStore = JSON.stringify(store, null, 2);
-  await writeFile(temporaryFile, serializedStore, { encoding: "utf8", mode: 0o600 });
-  try {
-    await replaceStoreFile(temporaryFile);
-  } finally {
-    await unlink(temporaryFile).catch(() => {});
-  }
-}
-
-async function replaceStoreFile(temporaryFile) {
-  let lastRenameError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await rename(temporaryFile, dataFile);
-      return;
-    } catch (error) {
-      lastRenameError = error;
-      if (!["EPERM", "EACCES", "EBUSY"].includes(error?.code) || attempt === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
-    }
-  }
-
-  // Windows can temporarily lock the destination while another process reads it.
-  // Writing in place keeps local persistence available instead of failing the request.
-  if (["EPERM", "EACCES", "EBUSY"].includes(lastRenameError?.code)) {
-    await writeFile(dataFile, await readFile(temporaryFile), { mode: 0o600 });
-    return;
-  }
-  throw lastRenameError;
+  await persistence.write(store);
 }
 
 async function migrateSensitiveStoreData(store) {
@@ -1148,6 +1115,19 @@ class HttpError extends Error {
   }
 }
 
+function aiHttpError(ai, message) {
+  const error = new HttpError(ai.status || 502, message, ai.error);
+  error.code = ai.code || "AI_PROVIDER_UNAVAILABLE";
+  return error;
+}
+
+function mappedAiFailureCode(ai, { notConfigured, invalidResponse, unavailable }) {
+  if (ai.code === "AI_PROVIDER_TIMEOUT") return "AI_PROVIDER_TIMEOUT";
+  if (ai.code === "AI_NOT_CONFIGURED") return notConfigured;
+  if (ai.code === "REPORT_INVALID_RESPONSE") return invalidResponse;
+  return unavailable;
+}
+
 function normalizeBaseUrl(baseUrl = "") {
   return (baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
 }
@@ -1328,7 +1308,7 @@ async function requestJson(url, payload, apiKey) {
     }
     return data;
   } catch (error) {
-    if (error?.name === "AbortError") throw Object.assign(new Error("AI 请求超时"), { status: 504, code: "AI_PROVIDER_UNAVAILABLE" });
+    if (error?.name === "AbortError") throw Object.assign(new Error("AI 请求超时"), { status: 504, code: "AI_PROVIDER_TIMEOUT" });
     throw error;
   } finally {
     clearTimeout(timer);
@@ -1360,6 +1340,9 @@ async function runAiJson(store, userId, { system, user, schemaName, schema, stri
     }, config.apiKey);
     return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(extractResponseText(responsesData)), schemaName) };
   } catch (responsesError) {
+    if (responsesError.code === "AI_PROVIDER_TIMEOUT") {
+      return { ok: false, status: responsesError.status || 504, code: "AI_PROVIDER_TIMEOUT", error: responsesError.message };
+    }
     try {
       const chatData = await requestJson(`${config.baseUrl}/chat/completions`, {
         model: config.modelId,
@@ -1508,7 +1491,7 @@ async function generateAiJobDescriptionParse(store, userId, jobDescription) {
       jobDescription.rawText,
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "JD parsing failed", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "JD parsing failed");
   const data = ai.data;
   return {
     jobTitle: normalizeEvidenceItem(data.jobTitle, "jobTitle", jobDescription.rawText, { allowEmptyEvidence: true }),
@@ -1653,7 +1636,7 @@ async function generateAiResumeJobMatch(store, userId, context) {
       "Return a report with summary, dimensions, required/preferred skill lists, keyword lists, strongestResumeEvidence, risks, and prioritizedSuggestions. Every skill item needs skillName, matchStatus, resumeEvidence, jdEvidence, explanation, confidence. Do not include name, contact information, or any private profile field.",
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "岗位匹配 AI 调用失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "岗位匹配 AI 调用失败");
   return { ...normalizeMatchReport(ai.data, context), aiMode: ai.mode };
 }
 
@@ -1708,11 +1691,13 @@ async function executeResumeJobMatch(store, user, application) {
     record.status = "FAILED";
     record.totalScore = null;
     record.report = null;
-    record.failureCode = error instanceof HttpError && error.status === 400 ? "AI_NOT_CONFIGURED" : "MATCH_GENERATION_FAILED";
+    record.failureCode = error.code || (error instanceof HttpError && error.status === 400 ? "AI_NOT_CONFIGURED" : "MATCH_GENERATION_FAILED");
     record.failureMessage = String(error.message || "岗位匹配失败").slice(0, 500);
     record.updatedAt = now();
     await writeStore(store);
-    throw new HttpError(error instanceof HttpError ? error.status : 422, "岗位匹配失败", { matchId: record.id, reason: record.failureMessage });
+    const failure = new HttpError(error instanceof HttpError ? error.status : 422, "岗位匹配失败", { matchId: record.id, reason: record.failureMessage });
+    failure.code = record.failureCode;
+    throw failure;
   }
 }
 
@@ -1786,7 +1771,7 @@ async function generateAiGroundedReport(store, userId, context, match, candidate
   const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates });
   const ai = await runAiJson(store, userId, { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true });
   if (!ai.ok) {
-    const code = ai.code === "AI_NOT_CONFIGURED" ? "REPORT_PROVIDER_NOT_CONFIGURED" : ai.code === "REPORT_INVALID_RESPONSE" ? "REPORT_INVALID_RESPONSE" : "REPORT_PROVIDER_UNAVAILABLE";
+    const code = mappedAiFailureCode(ai, { notConfigured: "REPORT_PROVIDER_NOT_CONFIGURED", invalidResponse: "REPORT_INVALID_RESPONSE", unavailable: "REPORT_PROVIDER_UNAVAILABLE" });
     throw reportFailure(ai.status || 502, code, ai.error || "报告生成服务不可用");
   }
   return normalizeGroundedReport(ai.data, match);
@@ -2200,7 +2185,7 @@ async function executeResumeSuggestionRun(store, user, report) {
     const baseDocument = buildResumeSuggestionDocument(context.history.snapshot);
     const prompt = buildResumeSuggestionPrompt({ resumeDocument: baseDocument, jobDescription: context.jobDescription, report });
     const ai = await runAiJson(store, user.id, { schemaName: "resume_suggestions", schema: resumeSuggestionSchema, system: prompt.system, user: prompt.user, strictJson: true });
-    if (!ai.ok) throw resumeSuggestionFailure(ai.status || 502, ai.code === "AI_NOT_CONFIGURED" ? "SUGGESTION_PROVIDER_NOT_CONFIGURED" : "SUGGESTION_PROVIDER_UNAVAILABLE", ai.error || "建议生成服务不可用");
+    if (!ai.ok) throw resumeSuggestionFailure(ai.status || 502, mappedAiFailureCode(ai, { notConfigured: "SUGGESTION_PROVIDER_NOT_CONFIGURED", invalidResponse: "SUGGESTION_INVALID_OUTPUT", unavailable: "SUGGESTION_PROVIDER_UNAVAILABLE" }), ai.error || "建议生成服务不可用");
     const normalized = normalizeGeneratedResumeSuggestions(ai.data, { baseDocument, report });
     for (const item of normalized) store.resumeSuggestions.push({ id: nextId(store.resumeSuggestions), userId: user.id, suggestionRunId: run.id, ...item, status: "PENDING", createdAt: now(), decidedAt: null, appliedResumeVersion: null, appliedResumeVersionId: null });
     run.status = "COMPLETED";
@@ -2450,7 +2435,7 @@ async function executeInterviewSession(store, user, application, report, options
     const prompt = buildInterviewQuestionPrompt({ aiResume, jobDescription: context.jobDescription, parseResult: context.parseResult, matchReport: report, sources, questionCount: options.questionCount });
     const ai = await runAiJson(store, user.id, { schemaName: "rag_mock_interview_questions", schema: interviewQuestionsSchema, system: prompt.system, user: prompt.user, strictJson: true });
     if (!ai.ok) {
-      const code = ai.code === "AI_NOT_CONFIGURED" ? "INTERVIEW_PROVIDER_NOT_CONFIGURED" : ai.code === "REPORT_INVALID_RESPONSE" ? "INTERVIEW_INVALID_RESPONSE" : "INTERVIEW_PROVIDER_UNAVAILABLE";
+      const code = mappedAiFailureCode(ai, { notConfigured: "INTERVIEW_PROVIDER_NOT_CONFIGURED", invalidResponse: "INTERVIEW_INVALID_RESPONSE", unavailable: "INTERVIEW_PROVIDER_UNAVAILABLE" });
       throw interviewFailure(ai.status || 502, code, ai.error || "面试题生成服务不可用");
     }
     const generated = normalizeInterviewQuestions(ai.data, sources, options.questionCount);
@@ -2681,7 +2666,7 @@ async function executeAgentRun(store, user, application, report, options) {
         strictJson: true,
       });
       if (!planner.ok) {
-        const code = planner.code === "AI_NOT_CONFIGURED" ? "AGENT_PROVIDER_NOT_CONFIGURED" : "AGENT_PROVIDER_UNAVAILABLE";
+        const code = mappedAiFailureCode(planner, { notConfigured: "AGENT_PROVIDER_NOT_CONFIGURED", invalidResponse: "AGENT_INVALID_RESPONSE", unavailable: "AGENT_PROVIDER_UNAVAILABLE" });
         throw agentFailure(planner.status || 502, code, planner.error || "Agent planner provider 不可用");
       }
 
@@ -2757,7 +2742,7 @@ async function executeAgentRun(store, user, application, report, options) {
           strictJson: true,
         });
         if (!finalResponse.ok) {
-          const code = finalResponse.code === "AI_NOT_CONFIGURED" ? "AGENT_PROVIDER_NOT_CONFIGURED" : "AGENT_PROVIDER_UNAVAILABLE";
+          const code = mappedAiFailureCode(finalResponse, { notConfigured: "AGENT_PROVIDER_NOT_CONFIGURED", invalidResponse: "AGENT_INVALID_RESPONSE", unavailable: "AGENT_PROVIDER_UNAVAILABLE" });
           throw agentFailure(finalResponse.status || 502, code, finalResponse.error || "Agent final plan provider 不可用");
         }
         run.finalResult = normalizeAgentFinalPlan(finalResponse.data, sources, interviewResumeFacts(aiResume));
@@ -2831,7 +2816,7 @@ async function submitInterviewAnswer(store, user, session, question, answerText)
     const prompt = buildAnswerFeedbackPrompt({ question, answerText });
     const ai = await runAiJson(store, user.id, { schemaName: "rag_mock_interview_feedback", schema: answerFeedbackSchema, system: prompt.system, user: prompt.user, strictJson: true });
     if (!ai.ok) {
-      const code = ai.code === "AI_NOT_CONFIGURED" ? "FEEDBACK_PROVIDER_NOT_CONFIGURED" : ai.code === "REPORT_INVALID_RESPONSE" ? "FEEDBACK_INVALID_RESPONSE" : "FEEDBACK_PROVIDER_UNAVAILABLE";
+      const code = mappedAiFailureCode(ai, { notConfigured: "FEEDBACK_PROVIDER_NOT_CONFIGURED", invalidResponse: "FEEDBACK_INVALID_RESPONSE", unavailable: "FEEDBACK_PROVIDER_UNAVAILABLE" });
       throw interviewFailure(ai.status || 502, code, ai.error || "面试反馈服务不可用");
     }
     const answerSource = { sourceId: "USER_ANSWER", sourceType: "USER_ANSWER", refId: `answer:${answer.id}`, quote: answerText };
@@ -2873,7 +2858,7 @@ async function generateAiAnalysis(store, userId, resume, position) {
       'Return exactly this JSON shape: {"totalScore":0,"completenessScore":0,"matchScore":0,"keywordScore":0,"projectScore":0,"analysisResult":"非空中文结论","keywords":["关键词一","关键词二","关键词三","关键词四","关键词五"],"suggestions":["建议一","建议二","建议三"]}. Scores must be integers from 0 to 100. Generate 5-10 specific Chinese or technical role keywords that should naturally appear in this resume, and 3-6 specific Chinese suggestions.',
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "AI 诊断失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "AI 诊断失败");
   return {
     totalScore: normalizeScore(ai.data.totalScore, "totalScore"),
     completenessScore: normalizeScore(ai.data.completenessScore, "completenessScore"),
@@ -2901,7 +2886,7 @@ async function generateAiOptimize(store, userId, resume, content, optimizeType =
       'Return exactly this JSON shape: {"optimizedContent":"非空中文润色结果"}',
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "AI 润色失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "AI 润色失败");
   return { optimizedContent: requireNonEmptyText(ai.data.optimizedContent, "optimizedContent"), aiMode: ai.mode };
 }
 
@@ -2918,7 +2903,7 @@ async function generateAiGrammar(store, userId, resume, content) {
       "Return score and an issues array. If there are no issues, return an empty issues array.",
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "AI 语法检查失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "AI 语法检查失败");
   return {
     score: normalizeScore(ai.data.score, "score"),
     issues: Array.isArray(ai.data.issues) ? ai.data.issues.map(normalizeIssue) : [],
@@ -2941,7 +2926,7 @@ async function generateAiInterviewOpening(store, userId, { resume, targetPositio
       'Return exactly this JSON shape: {"questionText":"非空中文面试题","questionType":"项目经历或技术能力等类别"}.',
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "AI 面试题生成失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "AI 面试题生成失败");
   return {
     questionText: requireNonEmptyText(ai.data.questionText, "questionText"),
     questionType: requireNonEmptyText(ai.data.questionType, "questionType"),
@@ -2963,7 +2948,7 @@ async function generateAiInterviewFeedback(store, userId, { targetPosition, resu
       'Return exactly this JSON shape: {"score":0,"feedback":"非空中文反馈","referenceAnswer":"非空中文参考答案","followUpQuestion":"非空中文追问"}.',
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "AI 面试反馈失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "AI 面试反馈失败");
   return {
     score: normalizeScore(ai.data.score, "score"),
     feedback: requireNonEmptyText(ai.data.feedback, "feedback"),
@@ -2985,7 +2970,7 @@ async function generateAiInterviewReport(store, userId, { resume, targetPosition
       'Return exactly this JSON shape: {"totalScore":0,"summary":"非空中文总结","strengths":["优势一","优势二"],"improvements":["改进一","改进二"]}.',
     ].join("\n"),
   });
-  if (!ai.ok) throw new HttpError(ai.status || 502, "AI 面试报告生成失败", ai.error);
+  if (!ai.ok) throw aiHttpError(ai, "AI 面试报告生成失败");
   return {
     totalScore: normalizeScore(ai.data.totalScore, "totalScore"),
     summary: requireNonEmptyText(ai.data.summary, "summary"),
@@ -3051,6 +3036,45 @@ function checkGrammar(content = "") {
   };
 }
 
+function structuredLog({ requestId = null, resourceId = null, operation, durationMs = null, status, failureCode = null }) {
+  console.log(JSON.stringify({ level: failureCode ? "warn" : "info", requestId, resourceId: resourceId === null ? null : String(resourceId), operation, durationMs, status, failureCode }));
+}
+
+const jobQueue = new InProcessJobQueue({ readStore, writeStore, concurrency: Number(process.env.JOB_CONCURRENCY || 1), logger: structuredLog });
+jobQueue.register("GROUNDED_MATCH_REPORT", async ({ job, store, setProgress }) => {
+  const user = store.users.find((item) => item.id === job.userId); if (!user) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  const application = getOwnedJobApplication(store, user, job.resourceId); const match = getOwnedResumeJobMatch(store, user, job.payload.matchId);
+  if (!application || !match) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  await setProgress(20); await executeGroundedMatchReport(store, user, application, match, job.payload.options); await setProgress(95);
+});
+jobQueue.register("RESUME_SUGGESTIONS", async ({ job, store, setProgress }) => {
+  const user = store.users.find((item) => item.id === job.userId); const report = store.matchReports.find((item) => item.id === job.resourceId && item.userId === job.userId);
+  if (!user || !report) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  await setProgress(20); await executeResumeSuggestionRun(store, user, report); await setProgress(95);
+});
+jobQueue.register("MOCK_INTERVIEW_GENERATION", async ({ job, store, setProgress }) => {
+  const user = store.users.find((item) => item.id === job.userId); if (!user) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  const application = getOwnedJobApplication(store, user, job.resourceId); const report = store.matchReports.find((item) => item.id === job.payload.matchReportId && item.userId === job.userId);
+  if (!application || !report) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  await setProgress(20); await executeInterviewSession(store, user, application, report, job.payload.options); await setProgress(95);
+});
+jobQueue.register("AGENT_RUN", async ({ job, store, setProgress }) => {
+  const user = store.users.find((item) => item.id === job.userId); if (!user) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  const application = getOwnedJobApplication(store, user, job.resourceId); const report = store.matchReports.find((item) => item.id === job.payload.matchReportId && item.userId === job.userId);
+  if (!application || !report) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
+  await setProgress(20); await executeAgentRun(store, user, application, report, job.payload.options); await setProgress(95);
+});
+
+async function readiness() {
+  try {
+    const persistenceStatus = await persistence.health();
+    const vector = new KnowledgeRetrievalService({ env: process.env, persist: async () => {} });
+    const vectorStatus = await vector.status();
+    const qdrantReady = vectorStatus.qdrant.configured && vectorStatus.qdrant.healthy;
+    return { ok: Boolean(persistenceStatus.ok && qdrantReady), persistence: { ok: persistenceStatus.ok, driver: startupConfig.driver }, qdrant: { ok: qdrantReady, failureCode: vectorStatus.qdrant.failureCode || null } };
+  } catch (error) { return { ok: false, persistence: { ok: false, driver: startupConfig.driver, failureCode: error.code || "PERSISTENCE_UNAVAILABLE" }, qdrant: { ok: false, failureCode: "READINESS_UNAVAILABLE" } }; }
+}
+
 async function handleApi(req, res) {
   applySecurityHeaders(req, res);
   const url = new URL(req.url, "http://localhost");
@@ -3059,6 +3083,14 @@ async function handleApi(req, res) {
 
   if (method === "OPTIONS") {
     return send(res, 204, {});
+  }
+
+  if (method === "GET" && pathname === "/health") {
+    return send(res, 200, { ok: true, service: "ai-resume-coach-api", time: now() });
+  }
+  if (method === "GET" && pathname === "/ready") {
+    const status = await readiness();
+    return send(res, status.ok ? 200 : 503, status);
   }
 
   if (method === "GET" && pathname === "/api/auth/captcha") {
@@ -3078,6 +3110,22 @@ async function handleApi(req, res) {
 
   if (key === "GET /api/health") {
     return send(res, 200, { ok: true, service: "ai-resume-coach-api", time: now() });
+  }
+
+  if (key === "GET /api/ready") {
+    const status = await readiness();
+    return send(res, status.ok ? 200 : 503, status);
+  }
+
+  if (key === "GET /api/jobs") {
+    const user = requireUser(store, req);
+    return send(res, 200, { items: store.jobs.filter((job) => job.userId === user.id).sort((a, b) => b.id - a.id).map(publicJob) });
+  }
+  const jobDetailMatch = pathname.match(/^\/api\/jobs\/(\d+)$/);
+  if (jobDetailMatch && method === "GET") {
+    const user = requireUser(store, req); const id = Number(jobDetailMatch[1]); const item = store.jobs.find((job) => job.id === id && job.userId === user.id);
+    if (!item) return send(res, 404, { message: "Job not found", failureCode: "JOB_NOT_FOUND" });
+    return send(res, 200, { item: publicJob(item) });
   }
 
   if (key === "GET /api/ai-config") {
@@ -3423,6 +3471,11 @@ async function handleApi(req, res) {
     if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "REPORT_INPUT_INVALID" });
     if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "REPORT_INPUT_INVALID" });
     const match = getOwnedResumeJobMatch(store, user, matchId);
+    if (!match) return send(res, 404, { message: "基础岗位匹配报告不存在", failureCode: "REPORT_MATCH_NOT_FOUND" });
+    if (body.async === true) {
+      const job = await jobQueue.enqueue(store, { type: "GROUNDED_MATCH_REPORT", userId: user.id, resourceId: application.id, payload: { matchId, options: { searchMode, useReranker: body.useReranker === true } } });
+      return send(res, 202, { job: publicJob(job) });
+    }
     try {
       const item = await executeGroundedMatchReport(store, user, application, match, { searchMode, useReranker: body.useReranker === true });
       return send(res, 201, { item: publicMatchReport(store, item) });
@@ -3458,6 +3511,11 @@ async function handleApi(req, res) {
     if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "AGENT_INPUT_INVALID" });
     if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "AGENT_INPUT_INVALID" });
     const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
+    if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "AGENT_REPORT_NOT_FOUND" });
+    if (body.async === true) {
+      const job = await jobQueue.enqueue(store, { type: "AGENT_RUN", userId: user.id, resourceId: application.id, payload: { matchReportId, options: { objective, maxSteps, searchMode, useReranker: body.useReranker === true } } });
+      return send(res, 202, { job: publicJob(job) });
+    }
     try {
       const item = await executeAgentRun(store, user, application, report, { objective, maxSteps, searchMode, useReranker: body.useReranker === true });
       return send(res, 201, { item: publicAgentRun(store, item, { includeSteps: true }) });
@@ -3509,6 +3567,11 @@ async function handleApi(req, res) {
     if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "INTERVIEW_INPUT_INVALID" });
     if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "INTERVIEW_INPUT_INVALID" });
     const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
+    if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "INTERVIEW_REPORT_NOT_FOUND" });
+    if (body.async === true) {
+      const job = await jobQueue.enqueue(store, { type: "MOCK_INTERVIEW_GENERATION", userId: user.id, resourceId: application.id, payload: { matchReportId, options: { questionCount, searchMode, useReranker: body.useReranker === true } } });
+      return send(res, 202, { job: publicJob(job) });
+    }
     try {
       const item = await executeInterviewSession(store, user, application, report, { questionCount, searchMode, useReranker: body.useReranker === true });
       return send(res, 201, { item: publicInterviewSession(store, item, { includeQuestions: true }) });
@@ -3603,6 +3666,12 @@ async function handleApi(req, res) {
     const user = requireUser(store, req);
     const reportId = Number(reportSuggestionsMatch[1]);
     const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id) : null;
+    const body = await readJson(req);
+    if (body.async === true) {
+      if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "SUGGESTION_REPORT_NOT_FOUND" });
+      const job = await jobQueue.enqueue(store, { type: "RESUME_SUGGESTIONS", userId: user.id, resourceId: report.id });
+      return send(res, 202, { job: publicJob(job) });
+    }
     try {
       const item = await executeResumeSuggestionRun(store, user, report);
       return send(res, 201, { item: publicSuggestionRun(store, item) });
@@ -4338,16 +4407,31 @@ async function handleApi(req, res) {
 }
 
 const server = createServer((req, res) => {
-  handleApi(req, res).catch((error) => {
-    console.error(error);
-    if (error instanceof HttpError) {
-      send(res, error.status, { message: error.message, detail: error.detail });
-      return;
-    }
-    send(res, 500, { message: "服务器内部错误", detail: error.message });
+  const suppliedRequestId = String(req.headers["x-request-id"] || "");
+  const requestId = /^[a-zA-Z0-9_-]{1,64}$/.test(suppliedRequestId) ? suppliedRequestId : randomUUID();
+  const startedAt = Date.now();
+  res.setHeader("X-Request-Id", requestId);
+  handleApi(req, res).then(() => {
+    structuredLog({ requestId, resourceId: new URL(req.url, "http://localhost").pathname.match(/\/(\d+)(?:\/|$)/)?.[1] || null, operation: `${req.method || "GET"} ${new URL(req.url, "http://localhost").pathname}`, durationMs: Date.now() - startedAt, status: res.statusCode, failureCode: null });
+  }).catch((error) => {
+    const status = error instanceof HttpError ? error.status : (error.status || 500);
+    const failureCode = error.code || (status >= 500 ? "INTERNAL_ERROR" : null);
+    structuredLog({ requestId, resourceId: new URL(req.url, "http://localhost").pathname.match(/\/(\d+)(?:\/|$)/)?.[1] || null, operation: `${req.method || "GET"} ${new URL(req.url, "http://localhost").pathname}`, durationMs: Date.now() - startedAt, status, failureCode });
+    if (error instanceof HttpError) return send(res, status, { message: error.message, detail: error.detail, failureCode });
+    return send(res, status, { message: "服务器内部错误", failureCode });
   });
 });
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`AI Resume Coach API running at http://127.0.0.1:${port}`);
 });
+
+let shuttingDown = false;
+async function gracefulShutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await jobQueue.shutdown();
+  server.close(async () => { await persistence.close().catch(() => {}); });
+}
+process.once("SIGTERM", gracefulShutdown);
+process.once("SIGINT", gracefulShutdown);

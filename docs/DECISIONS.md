@@ -6,8 +6,8 @@
 | 阶段 3 不使用 RAG | 先建立可复算、可审计的基础匹配基线 | 不引入 Qdrant、Embedding、Reranker、知识库或 Agent | 阶段 3 |
 | AI 负责语义判断与证据提取，后端负责最终评分 | 防止不可解释的模型总分 | 使用固定权重重新计算并校验证据 | 阶段 3 |
 | 第三方 AI 不接收联系方式和照片 | 保护求职者隐私 | 只使用 `buildAiResumeContext` 的岗位相关字段 | 阶段 1 起 |
-| 运行时数据继续使用本地 JSON | 当前实现与测试均围绕 JSON 隔离存储 | `backend/data/store.json` 不提交；MySQL 仅作参考 | 当前 |
-| `database.sql` 是生产迁移参考 | 当前未接入 MySQL 运行时 | 禁止把它误当作本地服务的实际数据层 | 阶段 1 起 |
+| 运行时数据通过 persistence abstraction 支持 JSON/MySQL | JSON 保持本地开发与测试兼容，生产可使用已真实验证的 MySQL | `backend/data/store.json` 不提交；`STORAGE_DRIVER=mysql` 使用环境配置 | Stage 10 |
+| `database.sql` 与增量 migration 是 MySQL 结构参考 | MySQL 运行时 DDL 与 migration 010 已在 MySQL 8.4.11 验证 | migration 必须与 persistence 实际投影同步并保持幂等 | Stage 10 |
 | Codex 开发，Claude 独立只读验收 | 分离实现与验收职责 | 每阶段完成后停止，等待验收 | 当前流程 |
 | 阶段通过验收后单独提交并打标签 | 保留可回溯的交付基线 | 建议阶段 2 标签 `rag-stage-2-passed`；阶段 3 通过后再建 `rag-stage-3-passed` | 当前流程 |
 | 阶段 4 先采用管理员维护的 JSON 知识库 | 先建立可测试、可追溯的文本与元数据链路，避免过早接入检索基础设施 | 运行时保存 Document、Chunk 和不可覆写 ProcessingRecord；后续检索只能消费成功 chunks | 阶段 4 |

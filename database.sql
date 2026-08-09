@@ -540,3 +540,10 @@ INSERT INTO system_notice (title, content) VALUES
 --   UNIQUE KEY uq_agent_step_run_index (agent_run_id, step_index),
 --   INDEX idx_agent_step_owner_run (user_id, agent_run_id)
 -- );
+
+-- Stage 10 production hardening migration is intentionally separate so the
+-- historical demonstration schema above remains reproducible. Apply
+-- database/migrations/010_production_hardening.sql after this schema in a
+-- production MySQL environment. It adds the persistence snapshot, audited
+-- entity projections for RetrievalRun/MatchReport/Suggestion/ResumeVersion/
+-- Interview/Agent entities, and the bounded async rag_job model.
