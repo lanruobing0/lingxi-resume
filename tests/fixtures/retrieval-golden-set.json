@@ -1,5 +1,29 @@
-[
-  { "id": "java-backend", "query": "Java Spring Boot Redis", "filters": { "skillTags": ["Java"] }, "relevantChunkRefs": ["Java后端能力/核心技能"], "notes": "后端技术词" },
-  { "id": "mixed", "query": "Node.js C++ 数据库优化", "filters": {}, "relevantChunkRefs": ["工程能力/性能优化"], "notes": "中英文与技术符号" },
-  { "id": "star", "query": "STAR 项目经历表达", "filters": { "documentType": ["STAR_TEMPLATE"] }, "relevantChunkRefs": ["STAR模板/项目表达"], "notes": "元数据过滤" }
-]
+{
+  "corpus": [
+    {
+      "document": { "id": 1, "title": "Java后端能力", "status": "PROCESSED", "vectorStatus": "INDEXED", "processingVersion": 1, "documentType": "ROLE_SKILL_DESCRIPTION", "jobFamily": "后端研发", "seniority": "中级", "skillTags": ["Java", "Spring Boot", "Redis"], "language": "zh-CN" },
+      "chunk": { "id": 1, "documentId": 1, "processingVersion": 1, "title": "核心技能", "headingPath": ["核心技能"], "content": "Java 后端岗位需要 Spring Boot 服务开发、Redis 缓存与数据库能力。" }
+    },
+    {
+      "document": { "id": 2, "title": "工程能力", "status": "PROCESSED", "vectorStatus": "INDEXED", "processingVersion": 1, "documentType": "ROLE_SKILL_DESCRIPTION", "jobFamily": "平台研发", "seniority": "中级", "skillTags": ["Node.js", "C++", "数据库"], "language": "mixed" },
+      "chunk": { "id": 2, "documentId": 2, "processingVersion": 1, "title": "性能优化", "headingPath": ["性能优化"], "content": "Node.js 与 C++ 服务的数据库优化应结合查询计划、索引和性能指标。" }
+    },
+    {
+      "document": { "id": 3, "title": "STAR模板", "status": "PROCESSED", "vectorStatus": "INDEXED", "processingVersion": 1, "documentType": "STAR_CASE", "jobFamily": "通用", "seniority": "不限", "skillTags": ["STAR"], "language": "zh-CN" },
+      "chunk": { "id": 3, "documentId": 3, "processingVersion": 1, "title": "项目表达", "headingPath": ["项目表达"], "content": "使用 STAR 结构组织项目经历：背景、任务、行动与可验证结果。" }
+    },
+    {
+      "document": { "id": 4, "title": "前端工程", "status": "PROCESSED", "vectorStatus": "INDEXED", "processingVersion": 1, "documentType": "ROLE_SKILL_DESCRIPTION", "jobFamily": "前端研发", "seniority": "中级", "skillTags": ["React", "TypeScript"], "language": "zh-CN" },
+      "chunk": { "id": 4, "documentId": 4, "processingVersion": 1, "title": "组件设计", "headingPath": ["组件设计"], "content": "React 组件工程关注状态管理、可访问性与前端性能。" }
+    },
+    {
+      "document": { "id": 5, "title": "数据库基础", "status": "PROCESSED", "vectorStatus": "INDEXED", "processingVersion": 1, "documentType": "INTERVIEW_RUBRIC", "jobFamily": "后端研发", "seniority": "初级", "skillTags": ["数据库"], "language": "zh-CN" },
+      "chunk": { "id": 5, "documentId": 5, "processingVersion": 1, "title": "事务", "headingPath": ["事务"], "content": "数据库事务需要解释隔离级别和一致性。" }
+    }
+  ],
+  "cases": [
+    { "id": "java-backend", "query": "Java Spring Boot Redis", "filters": { "skillTags": ["Java"] }, "relevantChunkRefs": ["Java后端能力/核心技能"] },
+    { "id": "mixed", "query": "Node.js C++ 数据库优化", "filters": {}, "relevantChunkRefs": ["工程能力/性能优化"] },
+    { "id": "star", "query": "STAR 项目经历表达", "filters": { "documentType": ["STAR_CASE"] }, "relevantChunkRefs": ["STAR模板/项目表达"] }
+  ]
+}

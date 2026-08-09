@@ -1,140 +1,77 @@
-# 基于 AI 的智能简历优化与模拟面试平台
+# 灵犀简历
 
-这是一个面向求职者的 AI 简历优化与模拟面试产品，视觉参考 Magic Resume 的简历编辑工作台，并扩展了真实 AI 简历诊断、简历优化、模拟面试、历史记录和后台管理模块。
+灵犀简历是面向求职者的 AI 简历优化与模拟面试产品。技术项目名为「基于 Agentic RAG 的 AI 简历优化与岗位智能匹配平台」。它不是演示型本地规则应用：未配置 AI Provider 或 Provider 返回非法内容时，接口会明确失败，不会伪造成功结果。
 
-## 界面展示
+## 架构与核心流程
 
-### 简历编辑器
+- 前端：React 18、Vite、plain CSS。
+- API：轻量 Node HTTP 服务。
+- 持久化：本地 JSON（默认，开发/测试）或 MySQL（`STORAGE_DRIVER=mysql`）。
+- 知识检索：Qdrant + 关键词检索 + 确定性 RRF Hybrid Retrieval；Reranker 可选。
+- AI：OpenAI-compatible Provider；RAG grounded report、evidence-backed resume suggestion、RAG mock interview、bounded Agentic RAG。
 
-![灵犀简历编辑器](docs/images/resume-editor.png)
+核心数据链是：
 
-## 技术栈
+`JD 解析 → Hybrid RAG → Grounded Match Report → Evidence-backed Resume Optimization → RAG Mock Interview → Bounded Agentic RAG`
 
-- React
-- Vite
-- CSS
-- lucide-react
-- MySQL SQL 脚本
+每一步均绑定拥有者、显式 `resumeId`、`resumeVersion` 与 `resumeContentHash`；岗位流程还绑定 JD 和成功的解析结果。系统不会根据“当前”或最近数据推断输入。
 
-## 运行方式
-
-```bash
-pnpm install
-pnpm dev
-```
-
-浏览器访问终端输出的本地地址。
-
-## 后端接口
-
-项目已内置一个轻量 Node.js API 服务，开发阶段使用本地 JSON 文件持久化数据，不需要额外安装依赖。
+## 本地启动
 
 ```bash
-pnpm dev:api
+corepack pnpm install
+corepack pnpm dev:api
+corepack pnpm dev
 ```
 
-默认地址：
+前端为 `http://127.0.0.1:5173/`，API 默认为 `http://127.0.0.1:8787/`。复制 `.env.example` 为 `.env` 后按需设置环境变量；`.env` 不应提交。
 
-```text
-http://127.0.0.1:8787
-```
+## 配置
 
-## AI 配置
+`STORAGE_DRIVER=json` 是默认值，使用 `LINGXI_DATA_DIR` 可指定本地测试/开发数据目录。`STORAGE_DRIVER=mysql` 时必须设置：
 
-AI 诊断、润色、语法检查和面试反馈会调用真实 OpenAI 兼容接口。没有配置 API Key 时接口会返回明确错误，不会用本地规则冒充 AI 结果。
+- `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD`
 
-推荐使用环境变量：
+MySQL 运行时会使用迁移后的 `lingxi_store_snapshot` 和受审计的实体投影，覆盖 RetrievalRun、MatchReport、SuggestionRun/ResumeSuggestion、ResumeVersion、Interview Session/Question/Answer/Feedback、AgentRun/AgentStep/Job。生产迁移见 [010_production_hardening.sql](database/migrations/010_production_hardening.sql)，完整关系模型参考 [database.sql](database.sql)。真实 MySQL integration 已在 MySQL 8.x 环境验证通过：MySQL 8.4.11、隔离测试库 `lingxi_resume_test`，已验证 migration 重复执行、事务 commit/rollback、核心实体投影、全链路和后端重启恢复；密码未写入仓库。
+
+AI 使用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 和 `AI_PROVIDER_TIMEOUT_MS`。Embedding 使用 `EMBEDDING_*`，Qdrant 使用 `QDRANT_URL`、`QDRANT_API_KEY` 与 `QDRANT_*`。所有 secret 仅可放在环境变量或本地运行时配置中。
+
+Qdrant 可用 Docker 启动：
 
 ```bash
-OPENAI_API_KEY=你的_api_key
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.5
-pnpm dev:api
+docker compose -f docker-compose.qdrant.yml up -d
 ```
 
-也可以在页面的「AI 服务商」中保存 `Base URL`、`模型 ID` 和 `API Key`。后端不会把完整 API Key 返回给前端。
+`GET /health` 仅说明进程存活；`GET /ready` 还检查 persistence 和 Qdrant，响应不会回显连接串或 secret。
 
-常用接口：
+## 生产行为
 
-- `GET /api/health`：服务健康检查
-- `GET /api/ai-config`：读取 AI 配置状态
-- `PUT /api/ai-config`：保存 AI 服务商、Base URL、模型 ID 和 API Key
-- `POST /api/auth/login`：用户登录。首次使用请通过注册页创建账号；项目不再提供默认弱密码账号。
-- `POST /api/auth/register`：用户注册
-- `GET /api/job-positions`：岗位方向列表
-- `GET /api/resumes`：简历列表
-- `GET /api/resumes/:id`：简历详情
-- `POST /api/resumes/:id/analyze`：生成 AI 简历诊断记录
-- `POST /api/resumes/:id/optimize`：生成 AI 润色记录
-- `POST /api/resumes/:id/grammar-check`：生成 AI 语法检查记录
-- `GET /api/resumes/:id/history`：简历版本历史
-- `POST /api/interviews`：创建模拟面试
-- `POST /api/interviews/:id/answers`：提交面试回答并生成反馈
-- `GET /api/admin/overview`：后台统计概览
+Grounded report、resume suggestions、mock interview generation 和 AgentRun 可以在原有同步 API 路径外，通过请求体 `async: true` 入队。作业状态为 `PENDING`、`RUNNING`、`COMPLETED` 或 `FAILED`，可经 `GET /api/jobs/:id` 查询。第一版是 bounded in-process worker：不无限重试，收到关闭信号后不再接收新作业。
 
-### 岗位知识库（阶段 4，ADMIN 专用）
+对 AI、embedding 和 Qdrant 的外部调用均有 timeout/AbortController 和稳定 failureCode。日志只有 requestId、资源 ID、operation、耗时、状态和 failureCode；不会记录 API key、简历正文、用户回答全文、prompt 或 embedding/vector。
 
-知识库当前仅支持管理员以文本方式录入可追溯的岗位资料；普通用户不能浏览或调用管理接口。资料可使用 Markdown、中文序号、阿拉伯数字、`一、` 和 `【标题】`。服务端只进行换行/空白规范化、章节识别和语义优先切片，不调用 AI 改写原文。
+## 安全边界
 
-- `GET/POST /api/admin/knowledge-documents`：筛选或创建资料
-- `GET/PUT/DELETE /api/admin/knowledge-documents/:id`：查看、编辑或级联删除资料
-- `POST /api/admin/knowledge-documents/:id/process`：生成或重用当前资料的 chunks
-- `GET /api/admin/knowledge-documents/:id/chunks`：查看当前有效 chunks
-- `GET /api/admin/knowledge-documents/:id/processing-records`：查看不可覆写的处理历史
-- `GET /api/admin/knowledge-chunks/:chunkId`：查看单个 chunk
+- 所有读写都经 ownership 校验；跨用户资源返回不可见结果。
+- 只向第三方 AI 发送 provider-safe Resume context；姓名、邮箱、电话、网站、城市、照片、会话和无关 profile 字段被排除。
+- Match Report 的知识 claim 必须有本地可验证 citation；Suggestion 必须被事实证据支持，不能自动应用或自动 ACCEPT。
+- 面试问题与 improved answer 不得把外部资料冒充为用户经历。
+- Agent 只执行服务端 allowlist 中的只读 action，受 `maxSteps` 硬限制；prompt injection 被隔离，`VERIFIED_RESUME_FACT` 必须由实际 Resume quote 支持。
 
-相同 `rawTextHash` 和处理策略会直接返回既有成功结果；新处理只有成功后才替换当前 chunks，失败会保留上一次成功结果。`tokenEstimate` 使用文档化的字符/词近似算法，不等同于模型真实 token 数。阶段 4 不包含文件上传、PDF/DOCX/网页解析、Embedding、向量检索或 RAG。
+## 测试与门禁
 
-### 基础岗位匹配（阶段 3）
+测试全部使用 deterministic local mock Provider，不调用真实收费 AI：
 
-岗位匹配基于用户显式选择的 ResumeVersion 和已成功解析、仍有效的 JD。创建 JobApplication 时必须同时提交 `resumeId`、`resumeVersionId` 和 `jobDescriptionId`；不会以“当前简历”“最近版本”或“最新 JD”补全输入。
+```bash
+node --check backend/server.js
+corepack pnpm test
+corepack pnpm test:mysql
+corepack pnpm test:rag-eval
+corepack pnpm test:retrieval-eval
+corepack pnpm build
+corepack pnpm test:qdrant
+corepack pnpm test:qdrant-retrieval
+git diff --check
+```
 
-- `POST /api/job-applications/:id/matches`：为已锁定的申请创建一次新的基础匹配报告
-- `GET /api/job-applications/:id/matches`：读取该申请的匹配历史摘要
-- `GET /api/resume-job-matches/:matchId`：读取完整六维报告
-- `POST /api/resume-job-matches/:matchId/retry`：只重试失败记录，且产生新的历史记录
-
-报告的六个固定权重为：必备技能 30、项目相关性 25、关键词覆盖 15、经验 10、教育背景 10、表达质量 10。AI 只负责语义判断、双方证据与解释；后端验证证据后重新计算总分，绝不直接采用模型返回的总分。简历中没有证据时，界面和记录统一使用“当前简历中未找到相关证据”，不推断用户是否具备该能力。
-
-匹配提示仅发送去隐私的 `buildAiResumeContext` 和锁定的 JD 材料；姓名、邮箱、电话、网站、照片、Session、API Key 和无关个人资料不会发送给第三方 AI。匹配不会修改简历，也不会覆盖历史报告。
-
-## 数据库
-开发运行时使用 `backend/data/store.json`；`database.sql` 是生产 MySQL 的结构与增量迁移参考，不会被 Node 服务在本地自动执行。文件末尾的“Incremental production migration reference”只包含非破坏性迁移建议，执行前应先备份并按目标 MySQL 版本检查列/索引是否已存在。
-
-`database.sql` 包含课程设计所需的 MySQL 建库、建表和示例数据。
-
-核心表包括：
-
-- `user`
-- `resume`
-- `education_experience`
-- `work_experience`
-- `project_experience`
-- `skill`
-- `job_position`
-- `resume_analysis_record`
-- `resume_optimize_record`
-- `interview_question`
-- `mock_interview`
-- `interview_answer`
-- `system_notice`
-
-## 页面模块
-
-## 阶段 5A：向量索引（ADMIN，已通过最终验收）
-
-阶段 5A 只为已处理的岗位知识 Chunk 建立、重建、删除和审计向量索引，不提供任何搜索或 RAG。复制 `.env.example` 后仅在服务端配置 Embedding/Qdrant 变量；本地可执行 `docker compose -f docker-compose.qdrant.yml up -d` 启动仅绑定 `127.0.0.1:6333` 的 Qdrant。密钥不得写入仓库或 JSON 数据。Docker 可用时运行 `corepack pnpm test:qdrant`。
-
-阶段 5B 已完成真实 Qdrant 复验，全部发布门禁通过：ADMIN 可使用关键词、向量或混合检索实验室，检索只返回本地可验证的当前有效 Chunk。RRF 是默认融合策略；Reranker 默认关闭，失败回退 RRF。允许合并 master 并创建 `rag-stage-5b-passed` 标签（本轮未执行）。`corepack pnpm test:qdrant-retrieval` 是独立真实 Qdrant 检索 smoke。
-
-### 阶段 6：基于 RAG 的岗位匹配报告（6A + 6B 已完成）
-
-阶段 6A + 6B 已完成，Stage 6 基于 RAG 的岗位匹配报告已通过全部验收和发布门禁；Stage 7 尚未开始。该阶段以锁定的岗位申请与基础匹配生成带本地可验证知识引用的报告，并在用户侧展示报告状态、六维分析、Claim 类型、可信引用抽屉与历史版本；不包含简历修改、Agent 或用户自由检索。
-
-- 首页仪表盘
-- 简历工作台
-- AI 简历诊断
-- AI 简历优化
-- 模拟面试
-- 历史记录
-- 管理后台
+`test:mysql` 只接受真实 MySQL 环境变量；缺少配置时明确以 exit 2 跳过，不会 mock MySQL。两项 Qdrant smoke 必须严格串行运行。`test:rag-eval` 输出固定 golden cases 的 Retrieval Recall@K/MRR、grounded claim、suggestion safety、interview grounding 与 Agent safety 汇总；安全指标必须为 100%。

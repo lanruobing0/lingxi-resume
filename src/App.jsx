@@ -902,13 +902,17 @@ function AuthPage({ go, notify, onLogin }) {
   const [form, setForm] = useState({ username: "", password: "", email: "" });
   const [captcha, setCaptcha] = useState({ id: "", imageUrl: "", code: "" });
   const [captchaLoading, setCaptchaLoading] = useState(false);
+  const [captchaError, setCaptchaError] = useState("");
 
   const refreshCaptcha = useCallback(async () => {
     setCaptchaLoading(true);
+    setCaptchaError("");
     try {
       const data = await apiRequest("/api/auth/captcha", { suppressLoginPrompt: true });
       setCaptcha({ id: data.id || "", imageUrl: data.imageUrl || "", code: "" });
     } catch (error) {
+      setCaptcha((current) => ({ ...current, id: "", imageUrl: "" }));
+      setCaptchaError("验证码加载失败，请点击重试");
       notify(`验证码加载失败: ${error.message}`);
     } finally {
       setCaptchaLoading(false);
@@ -961,10 +965,12 @@ function AuthPage({ go, notify, onLogin }) {
           <div className="captcha-field">
             <input autoComplete="off" inputMode="text" maxLength={5} placeholder="输入图中字符" value={captcha.code} onChange={(event) => setCaptcha((current) => ({ ...current, code: event.target.value.toUpperCase() }))} />
             <button className="captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码" disabled={captchaLoading} onClick={refreshCaptcha}>
-              {captcha.imageUrl ? <img src={captcha.imageUrl} alt="验证码，点击刷新" /> : <RefreshCw className={captchaLoading ? "spin" : ""} size={18} />}
+              {captcha.imageUrl
+                ? <img src={captcha.imageUrl} alt="验证码，点击刷新" onError={() => { setCaptcha((current) => ({ ...current, imageUrl: "" })); setCaptchaError("验证码图片加载失败，请点击重试"); }} />
+                : <span className={captchaError ? "captcha-retry" : "captcha-loading"}><RefreshCw className={captchaLoading ? "spin" : ""} size={16} />{captchaError ? "重试" : "加载中"}</span>}
             </button>
-            <button className="plain-icon captcha-refresh" type="button" aria-label="刷新验证码" title="刷新验证码" disabled={captchaLoading} onClick={refreshCaptcha}><RefreshCw className={captchaLoading ? "spin" : ""} size={16} /></button>
           </div>
+          {captchaError && <span className="captcha-error" role="status">{captchaError}</span>}
         </label>
         {mode === "register" && <p className="auth-security-note">密码需至少 10 位，并同时包含字母和数字。</p>}
         {mode === "register" && (
