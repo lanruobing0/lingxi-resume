@@ -1,5 +1,6 @@
 import { EmbeddingProviderError, OpenAICompatibleEmbeddingProvider, createEmbeddingProfile, getEmbeddingConfig } from "./embedding-provider.js";
 import { buildCollectionName, getQdrantConfig, QdrantClient, QdrantError } from "./qdrant-client.js";
+import { buildUpstashNamespace, getUpstashVectorConfig, UpstashVectorClient, UpstashVectorError } from "./upstash-vector-client.js";
 import { buildKnowledgeEmbeddingText, createDeterministicPointId, createEmbeddingInputHash, sha256 } from "./knowledge-embedding-text.js";
 
 export class KnowledgeVectorIndexError extends Error {
@@ -7,7 +8,7 @@ export class KnowledgeVectorIndexError extends Error {
 }
 
 const safeError = (error) => {
-  if (error instanceof KnowledgeVectorIndexError || error instanceof EmbeddingProviderError || error instanceof QdrantError) return error;
+  if (error instanceof KnowledgeVectorIndexError || error instanceof EmbeddingProviderError || error instanceof QdrantError || error instanceof UpstashVectorError) return error;
   return new KnowledgeVectorIndexError("VECTOR_INDEX_FAILED", "Vector index operation failed", 502);
 };
 
@@ -28,10 +29,23 @@ function failureForDocument(document, error, now) {
 }
 
 export function getVectorRuntimeStatus(env = process.env) {
-  const embeddingConfig = getEmbeddingConfig(env); const qdrantConfig = getQdrantConfig(env);
+  const requestedDriver = String(env.VECTOR_STORE_DRIVER || "").trim().toLowerCase();
+  const upstashConfig = getUpstashVectorConfig(env);
+  const availableQdrantConfig = getQdrantConfig(env);
+  // An attached Upstash resource may use a manual-vector index, so it must not
+  // replace the configured Qdrant path until an operator explicitly selects it.
+  const driver = requestedDriver === "upstash" ? "upstash" : "qdrant";
+  const qdrantConfig = driver === "qdrant" ? availableQdrantConfig : null;
+  const embeddingConfig = driver === "upstash" && upstashConfig
+    ? { provider: "upstash-native", model: upstashConfig.model, dimension: upstashConfig.dimension }
+    : getEmbeddingConfig(env);
   const profile = embeddingConfig ? createEmbeddingProfile(embeddingConfig) : null;
-  return { embeddingConfig, qdrantConfig, profile, collectionName: profile && qdrantConfig ? buildCollectionName(qdrantConfig, profile) : null };
+  const vectorConfig = driver === "upstash" ? upstashConfig : qdrantConfig;
+  const collectionName = profile && vectorConfig ? (driver === "upstash" ? buildUpstashNamespace(vectorConfig, profile) : buildCollectionName(vectorConfig, profile)) : null;
+  return { driver, embeddingConfig, vectorConfig, qdrantConfig, upstashConfig: driver === "upstash" ? upstashConfig : null, profile, collectionName };
 }
+
+export function createVectorClient(runtime) { return runtime.driver === "upstash" ? new UpstashVectorClient(runtime.upstashConfig) : new QdrantClient(runtime.qdrantConfig); }
 
 export class KnowledgeVectorIndexService {
   constructor({ env = process.env, persist, now = () => new Date().toISOString() } = {}) { this.env = env; this.persist = persist; this.now = now; }
@@ -39,16 +53,16 @@ export class KnowledgeVectorIndexService {
 
   async status() {
     const runtime = this.runtime();
-    let healthy = false; let healthCode = runtime.qdrantConfig ? "QDRANT_UNAVAILABLE" : "QDRANT_NOT_CONFIGURED";
-    if (runtime.qdrantConfig) { try { await new QdrantClient(runtime.qdrantConfig).health(); healthy = true; healthCode = null; } catch (error) { healthCode = safeError(error).code; } }
-    return { embedding: runtime.embeddingConfig ? { configured: true, provider: runtime.profile.provider, model: runtime.profile.model, dimension: runtime.profile.dimension, profileId: runtime.profile.profileId } : { configured: false }, qdrant: { configured: Boolean(runtime.qdrantConfig), healthy, failureCode: healthCode }, collectionName: runtime.collectionName };
+    let healthy = false; let healthCode = runtime.vectorConfig ? "VECTOR_STORE_UNAVAILABLE" : "VECTOR_STORE_NOT_CONFIGURED";
+    if (runtime.vectorConfig) { try { await createVectorClient(runtime).health(); healthy = true; healthCode = null; } catch (error) { healthCode = safeError(error).code; } }
+    return { embedding: runtime.embeddingConfig ? { configured: true, provider: runtime.profile.provider, model: runtime.profile.model, dimension: runtime.profile.dimension, profileId: runtime.profile.profileId } : { configured: false }, vectorStore: { driver: runtime.driver, configured: Boolean(runtime.vectorConfig), healthy, failureCode: healthCode }, qdrant: { configured: Boolean(runtime.qdrantConfig), healthy: runtime.driver === "qdrant" && healthy, failureCode: runtime.driver === "qdrant" ? healthCode : "QDRANT_NOT_CONFIGURED" }, collectionName: runtime.collectionName };
   }
 
   async indexDocument(store, document, createdBy, { force = false } = {}) {
     if (document.status !== "PROCESSED") throw new KnowledgeVectorIndexError("DOCUMENT_NOT_PROCESSED", "Only processed knowledge documents can be indexed");
     const runtime = this.runtime();
     if (!runtime.embeddingConfig) throw new KnowledgeVectorIndexError("EMBEDDING_NOT_CONFIGURED", "Embedding provider is not configured", 503);
-    if (!runtime.qdrantConfig) throw new KnowledgeVectorIndexError("QDRANT_NOT_CONFIGURED", "Qdrant is not configured", 503);
+    if (!runtime.vectorConfig) throw new KnowledgeVectorIndexError(runtime.driver === "qdrant" ? "QDRANT_NOT_CONFIGURED" : "VECTOR_STORE_NOT_CONFIGURED", runtime.driver === "qdrant" ? "Qdrant is not configured" : "Vector store is not configured", 503);
     const chunks = store.knowledgeChunks.filter((chunk) => chunk.documentId === document.id && chunk.processingVersion === document.processingVersion).sort((a, b) => a.chunkIndex - b.chunkIndex);
     if (!chunks.length || chunks.length !== document.chunkCount) throw new KnowledgeVectorIndexError("CURRENT_CHUNKS_MISSING", "Current processed chunks are unavailable");
     const prepared = chunks.map((chunk) => ({ chunk, text: buildKnowledgeEmbeddingText(document, chunk), embeddingInputHash: createEmbeddingInputHash(document, chunk) }));
@@ -61,15 +75,20 @@ export class KnowledgeVectorIndexService {
     store.knowledgeIndexRuns.push(run); document.vectorStatus = "INDEXING"; document.indexFailureCode = ""; document.indexFailureMessage = ""; document.updatedAt = timestamp; await this.persist(store);
     let newPoints = [];
     try {
-      const qdrant = new QdrantClient(runtime.qdrantConfig); await qdrant.health();
+      const vectorStore = createVectorClient(runtime); await vectorStore.health();
       run.status = "EMBEDDING"; await this.persist(store);
-      const embedded = await new OpenAICompatibleEmbeddingProvider(runtime.embeddingConfig).embedTexts(prepared.map((item) => item.text));
-      validateVectors(embedded.vectors, prepared.length, runtime.profile.dimension); run.embeddedCount = embedded.vectors.length;
-      await qdrant.ensureCollection(runtime.collectionName, runtime.profile.dimension); run.status = "UPSERTING";
-      newPoints = prepared.map((item, index) => ({ id: createDeterministicPointId({ documentId: document.id, chunkIndex: item.chunk.chunkIndex, embeddingInputHash: item.embeddingInputHash, embeddingProfileId: runtime.profile.profileId }), vector: embedded.vectors[index], payload: { documentId: document.id, chunkId: item.chunk.id, processingVersion: document.processingVersion, chunkIndex: item.chunk.chunkIndex, contentHash: item.chunk.contentHash, embeddingInputHash: item.embeddingInputHash, documentType: document.documentType, jobFamily: document.jobFamily || null, seniority: document.seniority || null, skillTags: document.skillTags || [], language: document.language, embeddingProfileId: runtime.profile.profileId, indexRunId: run.id, indexedAt: this.now() } }));
-      for (let offset = 0; offset < newPoints.length; offset += 64) await qdrant.upsertPoints(runtime.collectionName, newPoints.slice(offset, offset + 64));
-      const found = await qdrant.retrievePoints(runtime.collectionName, newPoints.map((point) => point.id));
-      if (found.length !== newPoints.length) throw new KnowledgeVectorIndexError("QDRANT_WRITE_VERIFICATION_FAILED", "Qdrant did not confirm every written point", 502);
+      let vectors = [];
+      if (runtime.driver === "upstash") run.embeddedCount = prepared.length;
+      else { const embedded = await new OpenAICompatibleEmbeddingProvider(runtime.embeddingConfig).embedTexts(prepared.map((item) => item.text)); validateVectors(embedded.vectors, prepared.length, runtime.profile.dimension); vectors = embedded.vectors; run.embeddedCount = vectors.length; }
+      await vectorStore.ensureCollection(runtime.collectionName, runtime.profile.dimension); run.status = "UPSERTING";
+      newPoints = prepared.map((item, index) => ({ id: createDeterministicPointId({ documentId: document.id, chunkIndex: item.chunk.chunkIndex, embeddingInputHash: item.embeddingInputHash, embeddingProfileId: runtime.profile.profileId }), ...(runtime.driver === "upstash" ? { data: item.text } : { vector: vectors[index] }), payload: { documentId: document.id, chunkId: item.chunk.id, processingVersion: document.processingVersion, chunkIndex: item.chunk.chunkIndex, contentHash: item.chunk.contentHash, embeddingInputHash: item.embeddingInputHash, documentType: document.documentType, jobFamily: document.jobFamily || null, seniority: document.seniority || null, skillTags: document.skillTags || [], language: document.language, embeddingProfileId: runtime.profile.profileId, indexRunId: run.id, indexedAt: this.now() } }));
+      for (let offset = 0; offset < newPoints.length; offset += 64) {
+        const batch = newPoints.slice(offset, offset + 64);
+        if (runtime.driver === "upstash") await vectorStore.upsertData(runtime.collectionName, batch);
+        else await vectorStore.upsertPoints(runtime.collectionName, batch);
+      }
+      const found = await vectorStore.retrievePoints(runtime.collectionName, newPoints.map((point) => point.id));
+      if (found.length !== newPoints.length) throw new KnowledgeVectorIndexError("VECTOR_WRITE_VERIFICATION_FAILED", "Vector store did not confirm every written point", 502);
       run.upsertedCount = newPoints.length; run.status = "SWITCHING";
       const oldRecords = store.knowledgeVectorRecords.filter((record) => record.documentId === document.id
         && record.pointId
@@ -90,7 +109,7 @@ export class KnowledgeVectorIndexService {
           let removedCount = 0;
           for (const [collectionName, group] of Object.entries(groupBy(obsolete, "collectionName"))) {
             const pointIds = [...new Set(group.map((record) => record.pointId))];
-            await qdrant.deletePoints(collectionName, pointIds);
+            await vectorStore.deletePoints(collectionName, pointIds);
             removedCount += pointIds.length;
           }
           run.removedCount = removedCount;
@@ -104,7 +123,7 @@ export class KnowledgeVectorIndexService {
       await this.persist(store); return { idempotent: false, activeIndexRunId: run.id, indexedChunkCount: records.length, item: document, run };
     } catch (error) {
       const safe = safeError(error);
-      if (newPoints.length) { const records = newPoints.map((point, index) => ({ id: nextId(store.knowledgeVectorRecords) + index, indexRunId: run.id, documentId: document.id, chunkId: prepared[index]?.chunk.id || 0, processingVersion: document.processingVersion, contentHash: prepared[index]?.chunk.contentHash || "", embeddingInputHash: prepared[index]?.embeddingInputHash || "", embeddingProfileId: runtime.profile.profileId, collectionName: runtime.collectionName, pointId: point.id, status: "PENDING_DELETE", indexedAt: null, createdAt: this.now(), updatedAt: this.now() })); store.knowledgeVectorRecords.push(...records); try { await new QdrantClient(runtime.qdrantConfig).deletePoints(runtime.collectionName, newPoints.map((point) => point.id)); records.forEach((record) => { record.cleanupCompletedAt = this.now(); }); } catch { run.cleanupStatus = "FAILED"; } }
+      if (newPoints.length) { const records = newPoints.map((point, index) => ({ id: nextId(store.knowledgeVectorRecords) + index, indexRunId: run.id, documentId: document.id, chunkId: prepared[index]?.chunk.id || 0, processingVersion: document.processingVersion, contentHash: prepared[index]?.chunk.contentHash || "", embeddingInputHash: prepared[index]?.embeddingInputHash || "", embeddingProfileId: runtime.profile.profileId, collectionName: runtime.collectionName, pointId: point.id, status: "PENDING_DELETE", indexedAt: null, createdAt: this.now(), updatedAt: this.now() })); store.knowledgeVectorRecords.push(...records); try { await createVectorClient(runtime).deletePoints(runtime.collectionName, newPoints.map((point) => point.id)); records.forEach((record) => { record.cleanupCompletedAt = this.now(); }); } catch { run.cleanupStatus = "FAILED"; } }
       run.status = "FAILED"; run.failureCode = safe.code; run.failureMessage = safe.message; run.completedAt = this.now(); failureForDocument(document, safe, this.now); if (document.activeIndexRunId) document.vectorStatus = previousVectorStatus === "INDEXING" ? "INDEXED" : previousVectorStatus; await this.persist(store); throw safe;
     }
   }
@@ -112,8 +131,8 @@ export class KnowledgeVectorIndexService {
   async deleteDocumentIndex(store, document) {
     const records = store.knowledgeVectorRecords.filter((record) => record.documentId === document.id);
     if (!records.length) { Object.assign(document, { vectorStatus: "NOT_INDEXED", activeIndexRunId: null, indexedProcessingVersion: null, indexedChunkCount: 0, embeddingProfileId: null, vectorCollection: null, indexedAt: null, indexFailureCode: "", indexFailureMessage: "", updatedAt: this.now() }); return { deletedCount: 0 }; }
-    const runtime = this.runtime(); if (!runtime.qdrantConfig) throw new KnowledgeVectorIndexError("QDRANT_NOT_CONFIGURED", "Qdrant is not configured; vector tracking is preserved", 503);
-    try { const qdrant = new QdrantClient(runtime.qdrantConfig); await qdrant.health(); for (const [collectionName, group] of Object.entries(groupBy(records, "collectionName"))) await qdrant.deletePoints(collectionName, [...new Set(group.map((record) => record.pointId))]); } catch (error) { const safe = safeError(error); failureForDocument(document, safe, this.now); await this.persist(store); throw safe; }
+    const runtime = this.runtime(); if (!runtime.vectorConfig) throw new KnowledgeVectorIndexError(runtime.driver === "qdrant" ? "QDRANT_NOT_CONFIGURED" : "VECTOR_STORE_NOT_CONFIGURED", runtime.driver === "qdrant" ? "Qdrant is not configured; vector tracking is preserved" : "Vector store is not configured; vector tracking is preserved", 503);
+    try { const vectorStore = createVectorClient(runtime); await vectorStore.health(); for (const [collectionName, group] of Object.entries(groupBy(records, "collectionName"))) await vectorStore.deletePoints(collectionName, [...new Set(group.map((record) => record.pointId))]); } catch (error) { const safe = safeError(error); failureForDocument(document, safe, this.now); await this.persist(store); throw safe; }
     store.knowledgeVectorRecords = store.knowledgeVectorRecords.filter((record) => record.documentId !== document.id);
     Object.assign(document, { vectorStatus: "NOT_INDEXED", activeIndexRunId: null, indexedProcessingVersion: null, indexedChunkCount: 0, embeddingProfileId: null, vectorCollection: null, indexedAt: null, indexFailureCode: "", indexFailureMessage: "", updatedAt: this.now() }); await this.persist(store); return { deletedCount: records.length };
   }

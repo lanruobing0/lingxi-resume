@@ -153,8 +153,15 @@ function verifiedResumeSupportText(value) {
 export function validateVerifiedResumeFactSupport({ claimText, citations, localQuotes }) {
   const supportText = verifiedResumeSupportText(claimText);
   const result = validateClaimSupport({ claimText: supportText, citations, localQuotes });
-  if (result.supported || result.supportFailureCode !== "INSUFFICIENT_SEMANTIC_OVERLAP") return result;
+  // This entry point receives owned RESUME quotes after source-type validation.
+  // A complete verbatim quote already proves the entire claim. Generic knowledge
+  // attribution heuristics can mistake phrases such as 用户体验 for the applicant.
+  const sameText = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const quotes = unique((localQuotes || citations?.map((citation) => citation.quote) || []).map((quote) => String(quote || "").trim()));
+  if (result.supportFailureCode === "UNSUPPORTED_USER_ATTRIBUTION" && quotes.some((quote) => sameText(quote) === sameText(claimText))) {
+    return { ...result, supported: true, supportStatus: "SUPPORTED", supportFailureCode: "" };
+  }
+  if (result.supported || result.supportFailureCode !== "INSUFFICIENT_SEMANTIC_OVERLAP") return result;
   const claimBigrams = cjkBigrams(supportText);
   const quoteBigrams = new Set(cjkBigrams(quotes.join("\n")));
   const supportedBigramCount = claimBigrams.filter((term) => quoteBigrams.has(term)).length;

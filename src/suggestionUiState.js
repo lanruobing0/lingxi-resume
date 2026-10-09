@@ -20,6 +20,7 @@ export function suggestionFailureMessage(code) {
     SUGGESTION_PROVIDER_NOT_CONFIGURED: "AI 服务尚未配置，暂时无法生成建议。",
     SUGGESTION_PROVIDER_UNAVAILABLE: "AI 服务暂时不可用，请稍后重试。",
     SUGGESTION_INVALID_OUTPUT: "生成结果未通过安全校验，未创建可应用建议。",
+    SUGGESTION_INVALID_PATCH: "AI 返回的修改路径未通过校验，简历未被修改。请重新生成建议；若在接受建议时出现，请刷新当前状态。",
   };
   return messages[code] || "建议操作未完成，请查看当前状态后再试。";
 }

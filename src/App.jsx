@@ -49,6 +49,9 @@ import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, sugg
 import { feedbackTextItems, interviewApiRequest, interviewCategoryLabel, interviewDifficultyLabel, interviewFailureMessage, interviewStatusLabel, nextInterviewQuestionIndex, safeKnowledgeSources } from "./interviewUiState";
 import { agentActionLabel, agentApiRequest, agentFailureMessage, agentResultTypes, agentStatusLabel, safeAgentStepSummary, safeRetrievalSources } from "./agentUiState";
 import { usePresence } from "./hooks/usePresence";
+import { shouldRefreshCaptcha } from "./captchaState";
+import { InterviewLibrary } from "./InterviewLibrary";
+import { jobWorkspaceTabs, readJobWorkspaceRoute, jobWorkspaceHash, collectJobGroupEvidence } from "./jobWorkspaceState";
 
 const appNav = [
   { id: "resume", label: "我的简历", icon: FileText },
@@ -273,7 +276,8 @@ function App() {
 
   const go = (id) => {
     setView(id);
-    window.history.replaceState(null, "", id === "landing" ? "#landing" : `#${id}`);
+    window.history.replaceState(null, "", `#${id}`);
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
   };
 
   useEffect(() => {
@@ -384,7 +388,7 @@ function App() {
 
 function initialView() {
   if (typeof window === "undefined") return "landing";
-  const rawHash = window.location.hash.replace("#", "");
+  const rawHash = window.location.hash.replace("#", "").split("?")[0];
   const hash = rawHash === "grammar" ? "ai-tools" : rawHash === "sample" ? "templates" : rawHash;
   const allowed = ["landing", "auth", "resume-edit", ...appNav.map((item) => item.id), "analysis", "optimize"];
   return allowed.includes(hash) ? hash : "landing";
@@ -805,6 +809,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
     auth: { label: "用户登录注册" },
     "resume-edit": { label: "编辑简历" },
   }[active] || { label: "我的简历" };
+  const requiresLogin = ["resume", "resume-edit", "jobs", "ai-tools", "providers", "interview", "history", "settings", "analysis", "optimize"].includes(active);
 
   const openNavigationItem = (id) => {
     if (id === "admin" && currentUser?.role !== "ADMIN") {
@@ -822,7 +827,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
   const requestGuestLogin = (event) => {
     if (currentUser || active === "auth") return;
     const control = event.target.closest("button, input, textarea, select");
-    if (!control) return;
+    if (!control || control.closest("[data-allow-guest]")) return;
     event.preventDefault();
     event.stopPropagation();
     window.dispatchEvent(new CustomEvent("lingxi-login-required"));
@@ -877,23 +882,40 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           </div>
         </header>
 
-        <section key={active} className="workspace-content page-enter" onPointerDownCapture={requestGuestLogin} onClickCapture={requestGuestLogin} onKeyDownCapture={requestGuestLogin}>
+        <section key={["jobs", "interview"].includes(active) ? "job-workspace" : active} className="workspace-content page-enter" onPointerDownCapture={requestGuestLogin} onClickCapture={requestGuestLogin} onKeyDownCapture={requestGuestLogin}>
           {active === "auth" && <AuthPage go={go} notify={notify} onLogin={onLogin} />}
+          {!currentUser && requiresLogin && <GuestWorkspaceNotice pageLabel={activeMeta.label} go={go} />}
           {active === "resume" && currentUser && <ResumeLibrary go={go} notify={notify} onOpenResume={onOpenResume} onApplyTemplate={onApplyTemplate} />}
-          {active === "jobs" && currentUser && <JobDescriptionWorkspace notify={notify} activeResumeId={activeResumeId} onOpenResume={onOpenResume} go={go} />}
-          {active === "resume-edit" && activeResumeId && <ResumeEditor key={`${currentUser?.id || "guest"}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
+          {["jobs", "interview"].includes(active) && currentUser && <JobDescriptionWorkspace entry={active} notify={notify} activeResumeId={activeResumeId} onOpenResume={onOpenResume} go={go} />}
+          {active === "resume-edit" && currentUser && activeResumeId && <ResumeEditor key={`${currentUser.id}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
-          {active === "ai-tools" && <AiToolsPanel notify={notify} go={go} resumeId={activeResumeId} />}
-          {active === "providers" && <ProviderSettings notify={notify} />}
-          {active === "interview" && <InterviewStageEntry go={go} />}
-          {active === "history" && <HistoryPage notify={notify} resumeId={activeResumeId} />}
+          {active === "ai-tools" && currentUser && <AiToolsPanel notify={notify} go={go} resumeId={activeResumeId} />}
+          {active === "providers" && currentUser && <ProviderSettings notify={notify} />}
+          {active === "history" && currentUser && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
-          {active === "settings" && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
-          {active === "analysis" && <AnalysisPanel notify={notify} go={go} resumeId={activeResumeId} />}
-          {active === "optimize" && <OptimizePanel notify={notify} resumeId={activeResumeId} />}
+          {active === "settings" && currentUser && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
+          {active === "analysis" && currentUser && <AnalysisPanel notify={notify} go={go} resumeId={activeResumeId} />}
+          {active === "optimize" && currentUser && <OptimizePanel notify={notify} resumeId={activeResumeId} />}
         </section>
       </main>
     </div>
+  );
+}
+
+const captchaStaleCheckIntervalMs = 30 * 1000;
+
+function firstAnalysisReadyVersionId(versions = []) {
+  return String(versions.find((version) => version.isAnalysisReady)?.id || "");
+}
+
+function GuestWorkspaceNotice({ pageLabel, go }) {
+  return (
+    <section className="job-empty guest-workspace-notice" aria-labelledby="guest-workspace-title">
+      <span className="section-kicker">欢迎使用灵犀简历</span>
+      <h2 id="guest-workspace-title">登录后使用{pageLabel}</h2>
+      <p>注册后即可安全保存简历、录入岗位 JD，并使用与你个人资料绑定的 AI 分析功能。</p>
+      <button className="black-small" data-allow-guest onClick={() => go("auth")}>登录 / 注册</button>
+    </section>
   );
 }
 
@@ -903,31 +925,62 @@ function AuthPage({ go, notify, onLogin }) {
   const [captcha, setCaptcha] = useState({ id: "", imageUrl: "", code: "" });
   const [captchaLoading, setCaptchaLoading] = useState(false);
   const [captchaError, setCaptchaError] = useState("");
+  const captchaIssuedAtRef = useRef(0);
+  const captchaRefreshInFlightRef = useRef(false);
 
   const refreshCaptcha = useCallback(async () => {
+    if (captchaRefreshInFlightRef.current) return;
+    captchaRefreshInFlightRef.current = true;
     setCaptchaLoading(true);
     setCaptchaError("");
     try {
       const data = await apiRequest("/api/auth/captcha", { suppressLoginPrompt: true });
       setCaptcha({ id: data.id || "", imageUrl: data.imageUrl || "", code: "" });
+      captchaIssuedAtRef.current = Date.now();
     } catch (error) {
       setCaptcha((current) => ({ ...current, id: "", imageUrl: "" }));
+      captchaIssuedAtRef.current = 0;
       setCaptchaError("验证码加载失败，请点击重试");
       notify(`验证码加载失败: ${error.message}`);
     } finally {
+      captchaRefreshInFlightRef.current = false;
       setCaptchaLoading(false);
     }
   }, [notify]);
 
   useEffect(() => {
     refreshCaptcha();
+    const refreshIfStale = () => {
+      if (shouldRefreshCaptcha(captchaIssuedAtRef.current)) refreshCaptcha();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshIfStale();
+    };
+    const intervalId = window.setInterval(refreshIfStale, captchaStaleCheckIntervalMs);
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", refreshIfStale);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", refreshIfStale);
+    };
   }, [refreshCaptcha]);
 
   const submit = async () => {
+    if (!captcha.id || captchaLoading) {
+      notify("验证码尚未就绪，请刷新后重试");
+      refreshCaptcha();
+      return;
+    }
+    if (!captcha.code.trim()) {
+      notify("请输入图片中的验证码");
+      return;
+    }
     try {
       const path = mode === "login" ? "/api/auth/login" : "/api/auth/register";
       const data = await apiRequest(path, {
         method: "POST",
+        suppressLoginPrompt: true,
         body: JSON.stringify({ ...form, captchaId: captcha.id, captchaCode: captcha.code }),
       });
       onLogin(data.user);
@@ -966,8 +1019,8 @@ function AuthPage({ go, notify, onLogin }) {
             <input autoComplete="off" inputMode="text" maxLength={5} placeholder="输入图中字符" value={captcha.code} onChange={(event) => setCaptcha((current) => ({ ...current, code: event.target.value.toUpperCase() }))} />
             <button className="captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码" disabled={captchaLoading} onClick={refreshCaptcha}>
               {captcha.imageUrl
-                ? <img src={captcha.imageUrl} alt="验证码，点击刷新" onError={() => { setCaptcha((current) => ({ ...current, imageUrl: "" })); setCaptchaError("验证码图片加载失败，请点击重试"); }} />
-                : <span className={captchaError ? "captcha-retry" : "captcha-loading"}><RefreshCw className={captchaLoading ? "spin" : ""} size={16} />{captchaError ? "重试" : "加载中"}</span>}
+                ? <img src={captcha.imageUrl} alt="验证码，点击刷新" onError={() => { captchaIssuedAtRef.current = 0; setCaptcha((current) => ({ ...current, imageUrl: "" })); setCaptchaError("验证码图片加载失败，请点击重试"); }} />
+                : <span className={captchaError ? "captcha-retry" : "captcha-loading"}><RefreshCw className={captchaLoading ? "spin" : ""} size={16} />{captchaLoading ? "加载中" : captchaError ? "重试" : "加载验证码"}</span>}
             </button>
           </div>
           {captchaError && <span className="captcha-error" role="status">{captchaError}</span>}
@@ -2293,7 +2346,15 @@ function ResultSkeleton({ lines = 3 }) {
   return <div className="result-skeleton" aria-label="正在加载结果">{Array.from({ length: lines }, (_, index) => <span className="skeleton" key={index} style={{ "--skeleton-width": `${92 - index * 12}%` }} />)}</div>;
 }
 
-function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
+export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go, entry = "jobs" }) {
+  const [workspaceRoute, setWorkspaceRoute] = useState(() => readJobWorkspaceRoute(typeof window === "undefined" ? `#${entry}` : window.location.hash));
+  const workspaceTab = workspaceRoute.tab;
+  const isInterviewPage = workspaceRoute.page === "interview" || workspaceTab === "interview";
+  const interviewDrafts = useRef({});
+  const navigateWorkspace = (tab, jobId = detail?.item?.id, applicationId = selectedApplicationId) => {
+    window.location.hash = jobWorkspaceHash({ tab, jobId, applicationId,
+      reportId: tab === "match" && String(applicationId) === String(selectedApplicationId) ? selectedInterview?.matchReportId || selectedReport?.id : undefined });
+  };
   const [mode, setMode] = useState("list");
   const [jobs, setJobs] = useState([]);
   const [detail, setDetail] = useState(null);
@@ -2316,6 +2377,8 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [suggestionWorking, setSuggestionWorking] = useState(false);
   const [suggestionError, setSuggestionError] = useState(null);
   const [suggestionSuccess, setSuggestionSuccess] = useState("");
+  const [historyDeleteCandidate, setHistoryDeleteCandidate] = useState(null);
+  const [historyDeleting, setHistoryDeleting] = useState(false);
   const [resumeVersionHistory, setResumeVersionHistory] = useState([]);
   const [selectedVersionSnapshot, setSelectedVersionSnapshot] = useState(null);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
@@ -2337,6 +2400,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const [working, setWorking] = useState(false);
   const [form, setForm] = useState({ title: "", companyName: "", sourceUrl: "", rawText: "" });
   const [editingId, setEditingId] = useState(null);
+  const [workspaceLoadError, setWorkspaceLoadError] = useState("");
 
   const loadJobs = useCallback(async () => {
     try {
@@ -2468,7 +2532,14 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       const data = await apiRequest(request.path);
       const items = data.items || [];
       setInterviewSessions(items);
-      if (autoSelect && items[0]?.id) await openInterviewSession(items[0].id);
+      if (autoSelect) {
+        const requested = new URLSearchParams(window.location.hash.split("?")[1]).get("session");
+        const preparing = new URLSearchParams(window.location.hash.split("?")[1]).has("report") && !requested;
+        const target = requested ? items.find(item => String(item.id) === requested) : preparing ? null : items[0];
+        if (requested && !target) throw new Error("指定面试已删除或不属于此岗位任务");
+        if (target?.id) await openInterviewSession(target.id);
+        else { setSelectedInterview(null); setInterviewFeedback({}); }
+      }
       if (!items.length) {
         setSelectedInterview(null);
         setInterviewFeedback({});
@@ -2484,6 +2555,47 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setInterviewLoading(false);
     }
   }, [openInterviewSession]);
+
+  const deleteWorkspaceHistory = async () => {
+    if (!historyDeleteCandidate || historyDeleting) return;
+    const { kind, item } = historyDeleteCandidate;
+    setHistoryDeleting(true);
+    try {
+      const resource = { suggestion: "suggestion-runs", interview: "interview-sessions", agent: "agent-runs" }[kind];
+      await apiRequest(`/api/${resource}/${item.id}`, { method: "DELETE" });
+      setHistoryDeleteCandidate(null);
+      if (kind === "suggestion") {
+        const wasSelected = selectedSuggestionRun?.id === item.id;
+        if (wasSelected) setSelectedSuggestionRun(null);
+        setSuggestionRuns((items) => items.filter((run) => run.id !== item.id));
+        await loadSuggestionRuns(selectedReport?.id, { autoSelect: wasSelected });
+      } else if (kind === "agent") {
+        const wasSelected = selectedAgentRun?.id === item.id;
+        if (wasSelected) { setSelectedAgentRun(null); setAgentSteps([]); }
+        setAgentRuns((items) => items.filter((run) => run.id !== item.id));
+        await loadAgentRuns(selectedApplicationId, { autoSelect: wasSelected });
+      } else {
+        const wasSelected = selectedInterview?.id === item.id;
+        if (wasSelected) {
+          setSelectedInterview(null);
+          setInterviewFeedback({});
+          setActiveInterviewQuestion(0);
+          window.history.replaceState(null, "", jobWorkspaceHash({ tab: "interview", jobId: detail?.item?.id, applicationId: selectedApplicationId }));
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
+        }
+        for (const key of Object.keys(interviewDrafts.current)) {
+          if (key.startsWith(`${item.id}:`)) delete interviewDrafts.current[key];
+        }
+        setInterviewSessions((items) => items.filter((session) => session.id !== item.id));
+        await loadInterviewSessions(selectedApplicationId, { autoSelect: wasSelected });
+      }
+      notify("历史记录已删除");
+    } catch (error) {
+      notify(`删除失败：${error.message}`);
+    } finally {
+      setHistoryDeleting(false);
+    }
+  };
 
   const openAgentRun = useCallback(async (runId) => {
     if (!runId) return null;
@@ -2569,7 +2681,12 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       const data = await apiRequest(`/api/job-applications/${applicationId}/reports`);
       const items = data.items || [];
       setReports(items);
-      if (autoSelect && items[0]?.id) await openGroundedReport(items[0].id);
+      if (autoSelect) {
+        const requested = new URLSearchParams(window.location.hash.split("?")[1]).get("report");
+        const target = requested ? items.find(item => String(item.id) === requested) : items.find(item => ["COMPLETED", "DEGRADED"].includes(item.status)) || items[0];
+        if (requested && !target) throw new Error("指定岗位报告已不可用");
+        if (target?.id) await openGroundedReport(target.id);
+      }
       return items;
     } catch (error) {
       setReports([]);
@@ -2604,6 +2721,8 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   const loadDetail = useCallback(async (jobId) => {
     try {
       setLoading(true);
+      setWorkspaceLoadError("");
+      setMode("list");
       const [jobData, resumeData, applicationData] = await Promise.all([
         apiRequest(`/api/job-descriptions/${jobId}`),
         apiRequest("/api/resumes"),
@@ -2618,12 +2737,14 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       if (nextResumeId) {
         const versionData = await apiRequest(`/api/resumes/${nextResumeId}/versions`);
         setResumeVersions(versionData.items || []);
-        setSelectedResumeVersionId(String(versionData.items?.[0]?.id || ""));
+        setSelectedResumeVersionId(firstAnalysisReadyVersionId(versionData.items));
       } else {
         setResumeVersions([]);
         setSelectedResumeVersionId("");
       }
-      const nextApplication = nextApplications.find((item) => item.resumeVersionId) || nextApplications[0];
+      const requestedApplicationId = readJobWorkspaceRoute(window.location.hash).applicationId;
+      const nextApplication = requestedApplicationId ? nextApplications.find(item => String(item.id) === requestedApplicationId) : nextApplications.find(item => item.resumeVersionId) || nextApplications[0];
+      if (requestedApplicationId && !nextApplication) throw new Error("指定求职任务不属于此岗位或已不可用");
       setSelectedApplicationId(String(nextApplication?.id || ""));
       setMatches([]);
       setSelectedMatch(null);
@@ -2653,6 +2774,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       ]);
       setMode("detail");
     } catch (error) {
+      setWorkspaceLoadError(error.message);
       notify(`读取岗位详情失败: ${error.message}`);
       setMode("list");
     } finally {
@@ -2661,6 +2783,18 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
   }, [activeResumeId, loadAgentRuns, loadGroundedReports, loadInterviewSessions, loadMatches, notify]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
+  useEffect(() => {
+    const syncRoute = () => setWorkspaceRoute(readJobWorkspaceRoute(window.location.hash));
+    window.addEventListener("hashchange", syncRoute);
+    syncRoute();
+    return () => window.removeEventListener("hashchange", syncRoute);
+  }, [entry]);
+  const detailLoaderRef = useRef(loadDetail);
+  detailLoaderRef.current = loadDetail;
+  useEffect(() => {
+    if (workspaceRoute.jobId) detailLoaderRef.current(workspaceRoute.jobId);
+    else setMode("list");
+  }, [workspaceRoute.jobId]);
   useEffect(() => { if (activeResumeId) setSelectedResumeId(activeResumeId); }, [activeResumeId]);
 
   const selectResume = async (resumeId) => {
@@ -2670,7 +2804,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     try {
       const data = await apiRequest(`/api/resumes/${resumeId}/versions`);
       setResumeVersions(data.items || []);
-      setSelectedResumeVersionId(String(data.items?.[0]?.id || ""));
+      setSelectedResumeVersionId(firstAnalysisReadyVersionId(data.items));
     } catch (error) {
       notify(`读取简历版本失败: ${error.message}`);
     }
@@ -2708,6 +2842,31 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     ]);
   };
 
+  useEffect(() => {
+    if (workspaceRoute.applicationId && detail?.item?.id === Number(workspaceRoute.jobId) &&
+        applications.some((item) => String(item.id) === workspaceRoute.applicationId) &&
+        String(selectedApplicationId) !== workspaceRoute.applicationId) {
+      selectApplication(workspaceRoute.applicationId);
+    }
+  }, [workspaceRoute.applicationId]);
+
+  // A restored session keeps its original report rather than the newest report.
+  useEffect(() => {
+    if (isInterviewPage && selectedInterview?.matchReportId &&
+        selectedInterview.matchReportId !== selectedReport?.id) {
+      openGroundedReport(selectedInterview.matchReportId);
+    }
+  }, [isInterviewPage, selectedInterview?.id, selectedInterview?.matchReportId, openGroundedReport]);
+
+  useEffect(() => {
+    if (isInterviewPage && !loading && !interviewLoading && workspaceRoute.sessionId &&
+        String(selectedApplicationId) === workspaceRoute.applicationId &&
+        interviewSessions.some(item => String(item.id) === workspaceRoute.sessionId) &&
+        String(selectedInterview?.id) !== workspaceRoute.sessionId) {
+      openInterviewSession(workspaceRoute.sessionId);
+    }
+  }, [workspaceRoute.sessionId, loading, interviewLoading]);
+
   const saveJob = async () => {
     if (!form.rawText.trim()) {
       notify("请粘贴完整岗位 JD 原文");
@@ -2718,6 +2877,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       const data = await apiRequest(editingId ? `/api/job-descriptions/${editingId}` : "/api/job-descriptions", { method: editingId ? "PUT" : "POST", body: JSON.stringify(form) });
       notify(editingId ? "岗位 JD 已更新，请重新解析" : "岗位 JD 已保存，可开始 AI 解析");
       await loadJobs();
+      navigateWorkspace("requirements", data.item.id, "");
       await loadDetail(data.item.id);
       setForm({ title: "", companyName: "", sourceUrl: "", rawText: "" });
       setEditingId(null);
@@ -2758,6 +2918,7 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       notify("求职分析任务已建立，已锁定简历版本与 JD 解析结果");
       await loadDetail(detail.item.id);
       await selectApplication(String(data.item.id));
+      navigateWorkspace("match", detail.item.id, String(data.item.id));
     } catch (error) {
       notify(`创建分析任务失败: ${error.message}`);
     } finally {
@@ -2927,6 +3088,10 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setSelectedInterview(session);
       setInterviewFeedback({});
       setActiveInterviewQuestion(0);
+      if (session?.id) {
+        window.history.replaceState(null, "", jobWorkspaceHash({ tab: "interview", jobId: detail?.item?.id, applicationId: application.id, sessionId: session.id, reportId: selectedReport.id }));
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      }
       await loadInterviewSessions(String(application.id), { autoSelect: false });
       notify(session?.status === "DEGRADED" ? "模拟面试已创建，知识检索降级但仍可继续。" : "模拟面试已创建，题目已绑定当前简历版本与岗位报告。");
     } catch (error) {
@@ -2961,6 +3126,22 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     }
   };
 
+  const retryInterviewFeedback = async (question) => {
+    if (!selectedInterview || !question?.answerId || interviewWorking) return;
+    setInterviewWorking(true);
+    setInterviewError(null);
+    try {
+      const data = await apiRequest(`/api/interview-sessions/${selectedInterview.id}/answers/${question.answerId}/feedback/retry`, { method: "POST", body: JSON.stringify({}) });
+      setInterviewFeedback((current) => ({ ...current, [question.id]: { answer: data.item, feedback: data.feedback } }));
+      notify("本题反馈已重新生成，原回答保持不变。");
+    } catch (error) {
+      await openInterviewSession(selectedInterview.id);
+      setInterviewError({ code: error.failureCode || "FEEDBACK_GENERATION_FAILED", message: error.message });
+    } finally {
+      setInterviewWorking(false);
+    }
+  };
+
   const completeInterviewSession = async () => {
     if (!selectedInterview) return;
     setInterviewWorking(true);
@@ -2977,6 +3158,12 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
       setInterviewWorking(false);
     }
   };
+
+  if (isInterviewPage && !workspaceRoute.jobId) {
+    return <InterviewLibrary request={apiRequest} formatDate={formatResumeDate} />;
+  }
+  if (isInterviewPage && loading) return <section className="job-page"><ResultSkeleton lines={4} /></section>;
+  if (isInterviewPage && workspaceLoadError) return <section className="job-page"><p role="alert">{workspaceLoadError}</p><button className="white-small" onClick={() => { window.location.hash = "#interview"; }}>返回面试记录</button></section>;
 
   if (mode === "create") {
     return (
@@ -3001,31 +3188,41 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
     const parsed = detail.currentParseResult?.parsedData;
     return (
       <section className="job-page job-detail-page">
+        {isInterviewPage && <div className="job-page-head interview-page-head"><div><h2>{job.title}</h2><p>{job.companyName || ""} · 锁定简历 v{selectedInterview?.resumeVersion || applications.find(item => String(item.id) === String(selectedApplicationId))?.resumeVersion || "—"}</p></div><div className="job-page-actions"><button className="white-small" onClick={() => { window.location.hash = "#interview"; }}>返回面试记录</button><button className="white-small" onClick={() => navigateWorkspace("match")}>查看岗位报告</button></div></div>}
+        <div hidden={isInterviewPage}>
         <div className="job-page-head">
-          <div><span className="section-kicker">岗位详情</span><h2>{job.title}</h2><p>{job.companyName || "未填写公司名称"} · {job.parseStatus === "SUCCEEDED" ? "已完成结构化解析" : job.parseStatus === "FAILED" ? "上次解析失败" : "尚未解析"}</p></div>
-          <div className="job-page-actions"><button className="white-small" onClick={() => setMode("list")}>岗位列表</button><button className="white-small" onClick={() => { setEditingId(job.id); setForm({ title: job.title || "", companyName: job.companyName || "", sourceUrl: job.sourceUrl || "", rawText: job.rawText || "" }); setMode("create"); }}>编辑 JD</button><button className="black-small" disabled={working} onClick={parseJob}>{working ? "AI 正在解析" : parsed ? "重新解析" : "开始 AI 解析"}</button></div>
+          <div><span className="section-kicker">{workspaceTab === "interview" ? "模拟面试" : "岗位工作台"}</span><h2>{job.title}</h2><p>{job.companyName || "未填写公司名称"} · {job.parseStatus === "SUCCEEDED" ? "已完成结构化解析" : job.parseStatus === "FAILED" ? "上次解析失败" : "尚未解析"}</p></div>
+          <div className="job-page-actions"><button className="white-small" onClick={() => navigateWorkspace(entry === "interview" ? "interview" : "requirements", "", "")}>岗位列表</button><button className="white-small" onClick={() => { setEditingId(job.id); setForm({ title: job.title || "", companyName: job.companyName || "", sourceUrl: job.sourceUrl || "", rawText: job.rawText || "" }); setMode("create"); }}>编辑 JD</button><button className="black-small" disabled={working} onClick={parseJob}>{working ? "AI 正在解析" : parsed ? "重新解析" : "开始 AI 解析"}</button></div>
         </div>
-        <div className="job-detail-grid">
-          <section className="job-source-panel"><h3>原始 JD</h3>{job.sourceUrl && <a href={job.sourceUrl} target="_blank" rel="noreferrer">打开来源链接</a>}<pre>{job.rawText}</pre>{job.lastParseError && <p className="job-error">上次失败：{job.lastParseError}</p>}</section>
+        <section className="job-application-panel job-context-bar">
+          <div><h3>选择简历与版本</h3><p>分析任务会锁定所选简历快照与 JD 解析结果。</p></div>
+          <div className="job-application-controls"><select aria-label="分析简历" value={selectedResumeId} onChange={(event) => selectResume(event.target.value)}><option value="">选择简历</option>{resumes.map((resumeItem) => <option key={resumeItem.id} value={resumeItem.id}>{resumeItem.title || `简历 #${resumeItem.id}`}</option>)}</select><select aria-label="锁定简历版本" value={selectedResumeVersionId} onChange={(event) => setSelectedResumeVersionId(event.target.value)} disabled={!selectedResumeId}><option value="">选择明确版本</option>{resumeVersions.map((version) => <option key={version.id} value={version.id} disabled={!version.isAnalysisReady}>v{version.resumeVersion || version.version} · {formatResumeDate(version.createdAt)}{version.isAnalysisReady ? "" : " · 缺少完整快照"}</option>)}</select><button className="black-small" disabled={working || !parsed || !selectedResumeId || !selectedResumeVersionId} onClick={createApplication}>创建分析任务</button></div>
+          {activeResumeId && <button className="link-button" onClick={() => onOpenResume?.(activeResumeId)}>打开当前简历</button>}
+          {!resumes.length && <button className="link-button" onClick={() => go?.("resume")}>先创建简历</button>}
+          {selectedResumeId && !resumeVersions.length && <p className="job-error">该简历暂无可选版本，请先保存简历后再创建任务。</p>}
+          {selectedResumeId && resumeVersions.length > 0 && !resumeVersions.some((version) => version.isAnalysisReady) && <p className="job-error">现有历史版本缺少完整快照。请到“我的简历”打开这份简历并保存一次，生成可用于分析的新版本。</p>}
+          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <button className={String(item.id) === String(selectedApplicationId) ? "active" : ""} key={item.id} onClick={() => { selectApplication(String(item.id)); navigateWorkspace(workspaceTab, job.id, String(item.id)); }}>简历 #{item.resumeId} · v{item.resumeVersion} · {item.status}{item.resumeVersionId ? "" : " · 旧任务不可匹配"}</button>)}</div>}
+        </section>
+        <nav className="job-workspace-tabs" aria-label="岗位工作台视图">{jobWorkspaceTabs.filter(([id]) => id !== "interview").map(([id, label]) => <button key={id} type="button" aria-current={workspaceTab === id ? "page" : undefined} className={workspaceTab === id ? "active" : ""} onClick={() => navigateWorkspace(id)}>{label}</button>)}</nav>
+        </div>
+        {!isInterviewPage && workspaceTab === "requirements" && (
+        <div className="job-requirements-view">
+
           <section className="job-parse-panel">
             <h3>结构化解析</h3>
             {parsed ? <JobParseResult parsed={parsed} /> : <div className="job-empty"><strong>尚未生成解析结果</strong><p>先保存原始 JD，再使用 AI 提取职责、必需条件和加分项。</p></div>}
           </section>
+
+          <details className="job-source-panel"><summary>查看完整 JD 原文</summary>{job.sourceUrl && <a href={job.sourceUrl} target="_blank" rel="noreferrer">打开来源链接</a>}<pre>{job.rawText}</pre>{job.lastParseError && <p className="job-error">上次失败：{job.lastParseError}</p>}</details>
         </div>
-        <section className="job-application-panel">
-          <div><h3>建立求职分析任务</h3><p>选择明确的简历版本；任务会锁定该快照与当前有效的 JD 解析结果。</p></div>
-          <div className="job-application-controls"><select value={selectedResumeId} onChange={(event) => selectResume(event.target.value)}><option value="">选择简历</option>{resumes.map((resumeItem) => <option key={resumeItem.id} value={resumeItem.id}>{resumeItem.title || `简历 #${resumeItem.id}`}</option>)}</select><select value={selectedResumeVersionId} onChange={(event) => setSelectedResumeVersionId(event.target.value)} disabled={!selectedResumeId}><option value="">选择明确版本</option>{resumeVersions.map((version) => <option key={version.id} value={version.id}>v{version.resumeVersion || version.version} · {formatResumeDate(version.createdAt)}</option>)}</select><button className="black-small" disabled={working || !parsed || !selectedResumeId || !selectedResumeVersionId} onClick={createApplication}>创建分析任务</button></div>
-          {activeResumeId && <button className="link-button" onClick={() => onOpenResume?.(activeResumeId)}>打开当前简历</button>}
-          {!resumes.length && <button className="link-button" onClick={() => go?.("resume")}>先创建简历</button>}
-          {selectedResumeId && !resumeVersions.length && <p className="job-error">该简历暂无可选版本，请先保存简历后再创建任务。</p>}
-          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <button className={String(item.id) === String(selectedApplicationId) ? "active" : ""} key={item.id} onClick={() => selectApplication(String(item.id))}>简历 #{item.resumeId} · v{item.resumeVersion} · {item.status}{item.resumeVersionId ? "" : " · 旧任务不可匹配"}</button>)}</div>}
-        </section>
+        )}
+        {!isInterviewPage && workspaceTab === "match" && <>
         <section className="job-match-panel">
           <div className="job-match-head"><div><h3>基础岗位匹配</h3><p>{selectedApplicationId ? "基于已锁定的简历版本与 JD 解析结果生成，不会修改你的简历。" : "先创建并选择一个求职分析任务。"}</p></div><button className="black-small" disabled={working || !selectedApplicationId} onClick={() => createMatch()}>{working ? <><LoaderCircle className="spin" size={16} />正在生成报告</> : <><Gauge size={16} />生成匹配报告</>}</button></div>
           {working && <ResultSkeleton lines={5} />}
           {!working && selectedMatch?.status === "COMPLETED" && <ResumeJobMatchReport match={selectedMatch} />}
           {!working && (selectedMatch?.status === "FAILED" || matchFailureMessage) && <p className="job-error">本次匹配失败：{selectedMatch?.failureMessage || matchFailureMessage}</p>}
-          {matches.length > 0 && <div className="job-match-history"><strong>匹配历史</strong>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? (setMatchFailureMessage(""), setSelectedMatch(item)) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</div>}
+          {matches.length > 0 && <details className="job-match-history"><summary>匹配历史（{matches.length}）</summary>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? (setMatchFailureMessage(""), setSelectedMatch(item)) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</details>}
           {!working && !selectedMatch && !matches.length && <div className="job-empty"><strong>尚未生成匹配报告</strong><p>报告仅会在真实 AI 返回并通过证据校验后显示分数与建议。</p></div>}
         </section>
         <section className="grounded-report-panel" aria-labelledby="grounded-report-title">
@@ -3045,14 +3242,16 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           {!reportWorking && selectedReport?.status === "FAILED" && <GroundedReportFailure failure={{ code: selectedReport.failureCode, message: selectedReport.failureMessage }} onRetry={createGroundedReport} canRetry={selectedMatch?.status === "COMPLETED"} />}
           {!reportWorking && (selectedReport?.status === "COMPLETED" || selectedReport?.status === "DEGRADED") && <GroundedMatchReport report={selectedReport} match={selectedMatch} />}
           {!reportWorking && !selectedReport && !reportFailure && !reports.length && <div className="job-empty"><strong>尚未生成 AI 岗位匹配报告</strong><p>选择明确的求职分析任务与基础匹配报告后，再生成基于本地可验证引用的报告。</p></div>}
+          {["COMPLETED", "DEGRADED"].includes(selectedReport?.status) && <div className="interview-report-action"><span>用这份报告准备岗位面试</span><button className="black-small" onClick={() => { window.location.hash = jobWorkspaceHash({ tab: "interview", jobId: job.id, applicationId: selectedApplicationId, reportId: selectedReport.id }); }}>针对这个岗位练习</button></div>}
           {reports.length > 0 && <GroundedReportHistory reports={reports} selectedReportId={selectedReport?.id} onSelect={openGroundedReport} />}
         </section>
-        <ResumeSuggestionWorkspace
+        </>}
+        {!isInterviewPage && workspaceTab === "suggestions" && <ResumeSuggestionWorkspace
           report={selectedReport}
           runs={suggestionRuns}
           selectedRun={selectedSuggestionRun}
           loading={suggestionLoading}
-          working={suggestionWorking}
+          working={suggestionWorking || historyDeleting}
           error={suggestionError}
           success={suggestionSuccess}
           versions={resumeVersionHistory}
@@ -3061,39 +3260,62 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
           selectedVersion={selectedVersionSnapshot}
           onGenerate={createResumeSuggestions}
           onSelectRun={openSuggestionRun}
+          onDeleteRun={(item) => setHistoryDeleteCandidate({ kind: "suggestion", item })}
           onDecision={decideSuggestion}
           onRefresh={() => selectedReport?.id && loadSuggestionRuns(selectedReport.id)}
           onSelectVersion={openResumeVersionSnapshot}
         />
-        <AgentRunWorkspace
+        }
+        {!isInterviewPage && workspaceTab === "agent" && <AgentRunWorkspace
           applicationId={selectedApplicationId}
           report={selectedReport}
           runs={agentRuns}
           run={selectedAgentRun}
           steps={agentSteps}
           loading={agentLoading}
-          working={agentWorking}
+          working={agentWorking || historyDeleting}
           error={agentError}
           onCreate={createAgentRun}
           onSelectRun={openAgentRun}
+          onDeleteRun={(item) => setHistoryDeleteCandidate({ kind: "agent", item })}
           onRefresh={() => selectedApplicationId && loadAgentRuns(selectedApplicationId)}
         />
+        }
+        <div className="job-interview-view" hidden={!isInterviewPage}>
+        {!selectedInterview && !interviewLoading && !["COMPLETED", "DEGRADED"].includes(selectedReport?.status) && <div className="job-prerequisite"><span>需先完成岗位匹配报告，才能开始新的面试。</span><button className="white-small" onClick={() => navigateWorkspace("match")}>去分析岗位</button></div>}
         <MockInterviewWorkspace
           applicationId={selectedApplicationId}
           report={selectedReport}
           sessions={interviewSessions}
           session={selectedInterview}
+          draftCache={interviewDrafts.current}
           feedbackByQuestion={interviewFeedback}
           activeQuestionIndex={activeInterviewQuestion}
           loading={interviewLoading}
-          working={interviewWorking}
+          working={interviewWorking || historyDeleting}
           error={interviewError}
           onCreate={createInterviewSession}
-          onSelectSession={openInterviewSession}
+          onSelectSession={(sessionId) => {
+            window.history.replaceState(null, "", jobWorkspaceHash({ tab: "interview", jobId: job.id, applicationId: selectedApplicationId, sessionId }));
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+            openInterviewSession(sessionId);
+          }}
+          onDeleteSession={(item) => setHistoryDeleteCandidate({ kind: "interview", item })}
           onSelectQuestion={setActiveInterviewQuestion}
           onSubmitAnswer={submitInterviewAnswer}
+          onRetryFeedback={retryInterviewFeedback}
           onComplete={completeInterviewSession}
           onRefresh={() => selectedApplicationId && loadInterviewSessions(selectedApplicationId)}
+        />
+        </div>
+        <ConfirmDialog
+          open={Boolean(historyDeleteCandidate)}
+          title={historyDeleteCandidate?.kind === "agent" ? "删除 Agent 分析" : historyDeleteCandidate?.kind === "suggestion" ? "删除建议生成记录" : "删除历史面试"}
+          description={historyDeleteCandidate?.kind === "agent" ? `删除 Run #${historyDeleteCandidate?.item.id}？本次分析步骤和结果将一并删除，无法恢复。简历和岗位报告会保留。` : historyDeleteCandidate?.kind === "suggestion" ? `删除运行 #${historyDeleteCandidate?.item.id} 及其待处理建议？已接受的简历修改和版本快照会保留。` : `删除面试 #${historyDeleteCandidate?.item.id}？本次题目、回答和反馈将一并删除，无法恢复。`}
+          confirmLabel="删除记录"
+          isWorking={historyDeleting}
+          onClose={() => !historyDeleting && setHistoryDeleteCandidate(null)}
+          onConfirm={deleteWorkspaceHistory}
         />
       </section>
     );
@@ -3101,8 +3323,8 @@ function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, go }) {
 
   return (
     <section className="job-page">
-      <div className="job-page-head"><div><span className="section-kicker">岗位 JD</span><h2>针对真实招聘信息准备简历</h2><p>保存原文、解析明确要求，再与具体简历建立分析任务。</p></div><button className="black-small" onClick={() => { setEditingId(null); setForm({ title: "", companyName: "", sourceUrl: "", rawText: "" }); setMode("create"); }}>新建岗位 JD</button></div>
-      {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <button className="job-list-item" key={job.id} onClick={() => loadDetail(job.id)}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
+      <div className="job-page-head"><div><span className="section-kicker">{entry === "interview" ? "模拟面试" : "岗位 JD"}</span><h2>{entry === "interview" ? "选择岗位，开始或继续面试" : "针对真实招聘信息准备简历"}</h2><p>{entry === "interview" ? "打开岗位后查看面试记录；开始新面试需要已完成的岗位匹配报告。" : "保存原文、解析明确要求，再与具体简历建立分析任务。"}</p></div><button className="black-small" onClick={() => { setEditingId(null); setForm({ title: "", companyName: "", sourceUrl: "", rawText: "" }); setMode("create"); }}>新建岗位 JD</button></div>
+      {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <button className="job-list-item" key={job.id} onClick={() => navigateWorkspace(entry === "interview" ? "interview" : "requirements", job.id, "")}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
     </section>
   );
 }
@@ -3151,7 +3373,7 @@ function formatEvidenceCoverage(coverage) {
   return `${Math.round(Number(coverage.ratio) * 100)}%`;
 }
 
-function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, onGenerate, onSelectRun, onDecision, onRefresh, onSelectVersion }) {
+function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, onGenerate, onSelectRun, onDeleteRun, onDecision, onRefresh, onSelectVersion }) {
   const [diffSuggestionId, setDiffSuggestionId] = useState(null);
   const canGenerate = ["COMPLETED", "DEGRADED"].includes(report?.status);
 
@@ -3176,7 +3398,7 @@ function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working
 
       {!loading && canGenerate && !error && !runs.length && <div className="job-empty"><strong>尚未生成简历优化建议</strong><p>建议会以当前匹配报告和锁定简历版本为依据生成；不会自动应用。</p></div>}
 
-      {!loading && runs.length > 0 && <div className="suggestion-run-history"><strong>Suggestion Run 历史</strong><div>{runs.map((run) => <button key={run.id} className={selectedRun?.id === run.id ? "active" : ""} onClick={() => onSelectRun(run.id)}><span><b>运行 #{run.id}</b><em className={`suggestion-status suggestion-run-${String(run.status || "").toLowerCase()}`}>{run.status === "COMPLETED" ? "已完成" : run.status === "FAILED" ? "生成失败" : "处理中"}</em></span><small>简历 v{run.baseResumeVersion} · {formatResumeDate(run.createdAt)} · {run.suggestions?.length || 0} 条建议</small></button>)}</div></div>}
+      {!loading && runs.length > 0 && <div className="suggestion-run-history"><strong>建议生成历史</strong><div>{runs.map((run) => <div key={run.id} className="workspace-history-row"><button disabled={working} className={`history-select ${selectedRun?.id === run.id ? "active" : ""}`} onClick={() => onSelectRun(run.id)}><span><b>运行 #{run.id}</b><em className={`suggestion-status suggestion-run-${String(run.status || "").toLowerCase()}`}>{run.status === "COMPLETED" ? "已完成" : run.status === "FAILED" ? "生成失败" : "处理中"}</em></span><small>简历 v{run.baseResumeVersion} · {formatResumeDate(run.createdAt)} · {run.suggestions?.length || 0} 条建议</small></button><button className="history-delete" aria-label={`删除建议运行 #${run.id}`} title="删除记录" disabled={working || ["PENDING", "RUNNING"].includes(run.status)} onClick={() => onDeleteRun?.(run)}><Trash2 size={15} /><span>删除</span></button></div>)}</div></div>}
 
       {!loading && selectedRun?.status === "PENDING" && <div className="suggestion-loading" role="status"><strong>建议处理中</strong><p>请勿重复提交，完成后可从本报告的历史结果重新打开。</p><ResultSkeleton lines={3} /></div>}
       {!loading && selectedRun?.status === "FAILED" && <div className="suggestion-error" role="alert"><div><strong>本次建议生成失败</strong><p>{suggestionFailureMessage(selectedRun.failureCode)}</p><small>错误代码：{selectedRun.failureCode || "SUGGESTION_INVALID_OUTPUT"}</small></div></div>}
@@ -3216,6 +3438,7 @@ function SuggestionDiff({ before, after }) {
 }
 
 export function MockInterviewWorkspace({
+  draftCache,
   applicationId,
   report,
   sessions = [],
@@ -3227,8 +3450,10 @@ export function MockInterviewWorkspace({
   error = null,
   onCreate,
   onSelectSession,
+  onDeleteSession,
   onSelectQuestion,
   onSubmitAnswer,
+  onRetryFeedback,
   onComplete,
   onRefresh,
 }) {
@@ -3252,9 +3477,9 @@ export function MockInterviewWorkspace({
   ]).filter((source, index, items) => items.findIndex((item) => item.title === source.title && item.summary === source.summary) === index);
 
   useEffect(() => {
-    setAnswerDraft("");
+    setAnswerDraft(draftCache?.[`${session?.id}:${currentQuestion?.id}`] || "");
     setShowSources(false);
-  }, [session?.id, currentQuestion?.id]);
+  }, [session?.id, currentQuestion?.id, draftCache]);
 
   const nextQuestion = () => {
     const nextIndex = questions.findIndex((question, index) => index > activeQuestionIndex && !question.answerId);
@@ -3278,7 +3503,7 @@ export function MockInterviewWorkspace({
       {error && <div className="interview-state-error" role="alert"><div><strong>面试操作未完成</strong><p>{interviewFailureMessage(error.code, error.message)}</p>{error.code && <small>错误代码：{error.code}</small>}</div><button className="white-small" disabled={loading || working} onClick={onRefresh}>从后端刷新</button></div>}
       {loading && <div className="interview-state-loading" role="status"><strong>正在恢复面试记录</strong><ResultSkeleton lines={4} /></div>}
 
-      {!loading && sessions.length > 0 && <div className="interview-session-history"><strong>当前求职任务的历史面试</strong><div>{sessions.map((item) => <button key={item.id} className={session?.id === item.id ? "active" : ""} onClick={() => onSelectSession?.(item.id)}><span><b>面试 #{item.id}</b><em className={`interview-status status-${String(item.status || "pending").toLowerCase()}`}>{interviewStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {item.answeredCount || 0}/{item.questionCount || 0} 题 · {formatResumeDate(item.createdAt)}</small></button>)}</div></div>}
+      {!loading && sessions.length > 0 && <div className="interview-session-history"><strong>当前求职任务的历史面试</strong><div>{sessions.map((item) => <div key={item.id} className="workspace-history-row"><button disabled={working} className={`history-select ${session?.id === item.id ? "active" : ""}`} onClick={() => onSelectSession?.(item.id)}><span><b>面试 #{item.id}</b><em className={`interview-status status-${String(item.status || "pending").toLowerCase()}`}>{interviewStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {item.answeredCount || 0}/{item.questionCount || 0} 题 · {formatResumeDate(item.createdAt)}</small></button><button className="history-delete" aria-label={`删除面试 #${item.id}`} title="删除记录" disabled={working || ["PENDING", "RUNNING"].includes(item.status)} onClick={() => onDeleteSession?.(item)}><Trash2 size={15} /><span>删除</span></button></div>)}</div></div>}
 
       {!loading && !session && !sessions.length && <div className="job-empty"><strong>尚未开始岗位模拟面试</strong><p>{["COMPLETED", "DEGRADED"].includes(report?.status) ? "从当前 AI 岗位匹配报告生成第一组可追溯题目。" : "先完成并打开一份 AI 岗位匹配报告，才可生成面试题。"}</p></div>}
 
@@ -3307,7 +3532,10 @@ export function MockInterviewWorkspace({
 
             <div className="interview-answer-area">
               <label htmlFor={`interview-answer-${currentQuestion?.id}`}>你的回答</label>
-              {currentAnswer ? <p className="saved-interview-answer">{currentAnswer.answerText}</p> : <textarea id={`interview-answer-${currentQuestion?.id}`} value={answerDraft} maxLength={12000} disabled={working || Boolean(currentQuestion?.answerId) || isCompleted} placeholder="结合真实经历或说明你的分析思路；不确定的经历不要编造。" onChange={(event) => setAnswerDraft(event.target.value)} />}
+              {currentAnswer ? <p className="saved-interview-answer">{currentAnswer.answerText}</p> : <textarea id={`interview-answer-${currentQuestion?.id}`} value={answerDraft} maxLength={12000} disabled={working || Boolean(currentQuestion?.answerId) || isCompleted} placeholder="结合真实经历或说明你的分析思路；不确定的经历不要编造。" onChange={(event) => {
+                setAnswerDraft(event.target.value);
+                if (draftCache && session?.id && currentQuestion?.id) draftCache[session.id + ":" + currentQuestion.id] = event.target.value;
+              }} />}
               {!currentQuestion?.answerId && !isCompleted && <div className="interview-answer-actions"><small>{answerDraft.length}/12000</small><button className="black-small" disabled={working || !answerDraft.trim()} onClick={() => onSubmitAnswer?.(currentQuestion, answerDraft)}>{working ? <><LoaderCircle className="spin" size={16} />AI 正在评估</> : <><Send size={16} />提交本题回答</>}</button></div>}
               {currentQuestion?.answerId && !currentRecord && <p className="interview-inline-note">回答已保存，正在从后端恢复反馈。</p>}
             </div>
@@ -3316,7 +3544,7 @@ export function MockInterviewWorkspace({
           <aside className="interview-feedback-column" aria-live="polite">
             {!currentFeedback && !currentQuestion?.answerId && <div className="interview-feedback-empty"><Bot size={20} /><strong>提交后查看 AI 反馈</strong><p>评分依据包括问题、你的回答、预期要点与可用 RAG 证据。</p></div>}
             {currentRecord?.error && <div className="interview-feedback-failed" role="alert"><strong>反馈读取失败</strong><p>{interviewFailureMessage(currentRecord.error.code, currentRecord.error.message)}</p></div>}
-            {currentFeedback?.status === "FAILED" && <div className="interview-feedback-failed" role="alert"><strong>本题反馈未通过校验</strong><p>{interviewFailureMessage(currentFeedback.failureCode, currentFeedback.failureMessage)}</p><small>失败内容不会作为建议回答展示。</small></div>}
+            {currentFeedback?.status === "FAILED" && <div className="interview-feedback-failed" role="alert"><strong>本题反馈未通过校验</strong><p>{interviewFailureMessage(currentFeedback.failureCode, currentFeedback.failureMessage)}</p><small>失败内容不会作为建议回答展示。</small>{!isCompleted && onRetryFeedback && <button className="white-small" disabled={working} onClick={() => onRetryFeedback(currentQuestion)}>{working ? "正在重新生成反馈…" : "重新生成本题反馈"}</button>}</div>}
             {currentFeedback && ["COMPLETED", "DEGRADED"].includes(currentFeedback.status) && <div className="interview-feedback-content">
               <header><div><strong>{currentFeedback.score}</strong><span>本题得分</span></div><span className={`interview-status status-${String(currentFeedback.status).toLowerCase()}`}>{interviewStatusLabel(currentFeedback.status)}</span></header>
               <FeedbackList title="表达优势（AI 反馈）" items={currentFeedback.strengths} />
@@ -3348,7 +3576,7 @@ function InterviewCompletionSummary({ session, questions, feedbackByQuestion, on
   return <section className="interview-completion" aria-labelledby="interview-completion-title"><div className="interview-completion-score"><span>后端最终平均分</span><strong>{Number.isFinite(Number(session.averageScore)) ? session.averageScore : "--"}</strong><small id="interview-completion-title">本次模拟面试已保存，可从历史记录恢复回看。</small></div><div className="interview-completion-summary"><FeedbackList title="本次优势摘要（AI 反馈）" items={strengths} /><FeedbackList title="本次改进摘要（AI 反馈）" items={weaknesses} /></div><div className="interview-score-list">{questions.map((question, index) => <button key={question.id} onClick={() => onSelectQuestion?.(index)}><span>第 {index + 1} 题 · {interviewCategoryLabel(question.category)}</span><strong>{feedbackByQuestion[question.id]?.feedback?.score ?? "--"} 分</strong></button>)}</div></section>;
 }
 
-function AgentRunWorkspace({ applicationId, report, runs = [], run, steps = [], loading, working, error, onCreate, onSelectRun, onRefresh }) {
+function AgentRunWorkspace({ applicationId, report, runs = [], run, steps = [], loading, working, error, onCreate, onSelectRun, onDeleteRun, onRefresh }) {
   const canCreate = Boolean(applicationId) && ["COMPLETED", "DEGRADED"].includes(report?.status);
   const canShowResult = ["COMPLETED", "DEGRADED"].includes(run?.status) && run?.finalResult;
 
@@ -3369,7 +3597,7 @@ function AgentRunWorkspace({ applicationId, report, runs = [], run, steps = [], 
       {loading && <div className="agent-loading" role="status" aria-live="polite"><strong>正在从后端恢复 AgentRun</strong><p>运行状态、步骤与来源均以后端保存记录为准。</p><ResultSkeleton lines={4} /></div>}
       {!loading && error && <div className="agent-error" role="alert"><div><strong>Agent 记录读取或执行失败</strong><p>{agentFailureMessage(error.code)}</p><small>错误代码：{error.code}</small></div><button className="white-small" onClick={onRefresh}>重新读取</button></div>}
 
-      {!loading && runs.length > 0 && <div className="agent-run-history"><strong>历史 AgentRun</strong><div>{runs.map((item) => <button key={item.id} className={run?.id === item.id ? "active" : ""} aria-pressed={run?.id === item.id} onClick={() => onSelectRun(item.id)}><span><b>Run #{item.id}</b><em className={`agent-status status-${String(item.status || "").toLowerCase()}`}>{agentStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {formatResumeDate(item.createdAt)}</small></button>)}</div></div>}
+      {!loading && runs.length > 0 && <div className="agent-run-history"><strong>历史 AgentRun</strong><div>{runs.map((item) => <div key={item.id} className="workspace-history-row"><button disabled={working} className={`history-select ${run?.id === item.id ? "active" : ""}`} aria-pressed={run?.id === item.id} onClick={() => onSelectRun(item.id)}><span><b>Run #{item.id}</b><em className={`agent-status status-${String(item.status || "").toLowerCase()}`}>{agentStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {formatResumeDate(item.createdAt)}</small></button><button className="history-delete" aria-label={`删除 Agent 分析 #${item.id}`} title="删除记录" disabled={working || ["PENDING", "RUNNING"].includes(item.status)} onClick={() => onDeleteRun?.(item)}><Trash2 size={15} /><span>删除</span></button></div>)}</div></div>}
 
       {!loading && canCreate && !runs.length && !run && !error && <div className="agent-empty"><Search size={20} /><strong>尚未开始 Agent 分析</strong><p>启动后可回看每一步行动、检索来源与最终建议；刷新页面也能恢复记录。</p></div>}
 
@@ -3471,20 +3699,65 @@ function CitationDrawer({ citation, onClose }) {
 }
 
 function ResumeJobMatchReport({ match }) {
+  const [view, setView] = useState("overview");
+  useEffect(() => setView("overview"), [match.id]);
   const report = match.report;
   if (!report) return null;
-  return <div className="job-match-report"><div className="job-match-score"><strong>{match.totalScore}</strong><span>综合匹配度</span></div><div><h4>匹配结论</h4><p>{report.summary}</p></div><div className="job-match-dimensions">{(report.dimensions || []).map((dimension) => <article key={dimension.key}><div><strong>{dimension.label}</strong><span>{dimension.score} 分 · 权重 {dimension.weight}%</span></div><i><b style={{ "--match-score": `${dimension.score}%` }} /></i><p>{dimension.summary}</p>{dimension.resumeEvidence?.length > 0 && <small>简历证据：{dimension.resumeEvidence.join("；")}</small>}{dimension.jdEvidence?.length > 0 && <small>JD 证据：{dimension.jdEvidence.join("；")}</small>}{dimension.missingEvidence?.length > 0 && <small>缺失：{dimension.missingEvidence.join("；")}</small>}</article>)}</div><div className="job-match-evidence"><MatchEvidenceGroup title="已证实必备项" items={report.matchedRequiredSkills} /><MatchEvidenceGroup title="部分匹配" items={report.partiallyMatchedRequiredSkills} /><MatchEvidenceGroup title="当前简历未找到的必备项" items={report.missingRequiredSkills} /><MatchEvidenceGroup title="已覆盖加分项" items={report.matchedPreferredSkills} /><MatchEvidenceGroup title="未覆盖加分项" items={report.missingPreferredSkills} /><MatchEvidenceGroup title="关键词覆盖" items={report.matchedKeywords} /></div><div className="job-match-suggestions"><div><h4>最有力的简历证据</h4><ul>{report.strongestResumeEvidence?.map((item) => <li key={item}>{item}</li>)}</ul></div><div><h4>优先修改建议</h4><ul>{report.prioritizedSuggestions?.map((item) => <li key={item}>{item}</li>)}</ul></div></div></div>;
+  const groups = [["已证实必备项", report.matchedRequiredSkills], ["部分匹配", report.partiallyMatchedRequiredSkills], ["当前简历未找到的必备项", report.missingRequiredSkills], ["已覆盖加分项", report.matchedPreferredSkills], ["未覆盖加分项", report.missingPreferredSkills], ["关键词覆盖", report.matchedKeywords], ["未覆盖关键词", report.missingKeywords]];
+  const suggestions = report.prioritizedSuggestions || [];
+  return <div className="job-match-report job-match-compact">
+    <div className="job-match-score"><strong>{match.totalScore}</strong><span>综合匹配度 / 100</span></div>
+    <nav className="match-report-nav" aria-label="基础匹配报告内容">{[["overview", "匹配概览"], ["skills", "技能与关键词"], ["evidence", "优势与风险"]].map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setView(key)}>{label}</button>)}</nav>
+    {view === "overview" && <>
+      <div><h4>匹配结论</h4><p>{report.summary}</p></div>
+      <div className="job-match-dimensions">{(report.dimensions || []).map((dimension) => <article key={dimension.key}>
+        <div><strong>{dimension.label}</strong><span>{dimension.score} 分 · 权重 {dimension.weight}%</span></div>
+        <i><b style={{ "--match-score": `${dimension.score}%` }} /></i>
+        <details className="match-report-disclosure"><summary>查看{dimension.label}分析与依据</summary><p>{dimension.summary}</p>
+          {dimension.resumeEvidence?.length > 0 && <small>简历证据：{dimension.resumeEvidence.join("；")}</small>}
+          {dimension.jdEvidence?.length > 0 && <small>JD 证据：{dimension.jdEvidence.join("；")}</small>}
+          {dimension.missingEvidence?.length > 0 && <small>缺失：{[...new Set(dimension.missingEvidence)].join("；")}</small>}
+          {dimension.suggestions?.length > 0 && <small>建议：{dimension.suggestions.join("；")}</small>}
+        </details>
+      </article>)}</div>
+      <section className="match-priority"><h4>优先修改建议</h4>{suggestions.length ? <><ol>{suggestions.slice(0, 3).map((item, index) => <li key={index}>{item}</li>)}</ol>{suggestions.length > 3 && <details className="match-report-disclosure"><summary>展开其余 {suggestions.length - 3} 条建议</summary><ol start={4}>{suggestions.slice(3).map((item, index) => <li key={index}>{item}</li>)}</ol></details>}</> : <p>报告暂无修改建议</p>}</section>
+    </>}
+    {view === "skills" && <div className="job-match-evidence">{groups.map(([title, items]) => <MatchEvidenceGroup key={title} title={title} items={items} />)}</div>}
+    {view === "evidence" && <div className="job-match-suggestions">{[["最有力的简历证据", report.strongestResumeEvidence], ["风险提醒", report.risks]].map(([title, items]) => <div key={title}><h4>{title}</h4>{items?.length ? <ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>报告暂无相关项</p>}</div>)}</div>}
+  </div>;
 }
 
 function MatchEvidenceGroup({ title, items = [] }) {
-  return <section><h4>{title}</h4>{items.length ? <ul>{items.map((item, index) => <li key={`${item.skillName}-${index}`}><strong>{item.skillName || "--"}</strong><small className="match-evidence-meta">状态：{item.matchStatus || "--"} · 置信度：{Number.isFinite(item.confidence) ? `${item.confidence}%` : "--"}</small><span>{item.explanation || "--"}</span>{item.resumeEvidence?.length > 0 && <small>简历：{item.resumeEvidence.join("；")}</small>}{item.jdEvidence?.length > 0 && <small>JD：{item.jdEvidence.join("；")}</small>}</li>)}</ul> : <p>暂无相关项</p>}</section>;
+  if (!items.length) return <section className="match-empty-group"><h4>{title}</h4><span>0 项</span></section>;
+  const statuses = { MATCHED: "已匹配", PARTIALLY_MATCHED: "部分匹配", NOT_FOUND: "未找到证据" };
+  return <details className="match-skill-group"><summary>{title}<span>{items.length} 项</span></summary><ul>{items.map((item, index) => <li key={`${item.skillName}-${index}`}>
+    <strong>{item.skillName || "--"}</strong><small className="match-evidence-meta">{statuses[item.matchStatus] || item.matchStatus || "--"} · 置信度：{Number.isFinite(item.confidence) ? `${item.confidence}%` : "--"}</small>
+    <details className="match-report-disclosure"><summary>查看判断与原文依据</summary><p>{item.explanation || "--"}</p>{item.resumeEvidence?.length > 0 && <small>简历：{item.resumeEvidence.join("；")}</small>}{item.jdEvidence?.length > 0 && <small>JD：{item.jdEvidence.join("；")}</small>}</details>
+  </li>)}</ul></details>;
 }
 
-function JobParseResult({ parsed }) {
+export function JobParseResult({ parsed }) {
   const groups = [
-    ["岗位名称", [parsed.jobTitle]], ["公司名称", [parsed.companyName]], ["职责", parsed.responsibilities], ["必需技能", parsed.requiredSkills], ["加分技能", parsed.preferredSkills], ["学历要求", parsed.educationRequirements], ["经验要求", parsed.experienceRequirements], ["技术关键词", parsed.technicalKeywords], ["软技能", parsed.softSkills], ["级别", [parsed.seniority]], ["不确定项", parsed.uncertainties],
+    ["职责", parsed.responsibilities], ["必需技能", parsed.requiredSkills], ["加分技能", parsed.preferredSkills],
+    ["技术关键词", parsed.technicalKeywords], ["软技能", parsed.softSkills], ["不确定项", parsed.uncertainties],
   ];
-  return <div className="job-parse-groups">{groups.map(([label, items]) => <section key={label}><h4>{label}</h4>{items?.length ? <ul>{items.map((item, index) => <li key={`${label}-${index}`}><strong>{item.text}</strong>{item.evidence && <small>原文：{item.evidence}</small>}</li>)}</ul> : <p>JD 未明确说明</p>}</section>)}</div>;
+  const metadata = [["岗位名称", [parsed.jobTitle]], ["公司名称", [parsed.companyName]], ["学历要求", parsed.educationRequirements], ["经验要求", parsed.experienceRequirements], ["级别", [parsed.seniority]]];
+  const renderItem = (item, index, label) => <li key={`${label}-${index}`}><span>{item.text}</span></li>;
+  const renderEvidence = (items, label) => {
+    const evidence = collectJobGroupEvidence(items);
+    return evidence.length > 0 && <details className="job-evidence"><summary>查看{label}原文依据 · {evidence.length} 处</summary><ul>{evidence.map((item, index) => <li key={index}><span>{item.subjects.join("、")}</span><blockquote>{item.evidence}</blockquote></li>)}</ul></details>;
+  };
+  const absent = [...metadata, ...groups].filter(([, items]) => !items?.filter(Boolean).length).map(([label]) => label);
+  return <>
+    <dl className="job-parse-metadata">{metadata.filter(([, items]) => items?.filter(Boolean).length).map(([label, items]) => <div key={label}><dt>{label}</dt><dd><ul>{items.filter(Boolean).map((item, index) => renderItem(item, index, label))}</ul>{renderEvidence(items.filter(Boolean), label)}</dd></div>)}</dl>
+    <div className="job-parse-groups">{groups.filter(([, items]) => items?.filter(Boolean).length).map(([label, values]) => {
+      const items = values.filter(Boolean);
+      const keyword = label === "技术关键词";
+      const showAll = keyword || label === "必需技能";
+      return <section key={label} className={keyword ? "job-keyword-group" : ""}><h4>{label}<small> {items.length} 项</small></h4><ul className={keyword ? "job-keyword-list" : ""}>{(showAll ? items : items.slice(0, 4)).map((item, index) => renderItem(item, index, label))}</ul>{!showAll && items.length > 4 && <details className="job-more-requirements"><summary>展开其余 {items.length - 4} 项</summary><ul>{items.slice(4).map((item, index) => renderItem(item, index + 4, label))}</ul></details>}{renderEvidence(items, label)}</section>;
+    })}</div>
+    {absent.length > 0 && <p className="job-unspecified">JD 未明确说明：{absent.join("、")}。</p>}
+  </>;
 }
 
 function ProviderSettings({ notify }) {
@@ -3583,10 +3856,6 @@ function ProviderSettings({ notify }) {
       </div>
     </section>
   );
-}
-
-function InterviewStageEntry({ go }) {
-  return <section className="interview-stage-entry"><MessageSquareText size={28} /><div><span className="section-kicker">RAG 模拟面试</span><h2>从真实岗位匹配报告开始</h2><p>选择岗位 JD 与已锁定的求职分析任务，在可引用匹配报告下创建、恢复和完成模拟面试。题目不会脱离简历版本与岗位依据单独生成。</p></div><button className="black-small" onClick={() => go("jobs")}><BriefcaseBusiness size={16} />进入岗位 JD</button></section>;
 }
 
 function InterviewPractice({ notify, go, resumeId }) {

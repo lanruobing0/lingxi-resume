@@ -39,16 +39,26 @@ function parsedFor(rawText) {
 }
 
 async function main() {
+  const providerRequests = [];
+  let emptyDeepSeekResponses = 1;
   const mockAi = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const userText = request.input?.[1]?.content?.[0]?.text || "";
+    providerRequests.push({ url: req.url, payload: request });
+    const userText = request.input?.[1]?.content?.[0]?.text || request.messages?.find((message) => message.role === "user")?.content || "";
     const rawText = userText.split("Raw job description:\n").at(-1);
     const parsed = parsedFor(rawText);
     if (rawText.includes("INVALID_EVIDENCE")) parsed.requiredSkills[0].evidence = "JD 中不存在的内容";
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ output_text: JSON.stringify(parsed) }));
+    if (request.thinking?.type === "disabled" && emptyDeepSeekResponses > 0) {
+      emptyDeepSeekResponses -= 1;
+      res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "" } }] }));
+      return;
+    }
+    res.end(JSON.stringify(request.messages
+      ? { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(parsed) } }] }
+      : { output_text: JSON.stringify(parsed) }));
   });
   const mockAiPort = await listen(mockAi);
   const dataDir = await mkdtemp(path.join(tmpdir(), "lingxi-jd-test-"));
@@ -58,8 +68,9 @@ async function main() {
     users: [{ id: 7, username: "jd-test", passwordHash: "test-only", role: "USER", status: 1 }],
     sessions: [{ id: 1, userId: 7, tokenHash: createHash("sha256").update(token).digest("base64url"), expiresAt: new Date(Date.now() + 60_000).toISOString() }],
     resumes: [{ id: 11, userId: 7, version: 2, title: "测试简历", currentPosition: "工程师", selfEvaluation: "具备后端和协作经验", sectionContent: { "专业技能": ["Java", "Spring Boot"] }, sectionDetails: {}, moduleOrder: ["基本信息", "专业技能"] }],
-    resumeHistories: [], analysisRecords: [], optimizeRecords: [], grammarRecords: [], interviewQuestions: [],
+    resumeHistories: [{ id: 1, resumeId: 11, resumeVersion: 1, version: 1, summary: "旧版本", snapshot: null, contentHash: "" }], analysisRecords: [], optimizeRecords: [], grammarRecords: [], interviewQuestions: [],
     jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
+    aiSettingsByUser: { "7": { aiConfig: { provider: "DeepSeek" }, aiProviderConfigs: { DeepSeek: { provider: "DeepSeek", baseUrl: `http://127.0.0.1:${mockAiPort}/v1`, modelId: "deepseek-v4-flash", apiKey: "test-key", enabled: true } } } },
   };
   await writeFile(path.join(dataDir, "store.json"), JSON.stringify(store), "utf8");
   const probe = createServer();
@@ -83,7 +94,10 @@ async function main() {
     }
     await request("/api/resumes/11", { method: "PUT", body: JSON.stringify({ summary: "为 JD 测试创建锁定版本" }) });
     const resumeVersions = await request("/api/resumes/11/versions");
-    const resumeVersionId = resumeVersions.items[0].id;
+    assert.equal(resumeVersions.items.find((item) => item.id === 1).isAnalysisReady, false);
+    const usableResumeVersion = resumeVersions.items.find((item) => item.isAnalysisReady);
+    assert.ok(usableResumeVersion);
+    const resumeVersionId = usableResumeVersion.id;
     const samples = [
       { title: "前端开发工程师", companyName: "星云科技", rawText: "岗位职责：负责 Web 前端页面开发。任职要求：本科及以上学历，2 年及以上经验，熟悉 React 和 TypeScript。加分项：有性能优化经验。具备良好的沟通协作能力。" },
       { title: "Java 后端开发工程师", companyName: "远航软件", rawText: "岗位职责：负责后端服务开发。任职要求：本科及以上学历，2 年及以上经验，熟悉 Java 与 Spring Boot。加分项：有 Redis 使用经验。具备良好的沟通协作能力。" },
@@ -112,8 +126,16 @@ async function main() {
     const repaired = await request(`/api/job-descriptions/${invalid.item.id}`, { method: "PUT", body: JSON.stringify({ rawText: samples[1].rawText }) });
     const reparsed = await request(`/api/job-descriptions/${repaired.item.id}/parse`, { method: "POST" });
     assert.equal(reparsed.item.status, "SUCCEEDED");
+    assert.equal(reparsed.jobDescription.lastParseError, null);
     const list = await request("/api/job-descriptions");
     assert.equal(list.items.length, 4);
+    assert.equal(providerRequests.every((entry) => entry.url === "/v1/chat/completions"), true);
+    assert.equal(providerRequests.every((entry) => entry.payload.thinking?.type === "disabled"), true);
+    assert.equal(providerRequests.every((entry) => entry.payload.stream === false), true);
+    assert.equal(providerRequests.every((entry) => entry.payload.max_tokens === 4096), true);
+    assert.equal(providerRequests.every((entry) => !entry.payload.messages[1].content.includes("Saved title:")), true);
+    assert.equal(providerRequests.every((entry) => !entry.payload.messages[1].content.includes("Saved company:")), true);
+    assert.equal(providerRequests.length, 7, "empty output and invalid evidence should each cause no more than one bounded retry");
     console.log("JD integration passed: 3 distinct JDs saved, parsed, and linked to resume #11; failure retained raw text and retry succeeded.");
   } finally {
     if (backend.exitCode === null) {

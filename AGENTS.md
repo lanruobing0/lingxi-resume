@@ -73,10 +73,10 @@ http://127.0.0.1:5173/
 Backend:
 
 ```text
-http://127.0.0.1:8787
+http://127.0.0.1:8876
 ```
 
-Vite proxies `/api` to `http://127.0.0.1:8787`.
+Vite proxies `/api` to `http://127.0.0.1:8876` by default. Set `VITE_API_PROXY_TARGET` only when the backend uses another port.
 
 ## Important Files
 

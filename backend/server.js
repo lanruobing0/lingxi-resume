@@ -10,7 +10,7 @@ import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
 import { validateKnowledgeClaims, sourceAvailability } from "./citation-validator.js";
 import { buildCandidatePromptPayload, buildReportRetrievalPlans, createReportInputHash, allowedBaseEvidence, reportGenerationConfigHash } from "./grounded-report-service.js";
 import { buildGroundedReportPrompt, groundedReportPromptVersion, groundedReportSchema } from "./grounded-report-prompt.js";
-import { buildResumeSuggestionPrompt, resumeSuggestionPromptVersion, resumeSuggestionSchema } from "./resume-suggestion-prompt.js";
+import { buildResumeSuggestionPrompt, buildResumeSuggestionSchema, resumeSuggestionPromptVersion } from "./resume-suggestion-prompt.js";
 import {
   answerFeedbackSchema,
   buildAnswerFeedbackPrompt,
@@ -19,7 +19,7 @@ import {
   buildInterviewSources,
   interviewFailure,
   interviewGenerationConfigHash,
-  interviewQuestionsSchema,
+  buildInterviewQuestionsSchema,
   interviewResumeFacts,
   mockInterviewFeedbackPromptVersion,
   mockInterviewPromptVersion,
@@ -29,12 +29,12 @@ import {
 import {
   agentAllowedActions,
   agentFailure,
-  agentFinalPlanSchema,
   agentGenerationConfigHash,
   agentPlannerSchema,
   agentPromptVersion,
   agentServerMaxSteps,
   buildAgentFinalPlanPrompt,
+  buildAgentFinalPlanSchema,
   buildAgentPlannerPrompt,
   normalizeAgentFinalPlan,
   normalizePlannerDecision,
@@ -43,7 +43,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
-const port = Number(process.env.PORT || process.env.API_PORT || 8787);
+const port = Number(process.env.PORT || process.env.API_PORT || 8876);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw Object.assign(new Error("PORT must be a valid TCP port"), { code: "PORT_INVALID" });
 const maxJsonBodyBytes = 9 * 1024 * 1024;
 const sessionCookieName = "lingxi_session";
@@ -579,6 +579,13 @@ function buildResumeDTO(resume = {}) {
     sections,
   };
   return { ...dto, contentHash: createHash("sha256").update(JSON.stringify(dto)).digest("hex") };
+}
+
+function isAnalysisReadyResumeHistory(history) {
+  return Boolean(history?.snapshot
+    && typeof history.contentHash === "string"
+    && /^[a-f0-9]{64}$/.test(history.contentHash)
+    && buildResumeDTO(history.snapshot).contentHash === history.contentHash);
 }
 
 function buildAiResumeContext(resume = {}) {
@@ -1231,15 +1238,39 @@ function extractResponseText(data) {
   return "";
 }
 
+function isDeepSeekConfig(config) {
+  return config.provider === "DeepSeek" || /^https:\/\/api\.deepseek\.com(?:\/|$)/i.test(config.baseUrl);
+}
+
+function buildJsonChatPayload(config, { system, user, schemaName, schema, emptyResponseRetry = false, maxOutputTokens = 4096 }) {
+  const deepSeek = isDeepSeekConfig(config);
+  const retryInstruction = emptyResponseRetry
+    ? "The previous response was empty. Return the complete JSON object now."
+    : "";
+  return {
+    model: config.modelId,
+    messages: [
+      { role: "system", content: `${system}\n只返回符合要求的 JSON，不要 Markdown，不要解释。` },
+      { role: "user", content: `${user}\n\nReturn one complete JSON object named ${schemaName}. Required fields: ${(schema.required || []).join(", ")}. ${schemaName === "resume_suggestions" ? "String values must follow the task instructions and schema; before may be empty and FACT_REQUIRED after must be empty." : "All string fields must be non-empty."} JSON schema: ${JSON.stringify(schema)}${retryInstruction ? `\n${retryInstruction}` : ""}` },
+    ],
+    response_format: { type: "json_object" },
+    max_tokens: maxOutputTokens,
+    stream: false,
+    ...(deepSeek ? { thinking: { type: "disabled" } } : {}),
+  };
+}
+
 function parseJsonText(text) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) throw new Error("AI 返回为空");
+  if (!trimmed) throw Object.assign(new Error("AI 返回为空"), { code: "AI_INVALID_RESPONSE" });
   try {
     return JSON.parse(trimmed);
   } catch {
     const match = trimmed.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("AI 未返回 JSON");
-    return JSON.parse(match[0]);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch { /* malformed JSON must remain a failed result */ }
+    }
+    throw Object.assign(new Error("AI 返回的 JSON 不完整或格式无效"), { code: "AI_INVALID_RESPONSE" });
   }
 }
 
@@ -1288,9 +1319,9 @@ function normalizeIssue(issue = {}) {
   };
 }
 
-async function requestJson(url, payload, apiKey) {
+async function requestJson(url, payload, apiKey, { requestTimeoutMs } = {}) {
   const controller = new AbortController();
-  const timeoutMs = Math.max(100, Number(process.env.AI_PROVIDER_TIMEOUT_MS || 20000));
+  const timeoutMs = Math.max(100, Number(process.env.AI_PROVIDER_TIMEOUT_MS || requestTimeoutMs || 20000));
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
@@ -1315,48 +1346,58 @@ async function requestJson(url, payload, apiKey) {
   }
 }
 
-async function runAiJson(store, userId, { system, user, schemaName, schema, strictJson = false }) {
+async function runAiJson(store, userId, { system, user, schemaName, schema, strictJson = false, maxOutputTokens, requestTimeoutMs }) {
   const config = getAiConfig(store, userId);
   if (!config.enabled || !config.apiKey) {
     return { ok: false, status: 400, code: "AI_NOT_CONFIGURED", error: "AI 服务未配置 API Key，请先在 AI 服务商页面保存配置或设置 OPENAI_API_KEY。" };
   }
 
   const jsonInstruction = "只返回符合要求的 JSON，不要 Markdown，不要解释。";
-  try {
-    const responsesData = await requestJson(`${config.baseUrl}/responses`, {
-      model: config.modelId,
-      input: [
-        { role: "system", content: [{ type: "input_text", text: `${system}\n${jsonInstruction}` }] },
-        { role: "user", content: [{ type: "input_text", text: user }] },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: schemaName,
-          strict: true,
-          schema,
-        },
-      },
-    }, config.apiKey);
-    return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(extractResponseText(responsesData)), schemaName) };
-  } catch (responsesError) {
-    if (responsesError.code === "AI_PROVIDER_TIMEOUT") {
-      return { ok: false, status: responsesError.status || 504, code: "AI_PROVIDER_TIMEOUT", error: responsesError.message };
-    }
+  let responsesError = null;
+  if (!isDeepSeekConfig(config)) {
     try {
-      const chatData = await requestJson(`${config.baseUrl}/chat/completions`, {
+      const responsesData = await requestJson(`${config.baseUrl}/responses`, {
         model: config.modelId,
-        messages: [
-          { role: "system", content: `${system}\n${jsonInstruction}` },
-          { role: "user", content: `${user}\n\nReturn JSON object named ${schemaName}. Required fields: ${(schema.required || []).join(", ")}. All string fields must be non-empty.` },
+        ...(maxOutputTokens ? { max_output_tokens: maxOutputTokens } : {}),
+        input: [
+          { role: "system", content: [{ type: "input_text", text: `${system}\n${jsonInstruction}` }] },
+          { role: "user", content: [{ type: "input_text", text: user }] },
         ],
-        response_format: { type: "json_object" },
-      }, config.apiKey);
-      const text = chatData.choices?.[0]?.message?.content || "";
-      return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(text), schemaName) };
-    } catch (chatError) {
-      return { ok: false, status: chatError.status || 502, code: chatError.code || (strictJson ? "REPORT_PROVIDER_UNAVAILABLE" : "AI_PROVIDER_UNAVAILABLE"), error: chatError.message || responsesError.message };
+        text: {
+          format: {
+            type: "json_schema",
+            name: schemaName,
+            strict: true,
+            schema,
+          },
+        },
+      }, config.apiKey, { requestTimeoutMs });
+      if (responsesData.status === "incomplete" && responsesData.incomplete_details?.reason === "max_output_tokens") {
+        return { ok: false, status: 502, code: "AI_OUTPUT_TRUNCATED", error: "AI 输出达到长度上限，报告未生成完整" };
+      }
+      return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(extractResponseText(responsesData)), schemaName) };
+    } catch (error) {
+      responsesError = error;
+      if (error.code === "AI_PROVIDER_TIMEOUT") {
+        return { ok: false, status: error.status || 504, code: "AI_PROVIDER_TIMEOUT", error: error.message };
+      }
     }
+  }
+
+  try {
+    let chatData = await requestJson(`${config.baseUrl}/chat/completions`, buildJsonChatPayload(config, { system, user, schemaName, schema, maxOutputTokens }), config.apiKey, { requestTimeoutMs });
+    if (chatData.choices?.[0]?.finish_reason === "length") {
+      return { ok: false, status: 502, code: "AI_OUTPUT_TRUNCATED", error: "AI 输出达到长度上限，报告未生成完整" };
+    }
+    let text = chatData.choices?.[0]?.message?.content || "";
+    if (!String(text).trim() && isDeepSeekConfig(config)) {
+      chatData = await requestJson(`${config.baseUrl}/chat/completions`, buildJsonChatPayload(config, { system, user, schemaName, schema, emptyResponseRetry: true, maxOutputTokens }), config.apiKey, { requestTimeoutMs });
+      if (chatData.choices?.[0]?.finish_reason === "length") return { ok: false, status: 502, code: "AI_OUTPUT_TRUNCATED", error: "AI 输出达到长度上限，报告未生成完整" };
+      text = chatData.choices?.[0]?.message?.content || "";
+    }
+    return { ok: true, mode: "live", data: unwrapAiPayload((strictJson ? parseStrictJsonText : parseJsonText)(text), schemaName) };
+  } catch (chatError) {
+    return { ok: false, status: chatError.status || 502, code: chatError.code || (strictJson ? "REPORT_PROVIDER_UNAVAILABLE" : "AI_PROVIDER_UNAVAILABLE"), error: chatError.message || responsesError?.message };
   }
 }
 
@@ -1480,33 +1521,44 @@ function normalizeEvidenceList(value, fieldName, maxItems, rawText) {
 }
 
 async function generateAiJobDescriptionParse(store, userId, jobDescription) {
-  const ai = await runAiJson(store, userId, {
+  const request = {
     schemaName: "job_description_parse",
     schema: jobDescriptionParseSchema,
-    system: "You extract structured requirements from a job description for Chinese job seekers. Only state requirements explicitly present in the supplied JD. Never infer missing requirements. Keep required and preferred qualifications strictly separate. Every item must include a short verbatim evidence excerpt from the JD; if the JD does not state a field, return an empty list or an object with text '未明确' and empty evidence. Return JSON only.",
+    system: "You extract structured requirements from a job description for Chinese job seekers. Only state requirements explicitly present in the supplied raw JD. Never infer missing requirements. Keep required and preferred qualifications strictly separate. Every evidence value must be an exact verbatim substring of the raw JD; if the raw JD does not state a field, return an empty list or an object with text '未明确' and empty evidence. Uncertainties may only describe ambiguity that has an exact supporting quote; do not list information merely because it is absent. Return JSON only.",
     user: [
-      `Saved title: ${jobDescription.title || ""}`,
-      `Saved company: ${jobDescription.companyName || ""}`,
       "Raw job description:",
       jobDescription.rawText,
     ].join("\n"),
-  });
-  if (!ai.ok) throw aiHttpError(ai, "JD parsing failed");
-  const data = ai.data;
-  return {
-    jobTitle: normalizeEvidenceItem(data.jobTitle, "jobTitle", jobDescription.rawText, { allowEmptyEvidence: true }),
-    companyName: normalizeEvidenceItem(data.companyName, "companyName", jobDescription.rawText, { allowEmptyEvidence: true }),
-    responsibilities: normalizeEvidenceList(data.responsibilities, "responsibilities", 12, jobDescription.rawText),
-    requiredSkills: normalizeEvidenceList(data.requiredSkills, "requiredSkills", 20, jobDescription.rawText),
-    preferredSkills: normalizeEvidenceList(data.preferredSkills, "preferredSkills", 20, jobDescription.rawText),
-    educationRequirements: normalizeEvidenceList(data.educationRequirements, "educationRequirements", 8, jobDescription.rawText),
-    experienceRequirements: normalizeEvidenceList(data.experienceRequirements, "experienceRequirements", 8, jobDescription.rawText),
-    technicalKeywords: normalizeEvidenceList(data.technicalKeywords, "technicalKeywords", 30, jobDescription.rawText),
-    softSkills: normalizeEvidenceList(data.softSkills, "softSkills", 12, jobDescription.rawText),
-    seniority: normalizeEvidenceItem(data.seniority, "seniority", jobDescription.rawText, { allowEmptyEvidence: true }),
-    uncertainties: normalizeEvidenceList(data.uncertainties, "uncertainties", 12, jobDescription.rawText),
-    aiMode: ai.mode,
   };
+  const normalize = (ai) => {
+    const data = ai.data;
+    return {
+      jobTitle: normalizeEvidenceItem(data.jobTitle, "jobTitle", jobDescription.rawText, { allowEmptyEvidence: true }),
+      companyName: normalizeEvidenceItem(data.companyName, "companyName", jobDescription.rawText, { allowEmptyEvidence: true }),
+      responsibilities: normalizeEvidenceList(data.responsibilities, "responsibilities", 12, jobDescription.rawText),
+      requiredSkills: normalizeEvidenceList(data.requiredSkills, "requiredSkills", 20, jobDescription.rawText),
+      preferredSkills: normalizeEvidenceList(data.preferredSkills, "preferredSkills", 20, jobDescription.rawText),
+      educationRequirements: normalizeEvidenceList(data.educationRequirements, "educationRequirements", 8, jobDescription.rawText),
+      experienceRequirements: normalizeEvidenceList(data.experienceRequirements, "experienceRequirements", 8, jobDescription.rawText),
+      technicalKeywords: normalizeEvidenceList(data.technicalKeywords, "technicalKeywords", 30, jobDescription.rawText),
+      softSkills: normalizeEvidenceList(data.softSkills, "softSkills", 12, jobDescription.rawText),
+      seniority: normalizeEvidenceItem(data.seniority, "seniority", jobDescription.rawText, { allowEmptyEvidence: true }),
+      uncertainties: normalizeEvidenceList(data.uncertainties, "uncertainties", 12, jobDescription.rawText),
+      aiMode: ai.mode,
+    };
+  };
+  const ai = await runAiJson(store, userId, request);
+  if (!ai.ok) throw aiHttpError(ai, "JD parsing failed");
+  try {
+    return normalize(ai);
+  } catch (validationError) {
+    const corrected = await runAiJson(store, userId, {
+      ...request,
+      user: `${request.user}\n\nThe previous output failed evidence validation for ${validationError.message}. Correct it once: every non-empty evidence value must be copied exactly from the raw JD, and unsupported or merely absent information must be omitted.`,
+    });
+    if (!corrected.ok) throw aiHttpError(corrected, "JD parsing failed");
+    return normalize(corrected);
+  }
 }
 
 const matchDimensionDefinitions = [
@@ -1529,6 +1581,14 @@ const matchSkillSchema = {
     explanation: { type: "string" }, confidence: { type: "integer", minimum: 0, maximum: 100 },
   },
 };
+function matchSkillSchemaFor(statuses) {
+  return { ...matchSkillSchema, properties: {
+    ...matchSkillSchema.properties,
+    matchStatus: { type: "string", enum: statuses },
+    resumeEvidence: { ...matchSkillSchema.properties.resumeEvidence, minItems: statuses.includes("NOT_FOUND") ? 0 : 1 },
+    jdEvidence: { ...matchSkillSchema.properties.jdEvidence, minItems: 1 },
+  } };
+}
 const matchDimensionSchema = {
   type: "object", additionalProperties: false,
   required: ["key", "label", "score", "summary", "resumeEvidence", "jdEvidence", "missingEvidence", "suggestions"],
@@ -1543,9 +1603,9 @@ const matchSchema = {
   required: ["totalScore", "summary", "dimensions", "matchedRequiredSkills", "partiallyMatchedRequiredSkills", "missingRequiredSkills", "matchedPreferredSkills", "missingPreferredSkills", "matchedKeywords", "missingKeywords", "strongestResumeEvidence", "risks", "prioritizedSuggestions"],
   properties: {
     totalScore: { type: "integer", minimum: 0, maximum: 100 }, summary: { type: "string" }, dimensions: { type: "array", items: matchDimensionSchema },
-    matchedRequiredSkills: { type: "array", items: matchSkillSchema }, partiallyMatchedRequiredSkills: { type: "array", items: matchSkillSchema }, missingRequiredSkills: { type: "array", items: matchSkillSchema },
-    matchedPreferredSkills: { type: "array", items: matchSkillSchema }, missingPreferredSkills: { type: "array", items: matchSkillSchema },
-    matchedKeywords: { type: "array", items: matchSkillSchema }, missingKeywords: { type: "array", items: matchSkillSchema },
+    matchedRequiredSkills: { type: "array", items: matchSkillSchemaFor(["MATCHED"]) }, partiallyMatchedRequiredSkills: { type: "array", items: matchSkillSchemaFor(["PARTIALLY_MATCHED"]) }, missingRequiredSkills: { type: "array", items: matchSkillSchemaFor(["NOT_FOUND"]) },
+    matchedPreferredSkills: { type: "array", items: matchSkillSchemaFor(["MATCHED", "PARTIALLY_MATCHED"]) }, missingPreferredSkills: { type: "array", items: matchSkillSchemaFor(["NOT_FOUND"]) },
+    matchedKeywords: { type: "array", items: matchSkillSchemaFor(["MATCHED", "PARTIALLY_MATCHED"]) }, missingKeywords: { type: "array", items: matchSkillSchemaFor(["NOT_FOUND"]) },
     strongestResumeEvidence: { type: "array", items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, prioritizedSuggestions: { type: "array", items: { type: "string" } },
   },
 };
@@ -1624,20 +1684,70 @@ function normalizeMatchReport(data, { resumeSnapshot, jobDescription, parseResul
   };
 }
 
+function collectMatchValidationErrors(data, context) {
+  const errors = [];
+  const check = (validate) => { try { validate(); } catch (error) { errors.push(error.message); } };
+  const resumeText = JSON.stringify(buildAiResumeContext(context.resumeSnapshot));
+  const jdText = `${context.jobDescription.rawText}\n${JSON.stringify(context.parseResult.parsedData || {})}`;
+  check(() => requireNonEmptyText(data?.summary, "summary"));
+  if (Array.isArray(data?.dimensions)) data.dimensions.forEach((dimension, index) => {
+    const key = matchDimensionDefinitions[index]?.[0];
+    if (!key || dimension?.key !== key) { errors.push(`匹配维度顺序或 key 不正确：${key || index}`); return; }
+    check(() => strictMatchScore(dimension.score, `dimensions.${key}.score`));
+    check(() => requireNonEmptyText(dimension.summary, `dimensions.${key}.summary`));
+    check(() => normalizeMatchEvidence(dimension.resumeEvidence, `dimensions.${key}.resumeEvidence`, resumeText));
+    check(() => normalizeMatchEvidence(dimension.jdEvidence, `dimensions.${key}.jdEvidence`, jdText));
+    check(() => normalizeMatchTextList(dimension.missingEvidence, `dimensions.${key}.missingEvidence`));
+    check(() => normalizeMatchTextList(dimension.suggestions, `dimensions.${key}.suggestions`));
+  });
+  if (data?.dimensions?.length !== matchDimensionDefinitions.length) errors.push("匹配维度必须包含六项");
+  for (const [field, statuses] of [
+    ["matchedRequiredSkills", ["MATCHED"]], ["partiallyMatchedRequiredSkills", ["PARTIALLY_MATCHED"]],
+    ["missingRequiredSkills", ["NOT_FOUND"]], ["matchedPreferredSkills", ["MATCHED", "PARTIALLY_MATCHED"]],
+    ["missingPreferredSkills", ["NOT_FOUND"]], ["matchedKeywords", ["MATCHED", "PARTIALLY_MATCHED"]], ["missingKeywords", ["NOT_FOUND"]],
+  ]) check(() => normalizeMatchSkillList(data?.[field], field, statuses, resumeText, jdText));
+  check(() => normalizeMatchEvidence(data?.strongestResumeEvidence, "strongestResumeEvidence", resumeText, { required: true }));
+  check(() => normalizeMatchTextList(data?.risks, "risks"));
+  check(() => normalizeMatchTextList(data?.prioritizedSuggestions, "prioritizedSuggestions", { required: true }));
+  return [...new Set(errors)].slice(0, 32);
+}
+
 async function generateAiResumeJobMatch(store, userId, context) {
   const aiResume = buildAiResumeContext(context.resumeSnapshot);
-  const ai = await runAiJson(store, userId, {
-    schemaName: "resume_job_match", schema: matchSchema,
+  const request = {
+    schemaName: "resume_job_match", schema: matchSchema, maxOutputTokens: 8192, requestTimeoutMs: 60000,
     system: `You produce an evidence-backed Chinese resume-to-JD matching report. Assess only the supplied resume snapshot and JD. Never infer personal ability beyond the resume. When the resume lacks evidence, use exactly '${missingResumeEvidenceText}'. Every non-empty resumeEvidence must be a verbatim excerpt from the resume context; every non-empty jdEvidence must be a verbatim excerpt from the JD or its parsed result. Use exactly six dimensions in this order: required_skills, project_relevance, keyword_coverage, experience, education, expression. Do not decide the final total score; it will be calculated by the server. Return JSON only.`,
     user: [
       `Locked resume context: ${JSON.stringify(aiResume)}`,
       `Locked JD raw text: ${context.jobDescription.rawText}`,
       `Locked JD parse result: ${JSON.stringify(context.parseResult.parsedData)}`,
-      "Return a report with summary, dimensions, required/preferred skill lists, keyword lists, strongestResumeEvidence, risks, and prioritizedSuggestions. Every skill item needs skillName, matchStatus, resumeEvidence, jdEvidence, explanation, confidence. Do not include name, contact information, or any private profile field.",
+      "Return a report with summary, dimensions, required/preferred skill lists, keyword lists, strongestResumeEvidence, risks, and prioritizedSuggestions. Every skill and keyword item needs skillName, matchStatus, resumeEvidence, jdEvidence, explanation, confidence. Every entry in all seven skill/keyword lists must include at least one exact JD quote in jdEvidence. MATCHED and PARTIALLY_MATCHED entries must also include at least one exact resume quote; NOT_FOUND entries must have empty resumeEvidence. Only list keywords required by the locked JD, not resume-only technologies. If no JD evidence exists, omit that item rather than invent a quote. Do not include name, contact information, or any private profile field.",
     ].join("\n"),
-  });
-  if (!ai.ok) throw aiHttpError(ai, "岗位匹配 AI 调用失败");
-  return { ...normalizeMatchReport(ai.data, context), aiMode: ai.mode };
+  };
+  const ensureAiResult = (ai) => {
+    if (ai.ok) return;
+
+    const failureMessages = {
+      AI_OUTPUT_TRUNCATED: "AI 输出达到长度上限，匹配报告未生成完整，请重试。",
+      AI_INVALID_RESPONSE: "AI 返回的匹配报告 JSON 不完整或格式无效，请重试。",
+      AI_PROVIDER_TIMEOUT: "岗位匹配 AI 请求超时，请稍后重试。",
+      AI_NOT_CONFIGURED: "AI 服务未配置，请先在 AI 服务商页面保存配置。",
+    };
+    throw aiHttpError(ai, failureMessages[ai.code] || "岗位匹配 AI 服务暂时不可用，请稍后重试。");
+  };
+  const ai = await runAiJson(store, userId, request);
+  ensureAiResult(ai);
+  try {
+    return { ...normalizeMatchReport(ai.data, context), aiMode: ai.mode };
+  } catch (validationError) {
+    const validationErrors = collectMatchValidationErrors(ai.data, context);
+    const corrected = await runAiJson(store, userId, {
+      ...request,
+      user: `${request.user}\n\nThe previous output failed validation: ${validationErrors.join("; ") || validationError.message}. Fix all listed errors and check every skill/keyword entry for both required evidence arrays, including matchedKeywords and missingKeywords. Correct the report once. Copy each evidence quote exactly from its own locked source, never paraphrase or combine separated excerpts. Remove unsupported evidence. Missing resume facts must remain NOT_FOUND with empty resumeEvidence; dimension evidence arrays may be empty. Keep explanations concise and do not invent education, experience, skills or achievements.`,
+    });
+    ensureAiResult(corrected);
+    return { ...normalizeMatchReport(corrected.data, context), aiMode: corrected.mode };
+  }
 }
 
 function resolveResumeJobMatchContext(store, user, application) {
@@ -2171,7 +2281,7 @@ function resolveSuggestionReportContext(store, user, report) {
 async function executeResumeSuggestionRun(store, user, report) {
   const context = resolveSuggestionReportContext(store, user, report);
   const config = getAiConfig(store, user.id);
-  const generationConfigHash = suggestionHash({ promptVersion: resumeSuggestionPromptVersion, schema: "resume-suggestions-v2-evidence", maxPatchOperations: resumeSuggestionMaxPatchOperations, maxTextLength: resumeSuggestionMaxTextLength });
+  const generationConfigHash = suggestionHash({ promptVersion: resumeSuggestionPromptVersion, schema: "resume-suggestions-v3-paths", maxPatchOperations: resumeSuggestionMaxPatchOperations, maxTextLength: resumeSuggestionMaxTextLength });
   const run = {
     id: nextId(store.suggestionRuns), userId: user.id, jobApplicationId: report.jobApplicationId, resumeJobMatchId: report.resumeJobMatchId, matchReportId: report.id,
     resumeId: report.resumeId, baseResumeVersionId: report.resumeVersionId, baseResumeVersion: report.resumeVersion, baseResumeContentHash: report.resumeContentHash,
@@ -2184,9 +2294,19 @@ async function executeResumeSuggestionRun(store, user, report) {
   try {
     const baseDocument = buildResumeSuggestionDocument(context.history.snapshot);
     const prompt = buildResumeSuggestionPrompt({ resumeDocument: baseDocument, jobDescription: context.jobDescription, report });
-    const ai = await runAiJson(store, user.id, { schemaName: "resume_suggestions", schema: resumeSuggestionSchema, system: prompt.system, user: prompt.user, strictJson: true });
-    if (!ai.ok) throw resumeSuggestionFailure(ai.status || 502, mappedAiFailureCode(ai, { notConfigured: "SUGGESTION_PROVIDER_NOT_CONFIGURED", invalidResponse: "SUGGESTION_INVALID_OUTPUT", unavailable: "SUGGESTION_PROVIDER_UNAVAILABLE" }), ai.error || "建议生成服务不可用");
-    const normalized = normalizeGeneratedResumeSuggestions(ai.data, { baseDocument, report });
+    const schema = buildResumeSuggestionSchema(baseDocument);
+    let normalized;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const userPrompt = attempt === 0 ? prompt.user : `${prompt.user}\n建议格式纠正：上次返回的修改路径或格式未通过校验。重新生成完整 JSON，严格复制合法路径清单中的 op、path、before，不使用点号路径、数组整体路径或不存在的经历。缺失事实使用 FACT_REQUIRED 并定位已有 replace 字段。不要增加未经简历支持的事实。`;
+      const ai = await runAiJson(store, user.id, { schemaName: "resume_suggestions", schema, system: prompt.system, user: userPrompt, strictJson: true });
+      if (!ai.ok) throw resumeSuggestionFailure(ai.status || 502, mappedAiFailureCode(ai, { notConfigured: "SUGGESTION_PROVIDER_NOT_CONFIGURED", invalidResponse: "SUGGESTION_INVALID_OUTPUT", unavailable: "SUGGESTION_PROVIDER_UNAVAILABLE" }), ai.error || "建议生成服务不可用");
+      try {
+        normalized = normalizeGeneratedResumeSuggestions(ai.data, { baseDocument, report });
+        break;
+      } catch (error) {
+        if (attempt !== 0 || !["SUGGESTION_INVALID_PATCH", "SUGGESTION_INVALID_OUTPUT"].includes(error.code)) throw error;
+      }
+    }
     for (const item of normalized) store.resumeSuggestions.push({ id: nextId(store.resumeSuggestions), userId: user.id, suggestionRunId: run.id, ...item, status: "PENDING", createdAt: now(), decidedAt: null, appliedResumeVersion: null, appliedResumeVersionId: null });
     run.status = "COMPLETED";
     run.completedAt = now();
@@ -2207,7 +2327,7 @@ function publicSuggestionRun(store, run) {
 }
 
 async function acceptResumeSuggestion(store, user, suggestionId, body) {
-  const suggestion = store.resumeSuggestions.find((item) => item.id === suggestionId && item.userId === user.id);
+  const suggestion = store.resumeSuggestions.find((item) => item.id === suggestionId && item.userId === user.id && !item.deletedAt);
   if (!suggestion) throw resumeSuggestionFailure(404, "SUGGESTION_NOT_FOUND", "简历建议不存在");
   if (suggestion.status !== "PENDING") throw resumeSuggestionFailure(409, "SUGGESTION_ALREADY_DECIDED", "该简历建议已处理，不能重复接受");
   if (suggestion.suggestionType === "FACT_REQUIRED") throw resumeSuggestionFailure(409, "SUGGESTION_FACT_REQUIRED", "该建议需要用户先补充事实，不能直接应用");
@@ -2264,7 +2384,7 @@ async function acceptResumeSuggestion(store, user, suggestionId, body) {
 }
 
 async function rejectResumeSuggestion(store, user, suggestionId) {
-  const suggestion = store.resumeSuggestions.find((item) => item.id === suggestionId && item.userId === user.id);
+  const suggestion = store.resumeSuggestions.find((item) => item.id === suggestionId && item.userId === user.id && !item.deletedAt);
   if (!suggestion) throw resumeSuggestionFailure(404, "SUGGESTION_NOT_FOUND", "简历建议不存在");
   if (suggestion.status !== "PENDING") throw resumeSuggestionFailure(409, "SUGGESTION_ALREADY_DECIDED", "该简历建议已处理，不能重复拒绝");
   suggestion.status = "REJECTED";
@@ -2335,6 +2455,10 @@ function publicInterviewQuestion(store, question) {
 function publicAnswerFeedback(store, feedback) {
   const mapItems = (items) => (items || []).map((item) => ({ ...item, sourceRefs: item.sourceRefs.map((source) => publicInterviewSourceRef(store, source)) }));
   return { ...feedback, strengths: mapItems(feedback.strengths), weaknesses: mapItems(feedback.weaknesses), missingPoints: mapItems(feedback.missingPoints) };
+}
+
+function latestAnswerFeedback(store, userId, sessionId, answerId) {
+  return store.answerFeedbacks.filter((item) => item.userId === userId && item.sessionId === sessionId && item.answerId === answerId).sort((left, right) => right.id - left.id)[0] || null;
 }
 
 function publicInterviewSession(store, session, { includeQuestions = false } = {}) {
@@ -2433,12 +2557,25 @@ async function executeInterviewSession(store, user, application, report, options
       if (!sources.some((source) => source.sourceType === sourceType)) throw interviewFailure(409, "INTERVIEW_SOURCE_UNAVAILABLE", `缺少可追溯的 ${sourceType} 问题来源`);
     }
     const prompt = buildInterviewQuestionPrompt({ aiResume, jobDescription: context.jobDescription, parseResult: context.parseResult, matchReport: report, sources, questionCount: options.questionCount });
-    const ai = await runAiJson(store, user.id, { schemaName: "rag_mock_interview_questions", schema: interviewQuestionsSchema, system: prompt.system, user: prompt.user, strictJson: true });
-    if (!ai.ok) {
-      const code = mappedAiFailureCode(ai, { notConfigured: "INTERVIEW_PROVIDER_NOT_CONFIGURED", invalidResponse: "INTERVIEW_INVALID_RESPONSE", unavailable: "INTERVIEW_PROVIDER_UNAVAILABLE" });
-      throw interviewFailure(ai.status || 502, code, ai.error || "面试题生成服务不可用");
+    const request = { schemaName: "rag_mock_interview_questions", schema: buildInterviewQuestionsSchema(sources, options.questionCount), system: prompt.system, user: prompt.user, strictJson: true };
+    const generate = async (input) => {
+      const ai = await runAiJson(store, user.id, input);
+      if (!ai.ok) {
+        const code = mappedAiFailureCode(ai, { notConfigured: "INTERVIEW_PROVIDER_NOT_CONFIGURED", invalidResponse: "INTERVIEW_INVALID_RESPONSE", unavailable: "INTERVIEW_PROVIDER_UNAVAILABLE" });
+        throw interviewFailure(ai.status || 502, code, ai.error || "面试题生成服务不可用");
+      }
+      return ai.data;
+    };
+    const initial = await generate(request);
+    let generated;
+    try {
+      generated = normalizeInterviewQuestions(initial, sources, options.questionCount);
+    } catch (error) {
+      if (error.code !== "INTERVIEW_FACT_BOUNDARY_VIOLATION") throw error;
+      // Regenerate once from the same locked input. No unvalidated questions are persisted.
+      const corrected = await generate({ ...request, user: `${prompt.user}\n\n事实边界纠正：${error.message}\n重新生成完整 JSON，共 ${options.questionCount} 题。检查每道 question 和每个 expectedPoint。个人经历只可逐字引用 RESUME quote；不要将 JD、MATCH_GAP 或 KNOWLEDGE 归因给候选人。将无简历依据的个人经历问法改为中性的假设问题，expectedPoints 只写考察要点。每题 sourceIds 必须包含与 category 相同类型的现有来源。` });
+      generated = normalizeInterviewQuestions(corrected, sources, options.questionCount);
     }
-    const generated = normalizeInterviewQuestions(ai.data, sources, options.questionCount);
     generated.forEach((question, index) => store.interviewSessionQuestions.push({
       id: nextId(store.interviewSessionQuestions), userId: user.id, sessionId: session.id, sequence: index + 1,
       ...question, createdAt: now(),
@@ -2734,18 +2871,27 @@ async function executeAgentRun(store, user, application, report, options) {
       } else if (decision.action === "PRODUCE_PLAN") {
         activeStep.input = { evidenceCount: sources.length, categories: ["VERIFIED_RESUME_FACT", "EXTERNAL_KNOWLEDGE", "MATCH_GAP", "RECOMMENDATION"] };
         const finalPrompt = buildAgentFinalPlanPrompt({ objective: run.objective, sources });
-        const finalResponse = await runAiJson(store, user.id, {
-          schemaName: "bounded_agent_final_plan",
-          schema: agentFinalPlanSchema,
-          system: finalPrompt.system,
-          user: finalPrompt.user,
-          strictJson: true,
-        });
-        if (!finalResponse.ok) {
-          const code = mappedAiFailureCode(finalResponse, { notConfigured: "AGENT_PROVIDER_NOT_CONFIGURED", invalidResponse: "AGENT_INVALID_RESPONSE", unavailable: "AGENT_PROVIDER_UNAVAILABLE" });
-          throw agentFailure(finalResponse.status || 502, code, finalResponse.error || "Agent final plan provider 不可用");
+        const finalSchema = buildAgentFinalPlanSchema(sources);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          activeStep.input.finalPlanAttempts = attempt + 1;
+          const finalResponse = await runAiJson(store, user.id, {
+            schemaName: "bounded_agent_final_plan",
+            schema: finalSchema,
+            system: finalPrompt.system,
+            user: attempt === 0 ? finalPrompt.user : `${finalPrompt.user}\n事实引用纠正：上次计划未通过事实校验。请重新生成完整 JSON；verifiedResumeFacts 和 externalKnowledge 逐字复制对应单条 quote，只引用该条 sourceId。缺少知识来源则 externalKnowledge 为空。建议只描述未来操作，不增加任何已有经历。`,
+            strictJson: true,
+          });
+          if (!finalResponse.ok) {
+            const code = mappedAiFailureCode(finalResponse, { notConfigured: "AGENT_PROVIDER_NOT_CONFIGURED", invalidResponse: "AGENT_INVALID_RESPONSE", unavailable: "AGENT_PROVIDER_UNAVAILABLE" });
+            throw agentFailure(finalResponse.status || 502, code, finalResponse.error || "Agent final plan provider 不可用");
+          }
+          try {
+            run.finalResult = normalizeAgentFinalPlan(finalResponse.data, sources, interviewResumeFacts(aiResume));
+            break;
+          } catch (error) {
+            if (attempt !== 0 || !["AGENT_UNSUPPORTED_RESUME_FACT", "AGENT_FACT_BOUNDARY_VIOLATION", "AGENT_KNOWLEDGE_NOT_GROUNDED"].includes(error.code)) throw error;
+          }
         }
-        run.finalResult = normalizeAgentFinalPlan(finalResponse.data, sources, interviewResumeFacts(aiResume));
         activeStep.output = { categoryCounts: Object.fromEntries(Object.entries(run.finalResult).map(([category, items]) => [category, items.length])) };
         stepSources = [...sources];
       }
@@ -2787,9 +2933,13 @@ async function executeAgentRun(store, user, application, report, options) {
   }
 }
 
-async function submitInterviewAnswer(store, user, session, question, answerText) {
+async function submitInterviewAnswer(store, user, session, question, answerText, { retryAnswer = null } = {}) {
   if (!["IN_PROGRESS", "DEGRADED"].includes(session.status) || session.completedAt) throw interviewFailure(409, "INTERVIEW_SESSION_NOT_ACTIVE", "当前模拟面试不可继续回答");
-  if (store.interviewAnswers.some((item) => item.sessionId === session.id && item.questionId === question.id)) throw interviewFailure(409, "INTERVIEW_ANSWER_EXISTS", "该面试题已提交回答");
+  if (retryAnswer) {
+    if (retryAnswer.userId !== user.id || retryAnswer.sessionId !== session.id || retryAnswer.questionId !== question.id) throw interviewFailure(404, "FEEDBACK_NOT_FOUND", "面试反馈不存在");
+    if (retryAnswer.status !== "FEEDBACK_FAILED" || latestAnswerFeedback(store, user.id, session.id, retryAnswer.id)?.status !== "FAILED") throw interviewFailure(409, "FEEDBACK_RETRY_NOT_ALLOWED", "只有失败的反馈可以重新生成");
+    answerText = retryAnswer.answerText;
+  } else if (store.interviewAnswers.some((item) => item.sessionId === session.id && item.questionId === question.id)) throw interviewFailure(409, "INTERVIEW_ANSWER_EXISTS", "该面试题已提交回答");
   const lockedResumeHistory = store.resumeHistories.find((item) => item.id === session.resumeVersionId
     && item.resumeId === session.resumeId
     && item.resumeVersion === session.resumeVersion
@@ -2797,7 +2947,7 @@ async function submitInterviewAnswer(store, user, session, question, answerText)
     && item.snapshot);
   if (!lockedResumeHistory || buildResumeDTO(lockedResumeHistory.snapshot).contentHash !== session.resumeContentHash) throw interviewFailure(409, "INTERVIEW_INPUT_INVALID", "模拟面试锁定的 ResumeVersion 已失效");
   const lockedResumeFacts = interviewResumeFacts(buildAiResumeContext(lockedResumeHistory.snapshot));
-  const answer = {
+  const answer = retryAnswer || {
     id: nextId(store.interviewAnswers), userId: user.id, sessionId: session.id, questionId: question.id,
     resumeId: session.resumeId, resumeVersionId: session.resumeVersionId, resumeVersion: session.resumeVersion, resumeContentHash: session.resumeContentHash,
     answerText, status: "SUBMITTED", createdAt: now(),
@@ -2809,18 +2959,31 @@ async function submitInterviewAnswer(store, user, session, question, answerText)
     provider: config.provider, model: config.modelId, promptVersion: mockInterviewFeedbackPromptVersion,
     sourceRefs: question.sourceRefs, failureCode: null, failureMessage: null, createdAt: now(), completedAt: null,
   };
-  store.interviewAnswers.push(answer);
+  answer.status = "SUBMITTED";
+  if (!retryAnswer) store.interviewAnswers.push(answer);
   store.answerFeedbacks.push(feedback);
   await writeStore(store);
   try {
-    const prompt = buildAnswerFeedbackPrompt({ question, answerText });
-    const ai = await runAiJson(store, user.id, { schemaName: "rag_mock_interview_feedback", schema: answerFeedbackSchema, system: prompt.system, user: prompt.user, strictJson: true });
-    if (!ai.ok) {
-      const code = mappedAiFailureCode(ai, { notConfigured: "FEEDBACK_PROVIDER_NOT_CONFIGURED", invalidResponse: "FEEDBACK_INVALID_RESPONSE", unavailable: "FEEDBACK_PROVIDER_UNAVAILABLE" });
-      throw interviewFailure(ai.status || 502, code, ai.error || "面试反馈服务不可用");
-    }
+    const prompt = buildAnswerFeedbackPrompt({ question, answerText, resumeFacts: lockedResumeFacts });
+    const request = { schemaName: "rag_mock_interview_feedback", schema: answerFeedbackSchema, system: prompt.system, user: prompt.user, strictJson: true };
+    const generate = async (input) => {
+      const ai = await runAiJson(store, user.id, input);
+      if (!ai.ok) {
+        const code = mappedAiFailureCode(ai, { notConfigured: "FEEDBACK_PROVIDER_NOT_CONFIGURED", invalidResponse: "FEEDBACK_INVALID_RESPONSE", unavailable: "FEEDBACK_PROVIDER_UNAVAILABLE" });
+        throw interviewFailure(ai.status || 502, code, ai.error || "面试反馈服务不可用");
+      }
+      return ai.data;
+    };
     const answerSource = { sourceId: "USER_ANSWER", sourceType: "USER_ANSWER", refId: `answer:${answer.id}`, quote: answerText };
-    const normalized = normalizeAnswerFeedback(ai.data, [...question.sourceRefs, answerSource], { userFactEvidence: [...lockedResumeFacts, answerText] });
+    const initial = await generate(request);
+    let normalized;
+    try {
+      normalized = normalizeAnswerFeedback(initial, [...question.sourceRefs, answerSource], { userFactEvidence: [...lockedResumeFacts, answerText] });
+    } catch (error) {
+      if (error.code !== "INTERVIEW_FEEDBACK_UNSUPPORTED_USER_FACT") throw error;
+      const corrected = await generate({ ...request, user: `${prompt.user}\n\n反馈事实纠正：${error.message}\n重新生成完整 JSON。improvedAnswer 只给出组织回答的指导，不扩写第一人称示范经历。每个没有个人事实支持的句子和分句都必须以‘建议’、‘可以’或‘如果’标明建议/假设，禁止新增技术实践、项目、职责、数字或成果。禁止用‘建议说我做过’包装虚构经历。保留真实评分、评价和已有 sourceId。` });
+      normalized = normalizeAnswerFeedback(corrected, [...question.sourceRefs, answerSource], { userFactEvidence: [...lockedResumeFacts, answerText] });
+    }
     if (question.category === "KNOWLEDGE") {
       const ungrounded = [...normalized.strengths, ...normalized.weaknesses, ...normalized.missingPoints].some((item) => !item.sourceRefs.some((source) => source.sourceType === "KNOWLEDGE"));
       if (ungrounded) throw interviewFailure(422, "FEEDBACK_KNOWLEDGE_SOURCE_REQUIRED", "知识题反馈的判断必须引用 RAG knowledge 来源");
@@ -3040,7 +3203,13 @@ function structuredLog({ requestId = null, resourceId = null, operation, duratio
   console.log(JSON.stringify({ level: failureCode ? "warn" : "info", requestId, resourceId: resourceId === null ? null : String(resourceId), operation, durationMs, status, failureCode }));
 }
 
-const jobQueue = new InProcessJobQueue({ readStore, writeStore, concurrency: Number(process.env.JOB_CONCURRENCY || 1), logger: structuredLog });
+const jobQueue = new InProcessJobQueue({
+  readStore,
+  writeStore,
+  concurrency: Number(process.env.JOB_CONCURRENCY || 1),
+  executionMode: process.env.JOB_EXECUTION_MODE || (process.env.VERCEL ? "inline" : "background"),
+  logger: structuredLog,
+});
 jobQueue.register("GROUNDED_MATCH_REPORT", async ({ job, store, setProgress }) => {
   const user = store.users.find((item) => item.id === job.userId); if (!user) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
   const application = getOwnedJobApplication(store, user, job.resourceId); const match = getOwnedResumeJobMatch(store, user, job.payload.matchId);
@@ -3070,9 +3239,9 @@ async function readiness() {
     const persistenceStatus = await persistence.health();
     const vector = new KnowledgeRetrievalService({ env: process.env, persist: async () => {} });
     const vectorStatus = await vector.status();
-    const qdrantReady = vectorStatus.qdrant.configured && vectorStatus.qdrant.healthy;
-    return { ok: Boolean(persistenceStatus.ok && qdrantReady), persistence: { ok: persistenceStatus.ok, driver: startupConfig.driver }, qdrant: { ok: qdrantReady, failureCode: vectorStatus.qdrant.failureCode || null } };
-  } catch (error) { return { ok: false, persistence: { ok: false, driver: startupConfig.driver, failureCode: error.code || "PERSISTENCE_UNAVAILABLE" }, qdrant: { ok: false, failureCode: "READINESS_UNAVAILABLE" } }; }
+    const vectorReady = vectorStatus.vectorStore?.configured && vectorStatus.vectorStore?.healthy;
+    return { ok: Boolean(persistenceStatus.ok && vectorReady), persistence: { ok: persistenceStatus.ok, driver: startupConfig.driver }, vectorStore: { ok: vectorReady, driver: vectorStatus.vectorStore?.driver || null, failureCode: vectorStatus.vectorStore?.failureCode || null }, qdrant: { ok: vectorStatus.qdrant?.healthy || false, failureCode: vectorStatus.qdrant?.failureCode || null } };
+  } catch (error) { return { ok: false, persistence: { ok: false, driver: startupConfig.driver, failureCode: error.code || "PERSISTENCE_UNAVAILABLE" }, vectorStore: { ok: false, failureCode: "READINESS_UNAVAILABLE" }, qdrant: { ok: false, failureCode: "READINESS_UNAVAILABLE" } }; }
 }
 
 async function handleApi(req, res) {
@@ -3372,6 +3541,7 @@ async function handleApi(req, res) {
       store.jobDescriptionParseResults.push(result);
       jobDescription.currentParseResultId = result.id;
       jobDescription.parseStatus = "SUCCEEDED";
+      jobDescription.lastParseError = null;
       jobDescription.updatedAt = now();
       await writeStore(store);
       return send(res, 201, { item: result, jobDescription });
@@ -3404,7 +3574,7 @@ async function handleApi(req, res) {
     const resumeVersionId = parseOptionalPositiveInteger(body.resumeVersionId, "resumeVersionId");
     if (!resumeVersionId) return send(res, 400, { message: "请选择明确的简历版本后再创建求职分析任务" });
     const resumeHistory = store.resumeHistories.find((item) => item.id === resumeVersionId && item.resumeId === resume.id && item.snapshot);
-    if (!resumeHistory || buildResumeDTO(resumeHistory.snapshot).contentHash !== resumeHistory.contentHash) {
+    if (!isAnalysisReadyResumeHistory(resumeHistory)) {
       return send(res, 409, { message: "所选简历版本快照不完整或内容哈希不一致" });
     }
     const parseResult = store.jobDescriptionParseResults.find((result) => result.id === jobDescription.currentParseResultId && result.jobDescriptionId === jobDescription.id && result.userId === user.id && result.status === "SUCCEEDED");
@@ -3490,7 +3660,7 @@ async function handleApi(req, res) {
     const application = getOwnedJobApplication(store, user, applicationAgentRuns[1]);
     if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "AGENT_APPLICATION_NOT_FOUND" });
     const items = store.agentRuns
-      .filter((item) => item.userId === user.id && item.jobApplicationId === application.id)
+      .filter((item) => item.userId === user.id && item.jobApplicationId === application.id && !item.deletedAt)
       .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
       .map(publicAgentRunSummary);
     return send(res, 200, { items });
@@ -3528,17 +3698,27 @@ async function handleApi(req, res) {
   if (agentRunSteps && method === "GET") {
     const user = requireUser(store, req);
     const runId = Number(agentRunSteps[1]);
-    const run = Number.isInteger(runId) ? store.agentRuns.find((item) => item.id === runId && item.userId === user.id) : null;
+    const run = Number.isInteger(runId) ? store.agentRuns.find((item) => item.id === runId && item.userId === user.id && !item.deletedAt) : null;
     if (!run) return send(res, 404, { message: "AgentRun 不存在", failureCode: "AGENT_RUN_NOT_FOUND" });
     const items = store.agentSteps.filter((step) => step.agentRunId === run.id && step.userId === user.id).sort((left, right) => left.stepIndex - right.stepIndex).map((step) => publicAgentStep(store, step));
     return send(res, 200, { items });
   }
 
   const agentRunDetail = pathname.match(/^\/api\/agent-runs\/(\d+)$/);
+  if (agentRunDetail && method === "DELETE") {
+    const user = requireUser(store, req);
+    const item = store.agentRuns.find((run) => run.id === Number(agentRunDetail[1]) && run.userId === user.id && !run.deletedAt);
+    if (!item) return send(res, 404, { message: "AgentRun 不存在", failureCode: "AGENT_RUN_NOT_FOUND" });
+    if (["PENDING", "RUNNING"].includes(item.status) || store.agentSteps.some((step) => step.agentRunId === item.id && ["PENDING", "RUNNING"].includes(step.status))) return send(res, 409, { message: "Agent 分析正在运行，请完成后再删除", failureCode: "HISTORY_BUSY" });
+    deleteAgentRuns(store, (run) => run.id === item.id && run.userId === user.id);
+    store.agentRuns.push({ id: item.id, userId: user.id, jobApplicationId: item.jobApplicationId, deletedAt: now() });
+    await writeStore(store);
+    return send(res, 200, { deletedId: item.id });
+  }
   if (agentRunDetail && method === "GET") {
     const user = requireUser(store, req);
     const runId = Number(agentRunDetail[1]);
-    const item = Number.isInteger(runId) ? store.agentRuns.find((run) => run.id === runId && run.userId === user.id) : null;
+    const item = Number.isInteger(runId) ? store.agentRuns.find((run) => run.id === runId && run.userId === user.id && !run.deletedAt) : null;
     if (!item) return send(res, 404, { message: "AgentRun 不存在", failureCode: "AGENT_RUN_NOT_FOUND" });
     return send(res, 200, { item: publicAgentRun(store, item) });
   }
@@ -3548,7 +3728,7 @@ async function handleApi(req, res) {
     const user = requireUser(store, req);
     const application = getOwnedJobApplication(store, user, applicationInterviewSessions[1]);
     if (!application) return send(res, 404, { message: "求职分析任务不存在", failureCode: "INTERVIEW_APPLICATION_NOT_FOUND" });
-    const items = store.interviewSessions.filter((item) => item.userId === user.id && item.jobApplicationId === application.id)
+    const items = store.interviewSessions.filter((item) => item.userId === user.id && item.jobApplicationId === application.id && !item.deletedAt)
       .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
       .map((item) => publicInterviewSession(store, item));
     return send(res, 200, { items });
@@ -3581,10 +3761,21 @@ async function handleApi(req, res) {
   }
 
   const interviewSessionDetail = pathname.match(/^\/api\/interview-sessions\/(\d+)$/);
+  if (interviewSessionDetail && method === "DELETE") {
+    const user = requireUser(store, req);
+    const item = store.interviewSessions.find((session) => session.id === Number(interviewSessionDetail[1]) && session.userId === user.id && !session.deletedAt);
+    if (!item) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
+    if (["PENDING", "RUNNING"].includes(item.status) || store.answerFeedbacks.some((feedback) => feedback.sessionId === item.id && ["PENDING", "RUNNING"].includes(feedback.status))) return send(res, 409, { message: "面试生成或反馈处理中，请完成后再删除", failureCode: "HISTORY_BUSY" });
+    // Keep a tombstone so IDs cannot be reused; remove the session's content.
+    deleteInterviewSessions(store, (session) => session.id === item.id && session.userId === user.id);
+    store.interviewSessions.push({ id: item.id, userId: user.id, jobApplicationId: item.jobApplicationId, deletedAt: now() });
+    await writeStore(store);
+    return send(res, 200, { deletedId: item.id });
+  }
   if (interviewSessionDetail && method === "GET") {
     const user = requireUser(store, req);
     const sessionId = Number(interviewSessionDetail[1]);
-    const item = Number.isInteger(sessionId) ? store.interviewSessions.find((session) => session.id === sessionId && session.userId === user.id) : null;
+    const item = Number.isInteger(sessionId) ? store.interviewSessions.find((session) => session.id === sessionId && session.userId === user.id && !session.deletedAt) : null;
     if (!item) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
     return send(res, 200, { item: publicInterviewSession(store, item, { includeQuestions: true }) });
   }
@@ -3593,7 +3784,7 @@ async function handleApi(req, res) {
   if (interviewSessionQuestions && method === "GET") {
     const user = requireUser(store, req);
     const sessionId = Number(interviewSessionQuestions[1]);
-    const session = Number.isInteger(sessionId) ? store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id) : null;
+    const session = Number.isInteger(sessionId) ? store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id && !item.deletedAt) : null;
     if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
     const items = store.interviewSessionQuestions.filter((item) => item.sessionId === session.id && item.userId === user.id).sort((left, right) => left.sequence - right.sequence).map((item) => publicInterviewQuestion(store, item));
     return send(res, 200, { items });
@@ -3604,7 +3795,7 @@ async function handleApi(req, res) {
     const user = requireUser(store, req);
     const sessionId = Number(interviewQuestionAnswer[1]);
     const questionId = Number(interviewQuestionAnswer[2]);
-    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id);
+    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id && !item.deletedAt);
     if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
     const question = store.interviewSessionQuestions.find((item) => item.id === questionId && item.sessionId === session.id && item.userId === user.id);
     if (!question) return send(res, 404, { message: "面试题不存在", failureCode: "INTERVIEW_QUESTION_NOT_FOUND" });
@@ -3621,15 +3812,30 @@ async function handleApi(req, res) {
     }
   }
 
+  const retryInterviewFeedback = pathname.match(/^\/api\/interview-sessions\/(\d+)\/answers\/(\d+)\/feedback\/retry$/);
+  if (retryInterviewFeedback && method === "POST") {
+    const user = requireUser(store, req);
+    const session = store.interviewSessions.find((item) => item.id === Number(retryInterviewFeedback[1]) && item.userId === user.id && !item.deletedAt);
+    const answer = session && store.interviewAnswers.find((item) => item.id === Number(retryInterviewFeedback[2]) && item.sessionId === session.id && item.userId === user.id);
+    const question = answer && store.interviewSessionQuestions.find((item) => item.id === answer.questionId && item.sessionId === session.id && item.userId === user.id);
+    if (!session || !answer || !question) return send(res, 404, { message: "面试反馈不存在", failureCode: "FEEDBACK_NOT_FOUND" });
+    try {
+      const result = await submitInterviewAnswer(store, user, session, question, answer.answerText, { retryAnswer: answer });
+      return send(res, 201, { item: result.answer, feedback: publicAnswerFeedback(store, result.feedback) });
+    } catch (error) {
+      return send(res, error.status || 502, { message: error.message || "面试反馈生成失败", failureCode: error.code || "FEEDBACK_GENERATION_FAILED", answerId: error.answerId || null, feedbackId: error.feedbackId || null });
+    }
+  }
+
   const interviewAnswerFeedback = pathname.match(/^\/api\/interview-sessions\/(\d+)\/answers\/(\d+)\/feedback$/);
   if (interviewAnswerFeedback && method === "GET") {
     const user = requireUser(store, req);
     const sessionId = Number(interviewAnswerFeedback[1]);
     const answerId = Number(interviewAnswerFeedback[2]);
-    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id);
+    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id && !item.deletedAt);
     if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
     const answer = store.interviewAnswers.find((item) => item.id === answerId && item.sessionId === session.id && item.userId === user.id);
-    const feedback = answer ? store.answerFeedbacks.find((item) => item.answerId === answer.id && item.sessionId === session.id && item.userId === user.id) : null;
+    const feedback = answer ? latestAnswerFeedback(store, user.id, session.id, answer.id) : null;
     if (!answer || !feedback) return send(res, 404, { message: "面试反馈不存在", failureCode: "FEEDBACK_NOT_FOUND" });
     return send(res, 200, { item: publicAnswerFeedback(store, feedback), answer });
   }
@@ -3638,13 +3844,13 @@ async function handleApi(req, res) {
   if (completeInterviewSession && method === "POST") {
     const user = requireUser(store, req);
     const sessionId = Number(completeInterviewSession[1]);
-    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id);
+    const session = store.interviewSessions.find((item) => item.id === sessionId && item.userId === user.id && !item.deletedAt);
     if (!session) return send(res, 404, { message: "模拟面试不存在", failureCode: "INTERVIEW_SESSION_NOT_FOUND" });
     if (session.completedAt) return send(res, 409, { message: "模拟面试已完成", failureCode: "INTERVIEW_SESSION_COMPLETED" });
     const questions = store.interviewSessionQuestions.filter((item) => item.sessionId === session.id && item.userId === user.id);
     const answers = store.interviewAnswers.filter((item) => item.sessionId === session.id && item.userId === user.id);
-    const feedbacks = store.answerFeedbacks.filter((item) => item.sessionId === session.id && item.userId === user.id);
-    if (!questions.length || answers.length !== questions.length || feedbacks.length !== questions.length || feedbacks.some((item) => !["COMPLETED", "DEGRADED"].includes(item.status))) return send(res, 409, { message: "请先完成全部问题并获得反馈", failureCode: "INTERVIEW_SESSION_INCOMPLETE" });
+    const feedbacks = answers.map((answer) => latestAnswerFeedback(store, user.id, session.id, answer.id));
+    if (!questions.length || answers.length !== questions.length || feedbacks.length !== questions.length || feedbacks.some((item) => !item || !["COMPLETED", "DEGRADED"].includes(item.status))) return send(res, 409, { message: "请先完成全部问题并获得反馈", failureCode: "INTERVIEW_SESSION_INCOMPLETE" });
     session.averageScore = Math.round(feedbacks.reduce((sum, item) => sum + item.score, 0) / feedbacks.length);
     session.status = session.status === "DEGRADED" || feedbacks.some((item) => item.status === "DEGRADED") ? "DEGRADED" : "COMPLETED";
     session.completedAt = now();
@@ -3658,7 +3864,7 @@ async function handleApi(req, res) {
     const reportId = Number(reportSuggestionsMatch[1]);
     const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id) : null;
     if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "SUGGESTION_REPORT_NOT_FOUND" });
-    const items = store.suggestionRuns.filter((item) => item.userId === user.id && item.matchReportId === report.id).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || ""))).map((item) => publicSuggestionRun(store, item));
+    const items = store.suggestionRuns.filter((item) => item.userId === user.id && item.matchReportId === report.id && !item.deletedAt).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || ""))).map((item) => publicSuggestionRun(store, item));
     return send(res, 200, { items });
   }
 
@@ -3681,10 +3887,21 @@ async function handleApi(req, res) {
   }
 
   const suggestionRunDetail = pathname.match(/^\/api\/suggestion-runs\/(\d+)$/);
+  if (suggestionRunDetail && method === "DELETE") {
+    const user = requireUser(store, req);
+    const item = store.suggestionRuns.find((run) => run.id === Number(suggestionRunDetail[1]) && run.userId === user.id && !run.deletedAt);
+    if (!item) return send(res, 404, { message: "简历建议生成记录不存在", failureCode: "SUGGESTION_RUN_NOT_FOUND" });
+    if (["PENDING", "RUNNING"].includes(item.status) || store.resumeSuggestions.some((suggestion) => suggestion.suggestionRunId === item.id && suggestionDecisionLocks.has(suggestion.id))) return send(res, 409, { message: "建议正在生成或应用，请完成后再删除", failureCode: "HISTORY_BUSY" });
+    item.deletedAt = now();
+    // Accepted suggestions remain as provenance for immutable resume versions.
+    store.resumeSuggestions = store.resumeSuggestions.map((suggestion) => suggestion.suggestionRunId !== item.id || suggestion.status === "ACCEPTED" ? suggestion : { id: suggestion.id, userId: user.id, suggestionRunId: item.id, deletedAt: item.deletedAt });
+    await writeStore(store);
+    return send(res, 200, { deletedId: item.id });
+  }
   if (suggestionRunDetail && method === "GET") {
     const user = requireUser(store, req);
     const runId = Number(suggestionRunDetail[1]);
-    const item = Number.isInteger(runId) ? store.suggestionRuns.find((run) => run.id === runId && run.userId === user.id) : null;
+    const item = Number.isInteger(runId) ? store.suggestionRuns.find((run) => run.id === runId && run.userId === user.id && !run.deletedAt) : null;
     if (!item) return send(res, 404, { message: "简历建议生成记录不存在", failureCode: "SUGGESTION_RUN_NOT_FOUND" });
     return send(res, 200, { item: publicSuggestionRun(store, item) });
   }
@@ -3837,6 +4054,7 @@ async function handleApi(req, res) {
         return {
           ...item,
           hasSnapshot: Boolean(snapshot),
+          isAnalysisReady: isAnalysisReadyResumeHistory({ ...item, snapshot }),
           sourceSuggestion: sourceSuggestion ? { id: sourceSuggestion.id, suggestionRunId: sourceSuggestion.suggestionRunId, sectionType: sourceSuggestion.sectionType, suggestionType: sourceSuggestion.suggestionType } : null,
         };
       });

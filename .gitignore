@@ -45,3 +45,6 @@ templates-*.png
 Lingxi-Resume-delivery.zip
 Lingxi-Resume-submission.zip
 deliverables/
+.vercel/
+
+.env*

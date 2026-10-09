@@ -6,7 +6,7 @@
 
 - 前端：React 18、Vite、plain CSS。
 - API：轻量 Node HTTP 服务。
-- 持久化：本地 JSON（默认，开发/测试）或 MySQL（`STORAGE_DRIVER=mysql`）。
+- 持久化：本地 JSON（默认，开发/测试）、MySQL（`STORAGE_DRIVER=mysql`）或 Upstash Redis（`STORAGE_DRIVER=redis`，适合 Vercel）。
 - 知识检索：Qdrant + 关键词检索 + 确定性 RRF Hybrid Retrieval；Reranker 可选。
 - AI：OpenAI-compatible Provider；RAG grounded report、evidence-backed resume suggestion、RAG mock interview、bounded Agentic RAG。
 
@@ -24,7 +24,7 @@ corepack pnpm dev:api
 corepack pnpm dev
 ```
 
-前端为 `http://127.0.0.1:5173/`，API 默认为 `http://127.0.0.1:8787/`。复制 `.env.example` 为 `.env` 后按需设置环境变量；`.env` 不应提交。
+前端为 `http://127.0.0.1:5173/`，API 默认为 `http://127.0.0.1:8876/`，Vite 的 `/api` 代理默认指向同一端口。复制 `.env.example` 为 `.env` 后按需设置环境变量；`.env` 不应提交。
 
 ## 配置
 
@@ -35,6 +35,18 @@ corepack pnpm dev
 MySQL 运行时会使用迁移后的 `lingxi_store_snapshot` 和受审计的实体投影，覆盖 RetrievalRun、MatchReport、SuggestionRun/ResumeSuggestion、ResumeVersion、Interview Session/Question/Answer/Feedback、AgentRun/AgentStep/Job。生产迁移见 [010_production_hardening.sql](database/migrations/010_production_hardening.sql)，完整关系模型参考 [database.sql](database.sql)。真实 MySQL integration 已在 MySQL 8.x 环境验证通过：MySQL 8.4.11、隔离测试库 `lingxi_resume_test`，已验证 migration 重复执行、事务 commit/rollback、核心实体投影、全链路和后端重启恢复；密码未写入仓库。
 
 AI 使用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 和 `AI_PROVIDER_TIMEOUT_MS`。Embedding 使用 `EMBEDDING_*`，Qdrant 使用 `QDRANT_URL`、`QDRANT_API_KEY` 与 `QDRANT_*`。所有 secret 仅可放在环境变量或本地运行时配置中。
+
+Vercel 部署建议连接 Upstash Redis 与 Upstash Vector，并设置：
+
+```text
+STORAGE_DRIVER=redis
+VECTOR_STORE_DRIVER=upstash
+JOB_EXECUTION_MODE=inline
+UPSTASH_VECTOR_MODEL=BAAI/bge-m3
+UPSTASH_VECTOR_DIMENSION=1024
+```
+
+Upstash Redis 集成会注入 `KV_REST_API_URL` 与 `KV_REST_API_TOKEN`，后端可直接识别。生产环境不得使用 `STORAGE_DRIVER=json`，因为 Vercel 服务实例的文件系统不会提供可靠持久化。Upstash Vector 仅在明确设置索引维度及嵌入提供方后启用，不会静默替代现有 Qdrant 路径。本地 JSON 数据不会自动上传到云端，避免把本机简历和个人资料误传到生产环境。
 
 Qdrant 可用 Docker 启动：
 

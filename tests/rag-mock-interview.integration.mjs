@@ -5,12 +5,49 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { buildInterviewQuestionPrompt, buildInterviewQuestionsSchema, validateUserFactGrounding } from "../backend/mock-interview-service.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const hash = (value) => createHash("sha256").update(value).digest("base64url");
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listen = (server) => new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
+
+const minimalSources = ["RESUME", "JD", "MATCH_GAP"].map((sourceType) => ({ sourceId: `${sourceType}-1`, sourceType, quote: sourceType }));
+const minimalSchema = buildInterviewQuestionsSchema(minimalSources, 4);
+assert.deepEqual(minimalSchema.properties.questions.items.properties.category.enum, ["RESUME", "JD", "MATCH_GAP"]);
+assert.equal(minimalSchema.properties.questions.minItems, 4);
+assert.equal(minimalSchema.properties.questions.maxItems, 4);
+assert.deepEqual(minimalSchema.properties.questions.items.properties.expectedPoints.items.properties.sourceIds.items.enum, minimalSources.map((source) => source.sourceId));
+const threeQuestionPrompt = buildInterviewQuestionPrompt({ aiResume: {}, jobDescription: {}, parseResult: {}, matchReport: {}, sources: [...minimalSources, { sourceId: "KNOWLEDGE-1", sourceType: "KNOWLEDGE", quote: "缓存知识" }], questionCount: 3 });
+assert.deepEqual(JSON.parse(threeQuestionPrompt.user).requiredCategories, ["RESUME", "JD", "MATCH_GAP"], "three questions must not require four categories");
+for (const question of [
+  '你在简历中写到：熟悉 Java 服务开发。',
+  '你在简历中写到：熟悉 Java 服务开发。请说明你是如何设计接口的？',
+  '你如何通过接口设计保障长期维护？',
+  '请说明你如何设计开发过程中的接口？',
+]) assert.doesNotThrow(() => validateUserFactGrounding(question, ['熟悉 Java 服务开发']), question);
+for (const question of [
+  '你在简历中写到：你之前主导 Kubernetes 缓存平台。',
+  '你在简历中写到：你使用 Redis 构建缓存。',
+  '请说明你之前如何使用 Redis 构建缓存？',
+  '你是如何解释你已经掌握 Kubernetes 的？',
+  '你是如何解释你做过百人团队管理的？',
+  '请说明你是如何解释你主导 Kubernetes 平台的？',
+  '你在简历中写到：你已经将性能提升 50%。',
+]) assert.throws(() => validateUserFactGrounding(question, ['熟悉 Java 服务开发']), error => error.code === 'INTERVIEW_FACT_BOUNDARY_VIOLATION', question);
+for (const advice of [
+  '1. 建议说明开发思路。',
+  '**建议**描述设计取舍，说明实施步骤并讨论优化方案。',
+  '- 可以说明你如何设计接口。',
+]) assert.doesNotThrow(() => validateUserFactGrounding(advice, ['熟悉 Java 服务开发'], { implicitUserVoice: true }));
+for (const advice of [
+  '1. 我负责 Redis 平台。',
+  '**建议**说我使用 Kubernetes 构建平台。',
+  '建议组织回答，我熟悉 Java 服务开发，提升性能 50%。',
+  '建议描述你之前如何使用 Redis。',
+  '建议说明设计思路。使用 Redis 构建过缓存模块。',
+]) assert.throws(() => validateUserFactGrounding(advice, ['熟悉 Java 服务开发'], { implicitUserVoice: true }), error => error.code === 'INTERVIEW_FACT_BOUNDARY_VIOLATION', advice);
 
 function lockedResume() {
   const value = {
@@ -58,6 +95,7 @@ function questionPayload(mode) {
     payload.questions[3].question = "请解释 Kubernetes Deployment。";
     payload.questions[3].expectedPoints[0].point = "解释 Kubernetes Deployment 核心概念";
   }
+  if (mode === "legalQuestionScaffolding") payload.questions[0].question = "你在简历中写到：熟悉 Java 服务开发。请说明你是如何设计接口的？";
   return payload;
 }
 
@@ -88,7 +126,20 @@ async function main() {
     if (state.mode === "providerFail") { res.writeHead(503, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: "provider down" } })); return; }
     const isFeedback = body.includes("rag_mock_interview_feedback");
     const currentSourceId = body.match(/(?:RESUME|JD|MATCH_GAP|KNOWLEDGE)-\d+/)?.[0] || "RESUME-1";
-    const payload = isFeedback ? feedbackPayload(state.mode, currentSourceId) : questionPayload(state.mode);
+    const correction = body.includes("事实边界纠正：");
+    const questionMode = state.mode === "correctableFact" ? (correction ? "valid" : "fabricated") : state.mode === "correctableCategory" || state.mode.startsWith("noKnowledge") ? "valid" : state.mode;
+    const feedbackMode = state.mode === "correctableFeedback" ? (body.includes("反馈事实纠正：") ? "valid" : "improvedFabricated") : state.mode;
+    const payload = isFeedback ? feedbackPayload(feedbackMode, currentSourceId) : questionPayload(questionMode);
+    if (!isFeedback && state.mode === "correctableCategory" && !correction) payload.questions[0].sourceIds = ["JD-1"];
+    if (!isFeedback && state.mode.startsWith("noKnowledge")) {
+      const requestPrompt = JSON.parse(JSON.parse(body).input.find((item) => item.role === "user").content[0].text.split("\n\n事实边界纠正：")[0]);
+      assert.deepEqual(requestPrompt.allowedCategories, ["RESUME", "JD", "MATCH_GAP"]);
+      const schema = JSON.parse(body).text.format.schema;
+      assert.equal(schema.properties.questions.items.properties.category.enum.includes("KNOWLEDGE"), false);
+      assert.equal(schema.properties.questions.items.properties.sourceIds.items.enum.some((id) => id.startsWith("KNOWLEDGE-")), false);
+      payload.questions[3] = { question: "如果需要设计 Redis 缓存，你会如何确定方案？", category: "JD", difficulty: "HARD", rationale: "考察岗位要求", sourceIds: ["JD-1"], expectedPoints: [{ point: "讨论缓存方案的取舍", sourceIds: ["JD-1"] }] };
+      if (state.mode === "noKnowledgePersistent" || (state.mode === "noKnowledgeCorrectable" && !correction)) payload.questions[3].category = "KNOWLEDGE";
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ output_text: JSON.stringify(payload) }));
   });
@@ -124,7 +175,7 @@ async function main() {
   const start = () => { backend = spawn(process.execPath, ["backend/server.js"], { cwd: root, env: { ...process.env, API_PORT: String(apiPort), LINGXI_DATA_DIR: dir, OPENAI_API_KEY: "", OPENAI_BASE_URL: "", OPENAI_MODEL: "", AI_PROVIDER_TIMEOUT_MS: "100" }, stdio: ["ignore", "pipe", "pipe"] }); backend.stdout.on("data", (part) => { backendOutput += part; }); backend.stderr.on("data", (part) => { backendOutput += part; }); };
   const stop = async () => { if (!backend?.pid || backend.exitCode !== null) return; backend.kill("SIGKILL"); for (let i = 0; i < 100; i += 1) { try { process.kill(backend.pid, 0); } catch { return; } await wait(20); } };
   const healthy = async () => { for (let i = 0; i < 120; i += 1) { try { if ((await fetch(`http://127.0.0.1:${apiPort}/api/health`)).ok) return; } catch {} await wait(25); } throw new Error(`backend failed: ${backendOutput.slice(-1000)}`); };
-  const call = async (tokenValue, pathname, body, expected) => { const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, { method: body === undefined ? "GET" : "POST", headers: { Cookie: `lingxi_session=${tokenValue}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000) }); const data = await response.json(); if (expected !== undefined) assert.equal(response.status, expected, JSON.stringify(data)); return { status: response.status, data }; };
+  const call = async (tokenValue, pathname, body, expected, method = body === undefined ? "GET" : "POST") => { const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, { method, headers: { Cookie: `lingxi_session=${tokenValue}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000) }); const data = await response.json(); if (expected !== undefined) assert.equal(response.status, expected, JSON.stringify(data)); return { status: response.status, data }; };
   try {
     start(); await healthy();
     const created = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
@@ -158,9 +209,25 @@ async function main() {
     const degraded = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "HYBRID" }, 201);
     assert.equal(degraded.data.item.status, "DEGRADED"); assert.equal(degraded.data.item.retrievalStatus, "DEGRADED"); assert.ok(degraded.data.item.retrievalRunIds.length);
 
+    for (const mode of ["correctableFact", "correctableCategory"]) {
+      state.mode = mode;
+      const before = state.bodies.length;
+      const corrected = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
+      assert.equal(state.bodies.length - before, 2, "boundary violations get exactly one correction");
+      assert.equal(corrected.data.item.questions.length, 4);
+      assert.equal(corrected.data.item.promptVersion, "rag-mock-interview-v3");
+      assert.equal(corrected.data.item.questions.some((item) => item.question.includes("百人团队")), false);
+      const [first, second] = state.bodies.slice(before).map((body) => JSON.parse(body));
+      const firstUser = first.input.find((item) => item.role === "user").content[0].text;
+      const secondUser = second.input.find((item) => item.role === "user").content[0].text;
+      assert.ok(secondUser.startsWith(firstUser), "correction must retain the exact locked request input");
+      assert.ok(secondUser.includes("事实边界纠正："));
+    }
     state.mode = "fabricated";
+    const fabricatedBefore = state.bodies.length;
     const fabricated = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 422);
     assert.equal(fabricated.data.failureCode, "INTERVIEW_FACT_BOUNDARY_VIOLATION");
+    assert.equal(state.bodies.length - fabricatedBefore, 2, "persistent violations stop after the second response");
     let saved = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
     assert.equal(saved.interviewSessions.at(-1).status, "FAILED"); assert.equal(saved.interviewSessionQuestions.some((item) => item.sessionId === saved.interviewSessions.at(-1).id), false);
 
@@ -180,6 +247,11 @@ async function main() {
     const legalKnowledge = legalExternal.data.item.questions.find((item) => item.category === "KNOWLEDGE");
     assert.equal(legalKnowledge.question, "请解释 Kubernetes Deployment。");
     assert.equal(legalKnowledge.sourceRefs.some((item) => item.sourceType === "KNOWLEDGE" && item.retrievalRunId), true, "legal knowledge question must retain a real KNOWLEDGE sourceRef");
+    state.mode = "legalQuestionScaffolding";
+    const scaffoldBefore = state.bodies.length;
+    const scaffoldSession = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
+    assert.equal(state.bodies.length - scaffoldBefore, 1, "legal interview wording must not require regeneration");
+    assert.equal(scaffoldSession.data.item.questions[0].question, "你在简历中写到：熟悉 Java 服务开发。请说明你是如何设计接口的？");
 
     state.mode = "valid";
     const fabricatedFeedbackSession = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
@@ -191,6 +263,40 @@ async function main() {
     assert.equal(rejectedFeedback.status, "FAILED");
     assert.equal(rejectedFeedback.improvedAnswer, "", "unsupported improvedAnswer must not be persisted as normal feedback content");
     assert.equal(JSON.stringify(rejectedFeedback).includes("字节跳动"), false);
+
+    const retryPath = `/api/interview-sessions/${fabricatedFeedbackSession.data.item.id}/answers/${fabricatedFeedback.data.answerId}/feedback/retry`;
+    assert.equal((await call(otherToken, retryPath, {}, 404)).status, 404);
+    assert.equal((await call(token, `/api/interview-sessions/${fabricatedFeedbackSession.data.item.id}/answers/${answered.data.item.id}/feedback/retry`, {}, 404)).status, 404);
+    const answerCount = saved.interviewAnswers.length;
+    const retryFailed = await call(token, retryPath, {}, 422);
+    assert.equal(retryFailed.data.failureCode, "INTERVIEW_FEEDBACK_UNSUPPORTED_USER_FACT");
+    assert.equal(retryFailed.data.answerId, fabricatedFeedback.data.answerId);
+    state.mode = "valid";
+    const recovered = await call(token, retryPath, { answerText: "must not replace the original answer" }, 201);
+    assert.equal(recovered.data.item.id, fabricatedFeedback.data.answerId);
+    assert.equal(recovered.data.item.answerText, "我只说明 Java 接口拆分，没有补充其他经历。");
+    assert.equal(recovered.data.feedback.promptVersion, "rag-mock-interview-feedback-v2");
+    const latest = await call(token, `/api/interview-sessions/${fabricatedFeedbackSession.data.item.id}/answers/${fabricatedFeedback.data.answerId}/feedback`, undefined, 200);
+    assert.equal(latest.data.item.id, recovered.data.feedback.id);
+    const noRetryCalls = state.bodies.length;
+    await call(token, retryPath, {}, 409);
+    assert.equal(state.bodies.length, noRetryCalls, "successful feedback cannot be regenerated");
+    saved = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    assert.equal(saved.interviewAnswers.length, answerCount);
+    assert.equal(saved.answerFeedbacks.find(item => item.id === fabricatedFeedback.data.feedbackId).status, "FAILED", "old failed feedback must remain in history");
+    for (const question of fabricatedFeedbackSession.data.item.questions.slice(1)) await call(token, `/api/interview-sessions/${fabricatedFeedbackSession.data.item.id}/questions/${question.id}/answers`, { answerText: "不补写个人经历。" }, 201);
+    const recoveredComplete = await call(token, `/api/interview-sessions/${fabricatedFeedbackSession.data.item.id}/complete`, {}, 200);
+    assert.equal(recoveredComplete.data.item.averageScore, 82, "completion must use latest feedback per answer");
+    await call(token, retryPath, {}, 409);
+
+    state.mode = "valid";
+    const correctionSession = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
+    state.mode = "correctableFeedback";
+    const feedbackBefore = state.bodies.length;
+    const correctedFeedback = await call(token, `/api/interview-sessions/${correctionSession.data.item.id}/questions/${correctionSession.data.item.questions[0].id}/answers`, { answerText: "只说明技术取舍，不补写经历。" }, 201);
+    assert.equal(state.bodies.length - feedbackBefore, 2, "feedback gets at most one factual correction");
+    assert.equal(correctedFeedback.data.feedback.status, "COMPLETED");
+    assert.equal(correctedFeedback.data.feedback.improvedAnswer.includes("字节跳动"), false);
 
     state.mode = "valid";
     const resumeSupportedSession = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
@@ -219,6 +325,38 @@ async function main() {
     saved = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
     assert.equal(saved.answerFeedbacks.find((item) => item.id === unsupportedPercent.data.feedbackId).status, "FAILED");
 
+    // Empty business knowledge store: generate from actual sources and keep degradation explicit.
+    await stop();
+    saved = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    const knowledgeDocuments = saved.knowledgeDocuments;
+    const knowledgeChunks = saved.knowledgeChunks;
+    saved.knowledgeDocuments = []; saved.knowledgeChunks = [];
+    await writeFile(path.join(dir, "store.json"), JSON.stringify(saved));
+    start(); await healthy();
+    for (const mode of ["noKnowledgeValid", "noKnowledgeCorrectable", "noKnowledgePersistent"]) {
+      state.mode = mode;
+      const before = state.bodies.length;
+      const result = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, mode === "noKnowledgePersistent" ? 422 : 201);
+      assert.equal(state.bodies.length - before, mode === "noKnowledgeValid" ? 1 : 2);
+      if (mode === "noKnowledgePersistent") {
+        assert.equal(result.data.failureCode, "INTERVIEW_FACT_BOUNDARY_VIOLATION");
+        saved = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+        assert.equal(saved.interviewSessions.at(-1).status, "FAILED");
+        assert.equal(saved.interviewSessionQuestions.some((item) => item.sessionId === saved.interviewSessions.at(-1).id), false);
+      } else {
+        assert.equal(result.data.item.status, "DEGRADED");
+        assert.equal(result.data.item.failureCode, "INTERVIEW_NO_KNOWLEDGE_EVIDENCE");
+        assert.equal(result.data.item.questions.length, 4);
+        assert.equal(result.data.item.questions.some((item) => item.category === "KNOWLEDGE"), false);
+        assert.equal(result.data.item.questions.flatMap((item) => item.sourceRefs).some((source) => source.sourceType === "KNOWLEDGE"), false);
+      }
+    }
+    await stop();
+    saved = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    saved.knowledgeDocuments = knowledgeDocuments; saved.knowledgeChunks = knowledgeChunks;
+    await writeFile(path.join(dir, "store.json"), JSON.stringify(saved));
+    start(); await healthy();
+
     state.mode = "providerFail";
     const providerFailure = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 503);
     assert.equal(providerFailure.data.failureCode, "INTERVIEW_PROVIDER_UNAVAILABLE");
@@ -237,7 +375,25 @@ async function main() {
     assert.equal(JSON.stringify(saved).includes("improvedAnswerIsSuggestion"), true);
     assert.equal(saved.resumes.some((item) => JSON.stringify(item).includes("建议按背景、职责、取舍")), false, "improvedAnswer must never be written back to Resume");
     assert.equal(backendOutput.match(/provider-SECRET|PRIVATE-NAME|private@example.com|13800138000/) !== null, false, "backend log leaked private data or key");
-    console.log("Stage 8 RAG mock interview integration passed: immutable ResumeVersion, sourced questions, retrieval traces, grounded feedback, failures, degradation, ownership, and fact boundary.");
+    const deleteId = feedbackFailureSession.data.item.id;
+    await call(otherToken, `/api/interview-sessions/${deleteId}`, undefined, 404, "DELETE");
+    await call(token, `/api/interview-sessions/${deleteId}`, undefined, 200, "DELETE");
+    await call(token, `/api/interview-sessions/${deleteId}`, undefined, 404);
+    await call(token, `/api/interview-sessions/${deleteId}/answers/${feedbackFailure.data.answerId}/feedback`, undefined, 404);
+    await call(token, `/api/interview-sessions/${deleteId}/complete`, {}, 404);
+    const visibleHistory = await call(token, "/api/job-applications/1/interview-sessions", undefined, 200);
+    assert.ok(!visibleHistory.data.items.some((item) => item.id === deleteId));
+    const deletedStore = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    for (const key of ["interviewSessionQuestions", "interviewAnswers", "answerFeedbacks"]) assert.ok(!deletedStore[key].some((item) => item.sessionId === deleteId));
+    assert.deepEqual(deletedStore.resumes, saved.resumes);
+    assert.deepEqual(deletedStore.resumeHistories, saved.resumeHistories);
+    const busySession = deletedStore.interviewSessions.find((item) => item.userId === 1 && !item.deletedAt && !["PENDING", "RUNNING"].includes(item.status));
+    await writeFile(path.join(dir, "store.json"), JSON.stringify({ ...deletedStore, answerFeedbacks: [...deletedStore.answerFeedbacks, { id: 99999, userId: 1, sessionId: busySession.id, status: "PENDING" }] }));
+    assert.equal((await call(token, `/api/interview-sessions/${busySession.id}`, undefined, 409, "DELETE")).data.failureCode, "HISTORY_BUSY");
+    await writeFile(path.join(dir, "store.json"), JSON.stringify(deletedStore));
+    await stop(); start(); await healthy();
+    await call(token, `/api/interview-sessions/${deleteId}`, undefined, 404);
+    console.log("Stage 8 RAG mock interview integration passed: immutable ResumeVersion, sourced questions, retrieval traces, grounded feedback, failures, degradation, ownership, fact boundary, and history deletion.");
   } finally {
     await stop(); await new Promise((resolve) => provider.close(resolve)); await rm(dir, { recursive: true, force: true });
   }

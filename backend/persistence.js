@@ -8,14 +8,14 @@ const coreEntityCollections = [
   "interviewSessions", "interviewSessionQuestions", "interviewAnswers", "answerFeedbacks", "agentRuns", "agentSteps", "jobs",
 ];
 
-const mysqlPrivateFields = new Set(["apikey", "api_key", "systemprompt", "hiddensystemprompt", "embedding", "vector"]);
+const cloudPrivateFields = new Set(["apikey", "api_key", "systemprompt", "hiddensystemprompt", "embedding", "vector"]);
 
-function mysqlSafeValue(value) {
-  if (Array.isArray(value)) return value.map(mysqlSafeValue);
+function cloudSafeValue(value) {
+  if (Array.isArray(value)) return value.map(cloudSafeValue);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => !mysqlPrivateFields.has(String(key).toLowerCase()))
-    .map(([key, nested]) => [key, mysqlSafeValue(nested)]));
+    .filter(([key]) => !cloudPrivateFields.has(String(key).toLowerCase()))
+    .map(([key, nested]) => [key, cloudSafeValue(nested)]));
 }
 
 function mysqlConfig(env) {
@@ -29,8 +29,14 @@ function mysqlConfig(env) {
 
 export function storageConfig(env = process.env) {
   const driver = String(env.STORAGE_DRIVER || "json").trim().toLowerCase();
-  if (!["json", "mysql"].includes(driver)) throw Object.assign(new Error("STORAGE_DRIVER must be json or mysql"), { code: "STORAGE_DRIVER_INVALID" });
-  return { driver, mysql: driver === "mysql" ? mysqlConfig(env) : null };
+  if (!["json", "mysql", "redis"].includes(driver)) throw Object.assign(new Error("STORAGE_DRIVER must be json, mysql, or redis"), { code: "STORAGE_DRIVER_INVALID" });
+  const redis = driver === "redis" ? {
+    url: String(env.UPSTASH_REDIS_REST_URL || env.KV_REST_API_URL || "").trim(),
+    token: String(env.UPSTASH_REDIS_REST_TOKEN || env.KV_REST_API_TOKEN || "").trim(),
+    key: String(env.REDIS_STORE_KEY || "lingxi:store:v1").trim() || "lingxi:store:v1",
+  } : null;
+  if (redis && (!redis.url || !redis.token)) throw Object.assign(new Error("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required when STORAGE_DRIVER=redis"), { code: "REDIS_CONFIG_INVALID" });
+  return { driver, mysql: driver === "mysql" ? mysqlConfig(env) : null, redis };
 }
 
 export class JsonPersistence {
@@ -77,7 +83,7 @@ export class MysqlPersistence {
   async read() { await this.ensure(); const pool = await this.#pool(); const [rows] = await pool.query("SELECT payload_json FROM lingxi_store_snapshot WHERE id = 1"); return rows.length ? (typeof rows[0].payload_json === "string" ? JSON.parse(rows[0].payload_json) : rows[0].payload_json) : structuredClone(this.seedData); }
   async write(store) {
     await this.ensure(); const pool = await this.#pool(); const connection = await pool.getConnection();
-    const safeStore = mysqlSafeValue(store);
+    const safeStore = cloudSafeValue(store);
     try {
       await connection.beginTransaction();
       await connection.query("INSERT INTO lingxi_store_snapshot (id, payload_json, updated_at) VALUES (1, ?, UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_at = UTC_TIMESTAMP()", [JSON.stringify(safeStore)]);
@@ -96,7 +102,33 @@ export class MysqlPersistence {
   async close() { if (this.pool) await this.pool.end(); }
 }
 
+export class RedisPersistence {
+  constructor({ config, seedData }) { this.config = config; this.seedData = seedData; this.client = null; }
+  async #client() {
+    if (!this.client) {
+      const { Redis } = await import("@upstash/redis").catch(() => { throw Object.assign(new Error("@upstash/redis is required when STORAGE_DRIVER=redis"), { code: "REDIS_DRIVER_UNAVAILABLE" }); });
+      this.client = new Redis({ url: this.config.url, token: this.config.token, enableTelemetry: false });
+    }
+    return this.client;
+  }
+  async ensure() {
+    const redis = await this.#client();
+    await redis.set(this.config.key, JSON.stringify(cloudSafeValue(this.seedData)), { nx: true });
+  }
+  async read() {
+    await this.ensure();
+    const payload = await (await this.#client()).get(this.config.key);
+    if (payload === null || payload === undefined) return structuredClone(this.seedData);
+    return typeof payload === "string" ? JSON.parse(payload) : payload;
+  }
+  async write(store) { await (await this.#client()).set(this.config.key, JSON.stringify(cloudSafeValue(store))); }
+  async health() { const response = await (await this.#client()).ping(); return { ok: String(response || "").toUpperCase() === "PONG", driver: "redis" }; }
+  async close() {}
+}
+
 export function createPersistence({ env = process.env, dataDir, seedData }) {
   const config = storageConfig(env);
-  return config.driver === "mysql" ? new MysqlPersistence({ config: config.mysql, seedData }) : new JsonPersistence({ dataDir, seedData });
+  if (config.driver === "mysql") return new MysqlPersistence({ config: config.mysql, seedData });
+  if (config.driver === "redis") return new RedisPersistence({ config: config.redis, seedData });
+  return new JsonPersistence({ dataDir, seedData });
 }

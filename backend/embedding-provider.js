@@ -22,7 +22,7 @@ export function getEmbeddingConfig(env = process.env) {
 }
 
 export function createEmbeddingProfile(config) {
-  const input = { provider: "openai-compatible", model: config.model, dimension: config.dimension, inputFormatVersion: knowledgeEmbeddingInputFormatVersion, distanceMetric: "Cosine" };
+  const input = { provider: config.provider || "openai-compatible", model: config.model, dimension: config.dimension, inputFormatVersion: knowledgeEmbeddingInputFormatVersion, distanceMetric: "Cosine" };
   const profileId = `ep_${createHash("sha256").update(JSON.stringify(input)).digest("hex").slice(0, 16)}`;
   return { ...input, profileId };
 }

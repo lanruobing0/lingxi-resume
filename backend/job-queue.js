@@ -1,9 +1,9 @@
 export const jobStatuses = new Set(["PENDING", "RUNNING", "COMPLETED", "FAILED"]);
 
 export class InProcessJobQueue {
-  constructor({ readStore, writeStore, concurrency = 1, logger = () => {} }) {
+  constructor({ readStore, writeStore, concurrency = 1, logger = () => {}, executionMode = "background" }) {
     this.readStore = readStore; this.writeStore = writeStore; this.concurrency = Math.max(1, Math.min(4, Number(concurrency) || 1));
-    this.logger = logger; this.handlers = new Map(); this.running = 0; this.accepting = true;
+    this.logger = logger; this.executionMode = executionMode === "inline" ? "inline" : "background"; this.handlers = new Map(); this.running = 0; this.accepting = true;
   }
   register(type, handler) { this.handlers.set(type, handler); }
   async enqueue(store, { type, userId, resourceId, payload = {} }) {
@@ -12,7 +12,10 @@ export class InProcessJobQueue {
     store.jobs ||= [];
     const id = store.jobs.reduce((max, job) => Math.max(max, Number(job.id) || 0), 0) + 1;
     const job = { id, type, userId, resourceId, status: "PENDING", progress: 0, failureCode: null, createdAt: new Date().toISOString(), startedAt: null, completedAt: null, payload };
-    store.jobs.push(job); await this.writeStore(store); queueMicrotask(() => this.drain()); return job;
+    store.jobs.push(job); await this.writeStore(store);
+    if (this.executionMode === "inline") await this.run(job.id);
+    else queueMicrotask(() => this.drain());
+    return job;
   }
   async drain() {
     while (this.accepting && this.running < this.concurrency) {

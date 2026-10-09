@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { buildResumeSuggestionPathCatalog, buildResumeSuggestionSchema } from "../backend/resume-suggestion-prompt.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sha = (value) => createHash("sha256").update(String(value)).digest("hex");
@@ -43,11 +44,17 @@ function mockFactEvidence(before, after) {
 }
 
 async function main() {
+  const catalogDocument = { title: "", targetPosition: "", selfEvaluation: "", sections: { "work/a": { entries: { "id~1": { name: "", role: "", startDate: "", endDate: "", highlights: ["React"] } } } } };
+  const catalog = buildResumeSuggestionPathCatalog(catalogDocument);
+  assert.ok(catalog.some((item) => item.path === "/sections/work~1a/entries/id~01/highlights/0" && item.before === "React"));
+  const schema = buildResumeSuggestionSchema(catalogDocument);
+  assert.ok(schema.properties.suggestions.items.properties.targetPath.enum.includes("/sections/work~1a/entries/id~01/highlights/-"));
+  assert.ok(!schema.properties.suggestions.items.properties.factEvidence.items.properties.sourcePath.enum.some((pointer) => pointer.endsWith("/-")));
   const state = { mode: "valid", entityCase: null, providerBodies: [], backendOutput: [] };
   const provider = createServer(async (req, res) => {
     let raw = ""; for await (const chunk of req) raw += chunk;
     state.providerBodies.push(raw);
-    const suggestions = state.mode === "invalidPatch" ? [{ sectionType: "自我评价", targetPath: "/userId", suggestionType: "REWRITE", rationale: "非法路径", before: "", after: "x", patch: [{ op: "replace", path: "/userId", value: "x" }], factEvidence: [], sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] }] : state.entityCase ? [
+    const suggestions = (state.mode === "invalidPatch" || (state.mode === "correctablePatch" && !raw.includes("建议格式纠正："))) ? [{ sectionType: "自我评价", targetPath: "/userId", suggestionType: "REWRITE", rationale: "非法路径", before: "", after: "x", patch: [{ op: "replace", path: "/userId", value: "x" }], factEvidence: [], sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] }] : state.entityCase ? [
       { sectionType: "自我评价", targetPath: "/selfEvaluation", suggestionType: "REWRITE", rationale: "固定事实差异回归", before: state.entityCase.before, after: state.entityCase.after, patch: [{ op: "replace", path: "/selfEvaluation", value: state.entityCase.after }], factEvidence: state.entityCase.factEvidence ?? (state.entityCase.blocked ? [] : mockFactEvidence(state.entityCase.before, state.entityCase.after)), sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] },
     ] : [
       { sectionType: "自我评价", targetPath: "/selfEvaluation", suggestionType: "REWRITE", rationale: "报告建议突出已有 React 经历", before: "具备 React 组件开发经验。", after: "具备 React 组件开发经验，表达更聚焦前端岗位。", patch: [{ op: "replace", path: "/selfEvaluation", value: "具备 React 组件开发经验，表达更聚焦前端岗位。" }], factEvidence: mockFactEvidence("具备 React 组件开发经验。", "具备 React 组件开发经验，表达更聚焦前端岗位。"), sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] },
@@ -230,7 +237,7 @@ async function main() {
   const start = () => { backend = spawn(process.execPath, ["backend/server.js"], { cwd: root, env: { ...process.env, API_PORT: String(apiPort), LINGXI_DATA_DIR: dir, OPENAI_API_KEY: "", OPENAI_BASE_URL: "", OPENAI_MODEL: "" }, stdio: ["ignore", "pipe", "pipe"] }); backend.stdout.on("data", (part) => state.backendOutput.push(String(part))); backend.stderr.on("data", (part) => state.backendOutput.push(String(part))); };
   const stop = async () => { if (backend?.pid && backend.exitCode === null) backend.kill("SIGKILL"); await wait(50); };
   const healthy = async () => { for (let i = 0; i < 100; i += 1) { try { if ((await fetch(`http://127.0.0.1:${apiPort}/api/health`)).ok) return; } catch {} await wait(25); } throw new Error(`backend unavailable: ${state.backendOutput.join("")}`); };
-  const call = async (tokenValue, pathname, body, expected) => { const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, { method: body === undefined ? "GET" : "POST", headers: { Cookie: `lingxi_session=${tokenValue}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }); const data = await response.json(); if (expected !== undefined) assert.equal(response.status, expected, JSON.stringify(data)); return data; };
+  const call = async (tokenValue, pathname, body, expected, method = body === undefined ? "GET" : "POST") => { const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, { method, headers: { Cookie: `lingxi_session=${tokenValue}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }); const data = await response.json(); if (expected !== undefined) assert.equal(response.status, expected, JSON.stringify(data)); return data; };
   try {
     start(); await healthy();
     const created = await call(token, "/api/match-reports/1/resume-suggestions", {}, 201);
@@ -298,11 +305,38 @@ async function main() {
     const staleRun = await call(token, "/api/match-reports/1/resume-suggestions", {}, 201);
     assert.equal((await call(token, `/api/resume-suggestions/${staleRun.item.suggestions[0].id}/accept`, { expectedBaseResumeVersion: 1 }, 409)).failureCode, "RESUME_VERSION_CONFLICT");
     state.mode = "invalidPatch";
+    const invalidCallCount = state.providerBodies.length;
     const invalid = await call(token, "/api/match-reports/1/resume-suggestions", {}, 422);
     assert.equal(invalid.failureCode, "SUGGESTION_INVALID_PATCH");
+    assert.equal(state.providerBodies.length - invalidCallCount, 2, "invalid patch retries at most once");
+    state.mode = "correctablePatch";
+    const correctedCallCount = state.providerBodies.length;
+    const corrected = await call(token, "/api/match-reports/1/resume-suggestions", {}, 201);
+    assert.equal(corrected.item.status, "COMPLETED");
+    assert.equal(state.providerBodies.length - correctedCallCount, 2);
+    assert.ok(state.providerBodies.at(-1).includes("Exclusive editable path catalog"));
+    state.mode = "invalidPatch";
+    await call(token, "/api/match-reports/1/resume-suggestions", {}, 422);
     const persisted = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8")); assert.equal(persisted.suggestionRuns.at(-1).status, "FAILED", "provider/validation failure must persist");
     assert.equal(JSON.stringify({ suggestionRuns: persisted.suggestionRuns, resumeSuggestions: persisted.resumeSuggestions }).includes("provider-SECRET"), false); assert.equal(state.backendOutput.join("").match(/provider-SECRET|Cookie|Authorization|PRIVATE-NAME/) !== null, false);
-    console.log("Resume suggestions integration passed: immutable bindings, factual-delta protection, patch allowlist, accept/reject semantics, conflicts, isolation, persistence, and privacy.");
+    await call(otherToken, `/api/suggestion-runs/${created.item.id}`, undefined, 404, "DELETE");
+    const beforeDelete = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    await call(token, `/api/suggestion-runs/${created.item.id}`, undefined, 200, "DELETE");
+    await call(token, `/api/suggestion-runs/${created.item.id}`, undefined, 404);
+    await call(token, `/api/suggestion-runs/${created.item.id}`, undefined, 404, "DELETE");
+    await call(token, `/api/resume-suggestions/${fabricated.id}/accept`, { expectedBaseResumeVersion: 1 }, 404);
+    assert.ok(!(await call(token, "/api/match-reports/1/resume-suggestions", undefined, 200)).items.some((item) => item.id === created.item.id));
+    const afterDelete = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    assert.deepEqual(afterDelete.resumes, beforeDelete.resumes);
+    assert.deepEqual(afterDelete.resumeHistories, beforeDelete.resumeHistories);
+    assert.ok(afterDelete.resumeSuggestions.some((item) => item.id === rewrite.id && item.status === "ACCEPTED"));
+    const busyRun = { id: Math.max(...afterDelete.suggestionRuns.map((item) => item.id)) + 1, userId: 1, status: "PENDING" };
+    await writeFile(path.join(dir, "store.json"), JSON.stringify({ ...afterDelete, suggestionRuns: [...afterDelete.suggestionRuns, busyRun] }));
+    assert.equal((await call(token, `/api/suggestion-runs/${busyRun.id}`, undefined, 409, "DELETE")).failureCode, "HISTORY_BUSY");
+    await writeFile(path.join(dir, "store.json"), JSON.stringify(afterDelete));
+    await stop(); start(); await healthy();
+    await call(token, `/api/suggestion-runs/${created.item.id}`, undefined, 404);
+    console.log("Resume suggestions integration passed: immutable bindings, factual-delta protection, patch allowlist, accept/reject semantics, conflicts, isolation, persistence, privacy, and history deletion.");
   } finally { await stop(); await new Promise((resolve) => provider.close(resolve)); await rm(dir, { recursive: true, force: true }); }
 }
 

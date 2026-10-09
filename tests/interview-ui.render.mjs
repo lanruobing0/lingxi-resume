@@ -42,6 +42,11 @@ try {
   const grounding = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { applicationId: "5", report: { status: "COMPLETED" }, sessions: [], session: null, feedbackByQuestion: {}, error: { code: "INTERVIEW_FEEDBACK_UNSUPPORTED_USER_FACT", message: "恶意 improvedAnswer 内容" }, ...handlers }));
   assert.match(grounding, /系统已拦截/);
   assert.doesNotMatch(grounding, /恶意 improvedAnswer 内容/);
+  const retrySession = { ...session, completedAt: null, status: "IN_PROGRESS" };
+  const retryFeedback = { ...feedback, [questions[0].id]: { answer: feedback[questions[0].id].answer, feedback: { status: "FAILED", failureCode: "INTERVIEW_FEEDBACK_UNSUPPORTED_USER_FACT", improvedAnswer: "不应显示的失败内容" } } };
+  const retryHtml = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { applicationId: "5", session: retrySession, feedbackByQuestion: retryFeedback, activeQuestionIndex: 0, onRetryFeedback: () => {}, working: true, ...handlers }));
+  assert.match(retryHtml, /<button[^>]*disabled[^>]*>正在重新生成反馈/);
+  assert.doesNotMatch(retryHtml, /不应显示的失败内容/);
 
   const loading = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { applicationId: "5", report: { status: "COMPLETED" }, sessions: [], session: null, feedbackByQuestion: {}, loading: true, ...handlers }));
   assert.match(loading, /正在恢复面试记录/);

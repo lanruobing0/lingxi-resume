@@ -97,26 +97,51 @@ async function main() {
   const mockAi = createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const schemaName = request.text?.format?.name;
-    const prompt = request.input?.[1]?.content?.[0]?.text || "";
+    const chat = req.url.endsWith("/chat/completions");
+    const prompt = chat ? request.messages?.[1]?.content || "" : request.input?.[1]?.content?.[0]?.text || "";
+    const schemaName = chat ? prompt.match(/object named (\w+)/)?.[1] : request.text?.format?.name;
+    if (schemaName === "resume_job_match") {
+      assert.equal(chat ? request.max_tokens : request.max_output_tokens, 8192);
+      if (!chat) {
+        const properties = request.text.format.schema.properties;
+        assert.equal(properties.matchedKeywords.items.properties.jdEvidence.minItems, 1);
+        assert.equal(properties.matchedKeywords.items.properties.resumeEvidence.minItems, 1);
+        assert.equal(properties.missingKeywords.items.properties.resumeEvidence.minItems, 0);
+      }
+    }
+    if (!chat && schemaName === "resume_job_match" && (prompt.includes("CHAT_LENGTH") || prompt.includes("CHAT_BUDGET"))) {
+      res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: { message: "responses unsupported" } })); return;
+    }
     prompts.push({ schemaName, prompt });
     const jdKind = prompt.includes("React 前端开发") ? "react" : "java";
     const resumeKind = prompt.includes("React 简历") ? "react" : "java";
-    const historyAttemptKey = schemaName === "resume_job_match" && prompt.includes("FAIL_AFTER_SUCCESS") ? prompt : "";
+    const historyAttemptKey = schemaName === "resume_job_match" && prompt.includes("FAIL_AFTER_SUCCESS") ? prompt.split("\n\nThe previous output failed validation:")[0] : "";
     const historyAttempt = historyAttemptKey ? (historyAttemptCount.get(historyAttemptKey) || 0) + 1 : 0;
     if (historyAttemptKey) historyAttemptCount.set(historyAttemptKey, historyAttempt);
+    const correctionKey = schemaName === "resume_job_match" && prompt.includes("CORRECTABLE_EVIDENCE") ? "correctable" : "";
+    const correctionAttempt = correctionKey ? (historyAttemptCount.get(correctionKey) || 0) + 1 : 0;
+    if (correctionKey) historyAttemptCount.set(correctionKey, correctionAttempt);
     const data = schemaName === "job_description_parse"
       ? parsedJob(jdKind)
       : matchReport({
         resumeKind,
         jdKind,
         zero: prompt.includes("ZERO_MATCH"),
-        forged: prompt.includes("FORGED_MATCH") || historyAttempt > 1,
+        forged: prompt.includes("FORGED_MATCH") || historyAttempt > 1 || correctionAttempt === 1,
         crossResumeEvidence: prompt.includes("CROSS_RESUME_EVIDENCE"),
         crossJdEvidence: prompt.includes("CROSS_JD_EVIDENCE"),
       });
+    if (schemaName === "resume_job_match" && (correctionAttempt === 1 || prompt.includes("MISSING_KEYWORD_EVIDENCE"))) {
+      data.matchedKeywords[0].jdEvidence = [];
+    }
+    if (correctionAttempt === 2) {
+      assert.match(prompt, /dimensions.required_skills.resumeEvidence/);
+      assert.match(prompt, /matchedKeywords\[0\].jdEvidence/);
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ output_text: JSON.stringify(data) }));
+    const content = schemaName === "resume_job_match" && prompt.includes("MALFORMED_JSON") ? '{"summary":' : JSON.stringify(data);
+    if (chat) res.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: prompt.includes("CHAT_LENGTH") ? "length" : "stop" }] }));
+    else res.end(JSON.stringify({ output_text: content, ...(schemaName === "resume_job_match" && prompt.includes("RESPONSES_LENGTH") ? { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } : {}) }));
   });
   const mockPort = await listen(mockAi);
   const dataDir = await mkdtemp(path.join(tmpdir(), "lingxi-match-test-")); await mkdir(dataDir, { recursive: true });
@@ -217,6 +242,42 @@ async function main() {
     await request(tokenA, `/api/job-applications/${crossJdApplication.id}/matches`, { method: "POST" }, 422);
     assert.equal((await request(tokenA, `/api/job-applications/${crossJdApplication.id}/matches`)).items[0].status, "FAILED", "cross-JD evidence must fail validation");
 
+    const correctionFixture = await createParsedJob("java", `CORRECTABLE_EVIDENCE ${jobFixture("java").rawText}`);
+    const correctionApplication = await createApplication(11, javaVersionId, correctionFixture.job.id);
+    const correctedMatch = await request(tokenA, `/api/job-applications/${correctionApplication.id}/matches`, { method: "POST" }, 201);
+    assert.equal(correctedMatch.item.status, "COMPLETED");
+    assert.equal(correctedMatch.item.totalScore, 50);
+    assert.equal(historyAttemptCount.get("correctable"), 2, "only one evidence correction may run");
+
+    const missingKeywordFixture = await createParsedJob("java", `MISSING_KEYWORD_EVIDENCE ${jobFixture("java").rawText}`);
+    const missingKeywordApplication = await createApplication(11, javaVersionId, missingKeywordFixture.job.id);
+    await request(tokenA, `/api/job-applications/${missingKeywordApplication.id}/matches`, { method: "POST" }, 422);
+    const missingKeywordHistory = (await request(tokenA, `/api/job-applications/${missingKeywordApplication.id}/matches`)).items;
+    assert.equal(missingKeywordHistory[0].status, "FAILED");
+    assert.equal(missingKeywordHistory[0].totalScore, null);
+    const missingKeywordReport = (await request(tokenA, `/api/resume-job-matches/${missingKeywordHistory[0].id}`)).item;
+    assert.equal(missingKeywordReport.report, null);
+    assert.match(missingKeywordReport.failureMessage, /matchedKeywords\[0\].jdEvidence/);
+    assert.equal(prompts.filter(item => item.schemaName === "resume_job_match" && item.prompt.includes("MISSING_KEYWORD_EVIDENCE")).length, 2);
+
+    for (const [marker, code] of [["RESPONSES_LENGTH", "AI_OUTPUT_TRUNCATED"], ["CHAT_LENGTH", "AI_OUTPUT_TRUNCATED"], ["MALFORMED_JSON", "AI_INVALID_RESPONSE"]]) {
+      const fixture = await createParsedJob("java", `${marker} ${jobFixture("java").rawText}`);
+      const application = await createApplication(11, javaVersionId, fixture.job.id);
+      await request(tokenA, `/api/job-applications/${application.id}/matches`, { method: "POST" }, 502);
+      const history = (await request(tokenA, `/api/job-applications/${application.id}/matches`)).items;
+      assert.equal(history[0].status, "FAILED");
+      assert.equal(history[0].failureCode, code);
+      assert.equal(history[0].totalScore, null);
+      const failed = (await request(tokenA, `/api/resume-job-matches/${history[0].id}`)).item;
+      assert.equal(failed.report, null, "partial output must never become a successful match");
+      assert.match(failed.failureMessage, code === "AI_OUTPUT_TRUNCATED" ? /长度上限/ : /JSON/);
+    }
+    const chatFixture = await createParsedJob("java", `CHAT_BUDGET ${jobFixture("java").rawText}`);
+    const chatApplication = await createApplication(11, javaVersionId, chatFixture.job.id);
+    const completeChatMatch = await request(tokenA, `/api/job-applications/${chatApplication.id}/matches`, { method: "POST" }, 201);
+    assert.equal(completeChatMatch.item.status, "COMPLETED");
+    assert.equal(completeChatMatch.item.totalScore, 50);
+
     await request(tokenA, `/api/job-descriptions/${java.job.id}`, { method: "PUT", body: JSON.stringify({ rawText: `FORGED_MATCH ${jobFixture("java").rawText}` }) });
     await request(tokenA, `/api/job-applications/${javaApplication.id}/matches`, { method: "POST" }, 409);
     await request(tokenA, "/api/ai-config", { method: "PUT", body: JSON.stringify({ enabled: false }) });
@@ -236,7 +297,7 @@ async function main() {
     const saved = JSON.parse(await readFile(path.join(dataDir, "store.json"), "utf8"));
     assert.equal(saved.resumeJobMatches.some((item) => item.jobDescriptionId === java.job.id), false);
     assert.ok(saved.resumeJobMatches.some((item) => item.jobDescriptionId === react.job.id));
-    console.log("Resume-job match integration passed: fixed scores, cross-resume/JD isolation, evidence validation, failed-history protection, privacy, and JD deletion cascade.");
+    console.log("Resume-job match integration passed: fixed scores, cross-resume/JD isolation, evidence validation/correction, truncation and malformed JSON rejection, output budgets, failed-history protection, privacy, and JD deletion cascade.");
   } finally {
     if (backend.exitCode === null) { backend.kill(); await new Promise((resolve) => backend.once("exit", resolve)); }
     await close(mockAi); await rm(dataDir, { recursive: true, force: true });
