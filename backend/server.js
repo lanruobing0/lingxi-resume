@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { filterWritingContext } from "./writing-privacy.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
@@ -3037,7 +3036,7 @@ async function generateAiAnalysis(store, userId, resume, position) {
 }
 
 async function generateAiOptimize(store, userId, resume, content, optimizeType = "general") {
-  const resumeContext = filterWritingContext(buildAiResumeContext(resume), resume);
+  const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
     schemaName: "resume_optimize",
     schema: optimizeSchema,
@@ -3046,7 +3045,7 @@ async function generateAiOptimize(store, userId, resume, content, optimizeType =
       `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
       `Optimize type: ${optimizeType}`,
       "Original resume text:",
-      filterWritingContext(content || "", resume),
+      content || "",
       'Return exactly this JSON shape: {"optimizedContent":"非空中文润色结果"}',
     ].join("\n"),
   });
@@ -3055,7 +3054,7 @@ async function generateAiOptimize(store, userId, resume, content, optimizeType =
 }
 
 async function generateAiGrammar(store, userId, resume, content) {
-  const resumeContext = filterWritingContext(buildAiResumeContext(resume), resume);
+  const resumeContext = buildAiResumeContext(resume);
   const ai = await runAiJson(store, userId, {
     schemaName: "resume_grammar_check",
     schema: grammarSchema,
@@ -3063,7 +3062,7 @@ async function generateAiGrammar(store, userId, resume, content) {
     user: [
       `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
       "Resume text to proofread:",
-      filterWritingContext(content || "", resume),
+      content || "",
       "Return score and an issues array. If there are no issues, return an empty issues array.",
     ].join("\n"),
   });
