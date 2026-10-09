@@ -6162,3 +6162,13 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
   .interview-record > span:first-child { flex-basis: 100%; }
   .interview-record > b { margin-left: auto; }
 }
+.editor-writing-assistant .mini-heading { flex-wrap: wrap; gap: 8px; }
+.editor-writing-assistant > p, .editor-passage > p { color: #595959; font-size: 13px; line-height: 1.7; }
+.editor-passage { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e5e5e5; }
+.editor-passage p { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+.editor-writing-result { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e5e5e5; }
+.editor-writing-result pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 220px; overflow: auto; }
+.editor-writing-result p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.editor-writing-result ul { padding-left: 20px; }
+.editor-writing-result li { margin: 12px 0; }
+.editor-writing-assistant button { white-space: nowrap; }

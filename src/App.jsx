@@ -51,13 +51,13 @@ import { agentActionLabel, agentApiRequest, agentFailureMessage, agentResultType
 import { usePresence } from "./hooks/usePresence";
 import { shouldRefreshCaptcha } from "./captchaState";
 import { InterviewLibrary } from "./InterviewLibrary";
+import { EditorWritingAssistant, redactWritingText } from "./EditorWritingAssistant";
 import { jobWorkspaceTabs, readJobWorkspaceRoute, jobWorkspaceHash, collectJobGroupEvidence } from "./jobWorkspaceState";
 
 const appNav = [
   { id: "resume", label: "我的简历", icon: FileText },
   { id: "jobs", label: "岗位 JD", icon: BriefcaseBusiness },
   { id: "templates", label: "简历模板", icon: LayoutTemplate },
-  { id: "ai-tools", label: "AI 工具", icon: Sparkles },
   { id: "providers", label: "AI 服务商", icon: Bot },
   { id: "interview", label: "模拟面试", icon: MessageSquareText },
   { id: "history", label: "历史记录", icon: Save },
@@ -275,6 +275,7 @@ function App() {
   }, []);
 
   const go = (id) => {
+    if (["ai-tools", "grammar", "optimize"].includes(id)) id = activeResumeId ? "resume-edit" : "resume";
     setView(id);
     window.history.replaceState(null, "", `#${id}`);
     window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -389,7 +390,7 @@ function App() {
 function initialView() {
   if (typeof window === "undefined") return "landing";
   const rawHash = window.location.hash.replace("#", "").split("?")[0];
-  const hash = rawHash === "grammar" ? "ai-tools" : rawHash === "sample" ? "templates" : rawHash;
+  const hash = ["grammar", "ai-tools", "optimize"].includes(rawHash) ? "resume" : rawHash === "sample" ? "templates" : rawHash;
   const allowed = ["landing", "auth", "resume-edit", ...appNav.map((item) => item.id), "analysis", "optimize"];
   return allowed.includes(hash) ? hash : "landing";
 }
@@ -889,13 +890,11 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           {["jobs", "interview"].includes(active) && currentUser && <JobDescriptionWorkspace entry={active} notify={notify} activeResumeId={activeResumeId} onOpenResume={onOpenResume} go={go} />}
           {active === "resume-edit" && currentUser && activeResumeId && <ResumeEditor key={`${currentUser.id}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
-          {active === "ai-tools" && currentUser && <AiToolsPanel notify={notify} go={go} resumeId={activeResumeId} />}
           {active === "providers" && currentUser && <ProviderSettings notify={notify} />}
           {active === "history" && currentUser && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && currentUser && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
           {active === "analysis" && currentUser && <AnalysisPanel notify={notify} go={go} resumeId={activeResumeId} />}
-          {active === "optimize" && currentUser && <OptimizePanel notify={notify} resumeId={activeResumeId} />}
         </section>
       </main>
     </div>
@@ -1329,6 +1328,8 @@ function StoredResumePreview({ resumeItem }) {
 }
 
 function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
+  const [writingPassage, setWritingPassage] = useState("");
+  const [writingReady, setWritingReady] = useState(false);
   const savedTemplate = appliedTemplate || readSavedTemplate();
   const [activeSection, setActiveSection] = useState("基本信息");
   const [layout, setLayout] = useState(savedTemplate?.layout || "左图右文");
@@ -1423,6 +1424,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
     apiRequest(`/api/resumes/${resumeId}`)
       .then(({ item }) => {
         if (disposed || !item) return;
+        setWritingReady(true);
         setForm({
           姓名: item.realName || resume.name,
           当前职位: item.currentPosition || item.title?.replace(/简历$/, "") || resume.title,
@@ -1824,17 +1826,24 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
                     writeWorkspaceValue("lingxi-resume-summary", nextValue);
                   }}
                 />
-              </label>
+
+                <button type="button" aria-label="润色这段" className="link-button" disabled={!selfEvaluation.trim()} onClick={(event) => {
+                  const textarea = event.currentTarget.parentElement.querySelector("textarea");
+                  setWritingPassage(textarea?.selectionEnd > textarea?.selectionStart ? selfEvaluation.slice(textarea.selectionStart, textarea.selectionEnd) : selfEvaluation);
+                }}>润色这段</button>
+</label>
             </>
           ) : (structuredSectionConfig[activeSection] || customSections.some((section) => section.label === activeSection)) ? (
             <StructuredSectionEditor
               section={activeSection}
               entries={sectionDetails[activeSection] || legacyLinesToStructuredEntries(activeSection, sectionContent[activeSection])}
               onChange={(entries) => updateStructuredEntries(activeSection, entries)}
+              onPolish={setWritingPassage}
             />
           ) : (
             <label className="section-editor">
               <span>每行一条内容，会实时同步到右侧预览</span>
+              <button type="button" className="link-button" disabled={!(sectionContent[activeSection] || []).length} onClick={() => setWritingPassage((sectionContent[activeSection] || []).join("\n"))}>润色这段</button>
               <textarea
                 value={(sectionContent[activeSection] || []).join("\n")}
                 onChange={(event) => updateSectionLines(activeSection, event.target.value)}
@@ -1842,11 +1851,10 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
             </label>
           )}
         </div>
-        <div className="form-card ai-card">
-          <strong>AI 工具</strong>
-          <div>
-            <button onClick={() => go("ai-tools")}>打开 AI 工具</button>
-          </div>
+        <div className="form-card writing-card">
+          <EditorWritingAssistant resumeId={writingReady ? resumeId : null} request={apiRequest} notify={notify} prepare={() => saveResume("检查或润色前保存简历")}
+            passage={redactWritingText(writingPassage, [form.姓名, form.邮箱, form.电话, form.个人主页, form.城市, ...profileFields.map(field => field.value)])}
+            content={redactWritingText([targetPosition, selfEvaluation, ...moduleOrder.filter(label => label !== "基本信息" && visibleSections.has(label)).flatMap(label => [label, ...((sectionDetails[label]?.length ? structuredEntriesToLines(sectionDetails[label]) : sectionContent[label]) || [])])].join("\n"), [form.姓名, form.邮箱, form.电话, form.个人主页, form.城市, ...profileFields.map(field => field.value)])} />
         </div>
       </section>
 
@@ -1862,7 +1870,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
   );
 }
 
-function StructuredSectionEditor({ section, entries, onChange }) {
+function StructuredSectionEditor({ section, entries, onChange, onPolish }) {
   const config = getStructuredSectionConfig(section);
   const [collapsedIds, setCollapsedIds] = useState(new Set());
 
@@ -1927,7 +1935,13 @@ function StructuredSectionEditor({ section, entries, onChange }) {
                 <label className="experience-highlights">
                   <span>经历要点</span>
                   <textarea value={(entry.highlights || []).join("\n")} placeholder="每行一条，建议写清职责、成果和量化指标" onChange={(event) => updateEntry(entry.id, { highlights: event.target.value.split("\n").filter((line) => line.trim()) })} />
-                </label>
+
+                  <button type="button" aria-label="润色这段" className="link-button" disabled={!(entry.highlights || []).length} onClick={(event) => {
+                    const textarea = event.currentTarget.parentElement.querySelector("textarea");
+                    const text = (entry.highlights || []).join("\n");
+                    onPolish?.(textarea?.selectionEnd > textarea?.selectionStart ? text.slice(textarea.selectionStart, textarea.selectionEnd) : text);
+                  }}>润色这段</button>
+</label>
               </div>
             )}
           </article>
@@ -2254,91 +2268,6 @@ function TemplatePreviewDialog({ open, template, color, onClose, onApply }) {
         </footer>
       </section>
     </div>
-  );
-}
-
-function AiToolsPanel({ notify, go, resumeId }) {
-  const generatePositionKeywords = () => {
-    go("analysis");
-  };
-
-  return (
-    <section className="ai-tools-page">
-      <div className="ai-tools-head">
-        <div>
-          <span className="section-kicker">AI 工具</span>
-          <h2>简历优化与检查</h2>
-        </div>
-        <div className="ai-tools-actions">
-          <button className="white-small" onClick={generatePositionKeywords}>岗位关键词</button>
-          <button className="white-small" onClick={() => go("optimize")}>项目润色</button>
-          <button className="black-small" onClick={() => go("interview")}>模拟面试</button>
-        </div>
-      </div>
-      <GrammarPanel notify={notify} resumeId={resumeId} />
-    </section>
-  );
-}
-
-function GrammarPanel({ notify, resumeId }) {
-  const [content, setContent] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [resultVersion, setResultVersion] = useState(0);
-  const [result, setResult] = useState(null);
-
-  const runCheck = async () => {
-    if (!resumeId) {
-      notify("请先在我的简历中选择一份简历");
-      return;
-    }
-    setChecking(true);
-    try {
-      const data = await apiRequest(`/api/resumes/${resumeId}/grammar-check`, {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      });
-      setResult(data.item);
-      setResultVersion((current) => current + 1);
-      notify("语法检查完成，记录已归档");
-    } catch (error) {
-      notify(`语法检查失败: ${error.message}`);
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  return (
-    <section className="grammar-page">
-      <div className="grammar-input">
-        <h2>AI 语法检查</h2>
-        <p>检查错别字、英文拼写、标点和简历表达问题。</p>
-        <textarea value={content} onChange={(event) => setContent(event.target.value)} />
-        <button className="black-small" onClick={runCheck} disabled={checking}>
-          <Check size={16} />
-          {checking ? "检查中..." : "开始检查"}
-        </button>
-      </div>
-      <div className={`grammar-result ${resultVersion ? "ai-result-enter" : ""}`} key={resultVersion}>
-        {checking ? <ResultSkeleton lines={3} /> : result ? <>
-        <span><AnimatedScore value={result.score} shouldAnimate={resultVersion > 0} /> 分</span>
-        <h3>检查结果</h3>
-        {(result.issues || []).length === 0 && (
-          <article>
-            <strong>未发现明显问题</strong>
-            <p>当前文本没有返回可修改项。</p>
-            <small>可以换成完整简历段落继续检查。</small>
-          </article>
-        )}
-        {(result.issues || []).map((issue, index) => (
-          <article className={resultVersion ? "card-stagger" : ""} style={{ "--stagger-index": index }} key={`${issue.original}-${index}`}>
-            <strong>{issue.type}</strong>
-            <p>{issue.original} → {issue.suggestion}</p>
-            <small>{issue.reason}</small>
-          </article>
-        ))}
-        </> : <article><strong>尚未开始检查</strong><p>输入需要检查的简历段落后开始检查，结果会绑定当前选中的简历。</p></article>}
-      </div>
-    </section>
   );
 }
 
@@ -4701,47 +4630,6 @@ function AnalysisPanel({ notify, go, resumeId }) {
       <button className="black-small" onClick={() => runAnalysis()} disabled={isLoading}>
         {isLoading ? <LoaderCircle className="spin" size={16} /> : <Gauge size={16} />}
         {isLoading ? "AI 正在诊断" : "重新诊断"}
-      </button>
-    </section>
-  );
-}
-
-function OptimizePanel({ notify, resumeId }) {
-  const [content, setContent] = useState("");
-  const [optimized, setOptimized] = useState("");
-  const [optimizing, setOptimizing] = useState(false);
-  const [resultVersion, setResultVersion] = useState(0);
-
-  const runOptimize = async () => {
-    if (!resumeId) {
-      notify("请先在我的简历中选择一份简历");
-      return;
-    }
-    setOptimizing(true);
-    try {
-      const data = await apiRequest(`/api/resumes/${resumeId}/optimize`, {
-        method: "POST",
-        body: JSON.stringify({ optimizeType: "project_experience", content }),
-      });
-      setOptimized(data.item.optimizedContent);
-      setResultVersion((current) => current + 1);
-      notify("AI 润色已完成并保存记录");
-    } catch (error) {
-      notify(`润色失败: ${error.message}`);
-    } finally {
-      setOptimizing(false);
-    }
-  };
-
-  return (
-    <section className="simple-panel">
-      <Sparkles size={42} />
-      <h2>AI 优化建议</h2>
-      <textarea value={content} onChange={(event) => setContent(event.target.value)} />
-      {optimizing ? <ResultSkeleton lines={3} /> : <p className={resultVersion ? "ai-result-enter" : ""} key={resultVersion}>{optimized || "输入简历内容后生成真实润色结果。"}</p>}
-      <button className="black-small" disabled={optimizing} onClick={runOptimize}>
-        {optimizing ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-        {optimizing ? "AI 正在润色" : "生成润色"}
       </button>
     </section>
   );

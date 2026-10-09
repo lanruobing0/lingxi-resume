@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { filterWritingContext } from '../backend/writing-privacy.js';
+const resume = { realName: '隐私姓名', email: 'private@example.test', phone: '13812345678', website: 'https://private.test', city: '私密城市', profileFields: [{ value: '私密备注' }] };
+const safe = filterWritingContext({ resumeId: 3, resumeVersion: 2, contentHash: 'abc', selfEvaluation: '隐私姓名 private@example.test 13812345678 https://private.test 私密城市 私密备注', sections: [{ highlights: ['组件加载时间减少 35%，2022/07 开始工作。', 'other@example.test https://another.test 13912345678'] }] }, resume);
+assert.doesNotMatch(JSON.stringify(safe), /隐私姓名|private@example|13812345678|private\.test|私密城市|私密备注|other@example|another\.test|13912345678/);
+assert.equal(safe.resumeId, 3);
+assert.equal(safe.resumeVersion, 2);
+assert.equal(safe.contentHash, 'abc');
+assert.equal(safe.sections[0].highlights[0], '组件加载时间减少 35%，2022/07 开始工作。');
+console.log('PASS: writing provider privacy including nested prose, immutable metadata and ordinary experience numbers');
