@@ -14,9 +14,6 @@ function listen(server) { return new Promise((resolve) => server.listen(0, "127.
 function close(server) { return new Promise((resolve) => server.close(resolve)); }
 function tokenHash(token) { return createHash("sha256").update(token).digest("base64url"); }
 function aiResult(schemaName) {
-  if (schemaName === "resume_analysis") return { totalScore: 63, completenessScore: 47, matchScore: 10, keywordScore: 92, projectScore: 0, analysisResult: "测试诊断结论", keywords: ["Java", "Spring", "SQL", "Redis", "Docker"], suggestions: ["建议一", "建议二", "建议三"] };
-  if (schemaName === "resume_optimize") return { optimizedContent: "优化后的项目表述" };
-  if (schemaName === "resume_grammar_check") return { score: 91, issues: [] };
   if (schemaName === "interview_opening") return { questionText: "请介绍一个项目成果。", questionType: "项目经历" };
   if (schemaName === "interview_feedback") return { score: 88, feedback: "回答具体。", referenceAnswer: "参考回答。", followUpQuestion: "请补充量化结果。" };
   if (schemaName === "interview_report") return { totalScore: 88, summary: "总体表现良好。", strengths: ["表达清晰", "结构完整"], improvements: ["量化成果", "技术细节" ] };
@@ -51,7 +48,7 @@ async function main() {
       { id: 12, userId: 7, version: 2, title: "A Frontend 简历", targetPosition: "前端工程师", currentPosition: "前端工程师", selfEvaluation: "React 开发", sectionContent: { "专业技能": ["React"] }, sectionDetails: {}, moduleOrder: ["专业技能"] },
       { id: 21, userId: 8, version: 1, title: "B 简历", targetPosition: "测试工程师", currentPosition: "测试工程师", selfEvaluation: "测试自动化", sectionContent: { "专业技能": ["Python"] }, sectionDetails: {}, moduleOrder: ["专业技能"] },
     ],
-    resumeHistories: [], analysisRecords: [], optimizeRecords: [], grammarRecords: [], interviewQuestions: [], jobPositions: [{ id: 1, positionName: "Java 工程师", keywords: ["Java"] }],
+    resumeHistories: [], interviewQuestions: [], jobPositions: [{ id: 1, positionName: "Java 工程师", keywords: ["Java"] }],
     jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
   };
   await writeFile(path.join(dataDir, "store.json"), JSON.stringify(store), "utf8");
@@ -71,21 +68,12 @@ async function main() {
     const updatedResume = await request(tokenA, "/api/resumes/11", { method: "PUT", body: JSON.stringify({ selfEvaluation: "负责订单服务与性能优化", summary: "test version snapshot" }) });
     assert.equal(updatedResume.item.version, 4);
     const lockedVersionId = (await request(tokenA, "/api/resumes/11/versions")).items[0].id;
-    const analysis = await request(tokenA, "/api/resumes/11/analyze", { method: "POST", body: JSON.stringify({ targetPosition: "Java 工程师" }) }, 201);
-    const analysisA2 = await request(tokenA, "/api/resumes/12/analyze", { method: "POST", body: JSON.stringify({ targetPosition: "前端工程师" }) }, 201);
-    assert.deepEqual([analysis.item.matchScore, analysis.item.keywordScore, analysis.item.projectScore, analysis.item.completenessScore], [10, 92, 0, 47]);
-    assert.equal(analysis.item.resumeId, 11);
-    assert.equal(analysisA2.item.resumeId, 12);
-    const optimizeA1 = await request(tokenA, "/api/resumes/11/optimize", { method: "POST", body: JSON.stringify({ content: "负责订单服务" }) }, 201);
-    const optimizeA2 = await request(tokenA, "/api/resumes/12/optimize", { method: "POST", body: JSON.stringify({ content: "负责 React 页面开发" }) }, 201);
-    const grammarA1 = await request(tokenA, "/api/resumes/11/grammar-check", { method: "POST", body: JSON.stringify({ content: "负责订单服务" }) }, 201);
-    const grammarA2 = await request(tokenA, "/api/resumes/12/grammar-check", { method: "POST", body: JSON.stringify({ content: "负责 React 页面开发" }) }, 201);
-    assert.equal(optimizeA1.item.resumeVersion, 4);
-    assert.equal(grammarA1.item.resumeVersion, 4);
-    assert.equal(optimizeA2.item.resumeVersion, 2);
-    assert.equal(grammarA2.item.resumeVersion, 2);
-    assert.equal(optimizeA1.item.resumeContentHash, grammarA1.item.resumeContentHash);
-    assert.notEqual(optimizeA1.item.resumeContentHash, optimizeA2.item.resumeContentHash);
+    const promptCountBeforeRemovalProbes = prompts.length;
+    for (const endpoint of ["analyze", "optimize", "grammar-check"]) {
+      for (const token of [tokenA, tokenB]) await request(token, `/api/resumes/11/${endpoint}`, { method: "POST", body: JSON.stringify({ content: "retired tool probe" }) }, 404);
+    }
+    for (const endpoint of ["analysis", "optimize", "grammar"]) await request(tokenA, `/api/records/${endpoint}`, {}, 404);
+    assert.equal(prompts.length, promptCountBeforeRemovalProbes, "retired endpoints must not call AI");
     const beforeInterviewBytes = (await readFile(path.join(dataDir, "store.json"), "utf8")).length;
     const interview = await request(tokenA, "/api/interviews", { method: "POST", body: JSON.stringify({ resumeId: 11, positionId: 1, questionCount: 2 }) }, 201);
     const afterInterviewBytes = (await readFile(path.join(dataDir, "store.json"), "utf8")).length;
@@ -105,7 +93,7 @@ async function main() {
     assert.equal(report.report.totalScore, 88);
     for (const schemaName of ["interview_opening", "interview_feedback", "interview_report"]) assert.ok(prompts.some((prompt) => prompt.schemaName === schemaName), `${schemaName} prompt was not called`);
     for (const prompt of prompts) for (const value of Object.values(pii)) assert.equal(prompt.text.includes(value), false, `${prompt.schemaName} leaked ${value}`);
-    for (const endpoint of ["analysis", "optimize", "grammar", "interviews"]) {
+    for (const endpoint of ["interviews"]) {
       const all = await request(tokenA, `/api/records/${endpoint}`); assert.ok(all.items.length >= 2); assert.ok(all.items.every((item) => item.userId === 7));
       const empty = await request(tokenA, `/api/records/${endpoint}?resumeId=`); assert.deepEqual(empty.items.map((item) => item.id), all.items.map((item) => item.id));
       const exact = await request(tokenA, `/api/records/${endpoint}?resumeId=11`); assert.ok(exact.items.length >= 1); assert.ok(exact.items.every((item) => item.resumeId === 11 && item.resumeVersion === 4 && /^[a-f0-9]{64}$/.test(item.resumeContentHash)));
@@ -115,7 +103,6 @@ async function main() {
       const bRecords = await request(tokenB, `/api/records/${endpoint}`); assert.equal(bRecords.items.length, 0);
     }
     await request(tokenB, "/api/resumes/11", {}, 404);
-    await request(tokenB, "/api/resumes/11/analyze", { method: "POST", body: JSON.stringify({ targetPosition: "Java 工程师" }) }, 404);
     await request(tokenB, "/api/interviews", { method: "POST", body: JSON.stringify({ resumeId: 11 }) }, 404);
     await request(tokenB, `/api/interviews/${interview.item.id}/answers`, { method: "POST", body: JSON.stringify({ answerText: "unauthorized" }) }, 404);
     await request(tokenB, `/api/interviews/${interview.item.id}/report`, { method: "POST" }, 404);
@@ -143,9 +130,6 @@ async function main() {
     const stored = JSON.parse(await readFile(path.join(dataDir, "store.json"), "utf8"));
     assert.equal(stored.mockInterviews.some((item) => item.resumeId === 11), false);
     assert.equal(stored.interviewAnswers.some((item) => item.resumeId === 11), false);
-    assert.equal(stored.analysisRecords.some((item) => item.resumeId === 11), false);
-    assert.equal(stored.optimizeRecords.some((item) => item.resumeId === 11), false);
-    assert.equal(stored.grammarRecords.some((item) => item.resumeId === 11), false);
     assert.equal(stored.resumeHistories.some((item) => item.resumeId === 11), false);
     assert.equal(stored.jobApplications.some((item) => item.resumeId === 11), false);
     assert.equal(stored.jobDescriptions.some((item) => item.id === jd.item.id), true);

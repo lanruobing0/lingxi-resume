@@ -151,47 +151,6 @@ const seedData = {
       createdAt: "2026-06-26T09:00:00.000Z",
     },
   ],
-  analysisRecords: [
-    {
-      id: 1,
-      userId: 2,
-      resumeId: 1,
-      targetPositionId: 1,
-      totalScore: 86,
-      completenessScore: 90,
-      matchScore: 86,
-      keywordScore: 84,
-      projectScore: 78,
-      analysisResult: "简历基础完整，前端关键词覆盖较好，项目结果仍可继续量化。",
-      suggestions: ["项目经历缺少可衡量结果", "建议补充性能优化指标", "建议突出 React 与 TypeScript 实战场景"],
-      createdAt: "2026-06-26T09:05:00.000Z",
-    },
-  ],
-  optimizeRecords: [
-    {
-      id: 1,
-      userId: 2,
-      resumeId: 1,
-      optimizeType: "project_experience",
-      originalContent: "负责招聘平台页面开发，完成筛选和面试排期功能。",
-      optimizedContent: "主导筛选与面试排期模块，减少 35% 操作步骤，页面响应提升 28%。",
-      createdAt: "2026-06-26T09:10:00.000Z",
-    },
-  ],
-  grammarRecords: [
-    {
-      id: 1,
-      userId: 2,
-      resumeId: 1,
-      score: 82,
-      content: "负责招聘平台页面开发，完成筛选和面试排期功能，Thier 页面响应比较快。",
-      issues: [
-        { type: "拼写", original: "Thier", suggestion: "Their", reason: "英文拼写错误" },
-        { type: "表达", original: "负责", suggestion: "主导", reason: "动词更有行动感" },
-      ],
-      createdAt: "2026-06-26T09:12:00.000Z",
-    },
-  ],
   interviewQuestions: [
     {
       id: 1,
@@ -700,9 +659,6 @@ async function readStore() {
     jobPositions: store.jobPositions || seedData.jobPositions,
     resumes: store.resumes || seedData.resumes,
     resumeHistories: store.resumeHistories || seedData.resumeHistories,
-    analysisRecords: store.analysisRecords || seedData.analysisRecords,
-    optimizeRecords: store.optimizeRecords || seedData.optimizeRecords,
-    grammarRecords: store.grammarRecords || seedData.grammarRecords,
     interviewQuestions: store.interviewQuestions || seedData.interviewQuestions,
     jobDescriptions: store.jobDescriptions || [],
     jobDescriptionParseResults: store.jobDescriptionParseResults || [],
@@ -1310,15 +1266,6 @@ function normalizeTextList(value, fieldName, minItems, maxItems) {
   return items.slice(0, maxItems);
 }
 
-function normalizeIssue(issue = {}) {
-  return {
-    type: requireNonEmptyText(issue.type || "表达", "issue.type"),
-    original: String(issue.original || "").trim() || "原文",
-    suggestion: String(issue.suggestion || "").trim() || "无需修改",
-    reason: String(issue.reason || "").trim() || "AI 未给出详细原因",
-  };
-}
-
 async function requestJson(url, payload, apiKey, { requestTimeoutMs } = {}) {
   const controller = new AbortController();
   const timeoutMs = Math.max(100, Number(process.env.AI_PROVIDER_TIMEOUT_MS || requestTimeoutMs || 20000));
@@ -1400,55 +1347,6 @@ async function runAiJson(store, userId, { system, user, schemaName, schema, stri
     return { ok: false, status: chatError.status || 502, code: chatError.code || (strictJson ? "REPORT_PROVIDER_UNAVAILABLE" : "AI_PROVIDER_UNAVAILABLE"), error: chatError.message || responsesError?.message };
   }
 }
-
-const analysisSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["totalScore", "completenessScore", "matchScore", "keywordScore", "projectScore", "analysisResult", "keywords", "suggestions"],
-  properties: {
-    totalScore: { type: "integer", minimum: 0, maximum: 100 },
-    completenessScore: { type: "integer", minimum: 0, maximum: 100 },
-    matchScore: { type: "integer", minimum: 0, maximum: 100 },
-    keywordScore: { type: "integer", minimum: 0, maximum: 100 },
-    projectScore: { type: "integer", minimum: 0, maximum: 100 },
-    analysisResult: { type: "string" },
-    keywords: { type: "array", items: { type: "string" }, minItems: 5, maxItems: 10 },
-    suggestions: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 6 },
-  },
-};
-
-const optimizeSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["optimizedContent"],
-  properties: {
-    optimizedContent: { type: "string" },
-  },
-};
-
-const grammarSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["score", "issues"],
-  properties: {
-    score: { type: "integer", minimum: 0, maximum: 100 },
-    issues: {
-      type: "array",
-      maxItems: 8,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["type", "original", "suggestion", "reason"],
-        properties: {
-          type: { type: "string" },
-          original: { type: "string" },
-          suggestion: { type: "string" },
-          reason: { type: "string" },
-        },
-      },
-    },
-  },
-};
 
 const interviewSchema = {
   type: "object",
@@ -3008,72 +2906,6 @@ async function submitInterviewAnswer(store, user, session, question, answerText,
   }
 }
 
-async function generateAiAnalysis(store, userId, resume, position) {
-  const resumeContext = buildAiResumeContext(resume);
-  const ai = await runAiJson(store, userId, {
-    schemaName: "resume_analysis",
-    schema: analysisSchema,
-    system: "You are a senior resume coach for Chinese job seekers. Evaluate the resume against the target role. Return JSON only. Keep all string fields non-empty and write Chinese suggestions.",
-    user: [
-      `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
-      `Target role: ${position.positionName}`,
-      `Reference keywords for this role, if available: ${(position.keywords || []).join(", ") || "None; infer them from the role."}`,
-      'Return exactly this JSON shape: {"totalScore":0,"completenessScore":0,"matchScore":0,"keywordScore":0,"projectScore":0,"analysisResult":"非空中文结论","keywords":["关键词一","关键词二","关键词三","关键词四","关键词五"],"suggestions":["建议一","建议二","建议三"]}. Scores must be integers from 0 to 100. Generate 5-10 specific Chinese or technical role keywords that should naturally appear in this resume, and 3-6 specific Chinese suggestions.',
-    ].join("\n"),
-  });
-  if (!ai.ok) throw aiHttpError(ai, "AI 诊断失败");
-  return {
-    totalScore: normalizeScore(ai.data.totalScore, "totalScore"),
-    completenessScore: normalizeScore(ai.data.completenessScore, "completenessScore"),
-    matchScore: normalizeScore(ai.data.matchScore, "matchScore"),
-    keywordScore: normalizeScore(ai.data.keywordScore, "keywordScore"),
-    projectScore: normalizeScore(ai.data.projectScore, "projectScore"),
-    analysisResult: requireNonEmptyText(ai.data.analysisResult, "analysisResult"),
-    keywords: normalizeTextList(ai.data.keywords, "keywords", 5, 10),
-    suggestions: normalizeTextList(ai.data.suggestions, "suggestions", 3, 6),
-    aiMode: ai.mode,
-  };
-}
-
-async function generateAiOptimize(store, userId, resume, content, optimizeType = "general") {
-  const resumeContext = buildAiResumeContext(resume);
-  const ai = await runAiJson(store, userId, {
-    schemaName: "resume_optimize",
-    schema: optimizeSchema,
-    system: "You are a professional Chinese resume editor. Rewrite the user input into one concise, professional, result-oriented Chinese resume bullet. Preserve facts. Do not invent company names, numbers, or project details. Return JSON only and keep optimizedContent non-empty.",
-    user: [
-      `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
-      `Optimize type: ${optimizeType}`,
-      "Original resume text:",
-      content || "",
-      'Return exactly this JSON shape: {"optimizedContent":"非空中文润色结果"}',
-    ].join("\n"),
-  });
-  if (!ai.ok) throw aiHttpError(ai, "AI 润色失败");
-  return { optimizedContent: requireNonEmptyText(ai.data.optimizedContent, "optimizedContent"), aiMode: ai.mode };
-}
-
-async function generateAiGrammar(store, userId, resume, content) {
-  const resumeContext = buildAiResumeContext(resume);
-  const ai = await runAiJson(store, userId, {
-    schemaName: "resume_grammar_check",
-    schema: grammarSchema,
-    system: "You are a Chinese resume proofreading expert. Check typos, English spelling, punctuation, grammar, clarity, and resume wording. Return JSON only. Write issue reasons in Chinese.",
-    user: [
-      `Resume context (resumeId ${resumeContext.resumeId}, version ${resumeContext.resumeVersion}): ${JSON.stringify(resumeContext)}`,
-      "Resume text to proofread:",
-      content || "",
-      "Return score and an issues array. If there are no issues, return an empty issues array.",
-    ].join("\n"),
-  });
-  if (!ai.ok) throw aiHttpError(ai, "AI 语法检查失败");
-  return {
-    score: normalizeScore(ai.data.score, "score"),
-    issues: Array.isArray(ai.data.issues) ? ai.data.issues.map(normalizeIssue) : [],
-    aiMode: ai.mode,
-  };
-}
-
 function getInterviewResumeContext(resume = {}) {
   return `Resume context: ${JSON.stringify(buildAiResumeContext(resume))}`;
 }
@@ -3140,62 +2972,6 @@ async function generateAiInterviewReport(store, userId, { resume, targetPosition
     strengths: normalizeTextList(ai.data.strengths, "strengths", 2, 4),
     improvements: normalizeTextList(ai.data.improvements, "improvements", 2, 4),
     aiMode: ai.mode,
-  };
-}
-
-function buildAnalysis(store, resumeId, targetPositionId) {
-  const resume = store.resumes.find((item) => item.id === resumeId);
-  const position = store.jobPositions.find((item) => item.id === targetPositionId) || store.jobPositions[0];
-  const searchable = JSON.stringify(resume || {}).toLowerCase();
-  const covered = position.keywords.filter((keyword) => searchable.includes(keyword.toLowerCase()));
-  const keywordScore = Math.min(96, 58 + covered.length * 7);
-  const completenessScore = resume?.email && resume?.phone && resume?.sections?.projects?.length ? 90 : 72;
-  const projectScore = searchable.includes("提升") || searchable.includes("%") ? 82 : 68;
-  const matchScore = Math.round((keywordScore + projectScore) / 2);
-  const totalScore = Math.round((completenessScore + matchScore + keywordScore + projectScore) / 4);
-
-  return {
-    totalScore,
-    completenessScore,
-    matchScore,
-    keywordScore,
-    projectScore,
-    analysisResult: `${position.positionName}匹配度${totalScore >= 85 ? "较高" : "中等"}，已覆盖 ${covered.join("、") || "部分"} 核心要求。`,
-    suggestions: [
-      "项目经历建议继续补充量化结果",
-      "将目标岗位关键词自然写入职责和成果",
-      "面试前准备 3 个可复盘的技术决策案例",
-    ],
-  };
-}
-
-function optimizeContent(content = "") {
-  if (!content.trim()) {
-    return "主导核心模块设计与落地，明确业务目标、技术方案和量化结果，让项目价值更容易被招聘方识别。";
-  }
-  return content
-    .replace("负责", "主导")
-    .replace("完成", "落地")
-    .replace(/。?$/, "，并补充效率提升、用户规模或性能指标，强化结果导向表达。");
-}
-
-function checkGrammar(content = "") {
-  const issues = [];
-  if (/Thier/i.test(content)) {
-    issues.push({ type: "拼写", original: "Thier", suggestion: "Their", reason: "英文拼写错误" });
-  }
-  if (content.includes("比较快")) {
-    issues.push({ type: "表达", original: "比较快", suggestion: "响应速度提升 28%", reason: "简历表达建议量化结果" });
-  }
-  if (content.includes("负责")) {
-    issues.push({ type: "表达", original: "负责", suggestion: "主导", reason: "动词更有行动感" });
-  }
-  if (!/[。！？]$/.test(content.trim())) {
-    issues.push({ type: "标点", original: "句末缺少标点", suggestion: "补充句末标点", reason: "保持正式书面表达" });
-  }
-  return {
-    score: Math.max(60, 96 - issues.length * 7),
-    issues,
   };
 }
 
@@ -4016,9 +3792,6 @@ async function handleApi(req, res) {
     if (!resume) return send(res, 404, { message: "简历不存在" });
     store.resumes = store.resumes.filter((item) => item.id !== resume.id);
     store.resumeHistories = store.resumeHistories.filter((item) => item.resumeId !== resume.id);
-    store.analysisRecords = store.analysisRecords.filter((item) => item.resumeId !== resume.id);
-    store.optimizeRecords = store.optimizeRecords.filter((item) => item.resumeId !== resume.id);
-    store.grammarRecords = store.grammarRecords.filter((item) => item.resumeId !== resume.id);
     store.mockInterviews = store.mockInterviews.filter((item) => item.resumeId !== resume.id);
     deleteInterviewSessions(store, (item) => item.resumeId === resume.id);
     deleteAgentRuns(store, (item) => item.resumeId === resume.id);
@@ -4070,108 +3843,6 @@ async function handleApi(req, res) {
     const item = store.resumeHistories.find((history) => history.id === versionId && history.resumeId === resume.id);
     if (!item) return send(res, 404, { message: "简历版本不存在" });
     return send(res, 200, { item });
-  }
-
-  const analysisMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/analyze$/);
-  if (method === "POST" && analysisMatch) {
-    const user = requireUser(store, req);
-    const body = await readJson(req);
-    const resume = getOwnedResume(store, user, analysisMatch[1], { createIfMissing: true });
-    if (!resume) return send(res, 404, { message: "简历不存在" });
-    const requestedTargetPosition = typeof body.targetPosition === "string" ? body.targetPosition.trim() : "";
-    const savedTargetPosition = typeof resume.targetPosition === "string" ? resume.targetPosition.trim() : "";
-    const matchingPosition = store.jobPositions.find((item) => item.positionName === requestedTargetPosition || item.positionName === savedTargetPosition);
-    const targetPositionId = matchingPosition?.id || body.targetPositionId || resume.targetPositionId || 1;
-    const fallbackPosition = store.jobPositions.find((item) => item.id === targetPositionId) || store.jobPositions[0];
-    const targetPosition = requestedTargetPosition || savedTargetPosition || fallbackPosition.positionName;
-    const position = {
-      ...fallbackPosition,
-      positionName: targetPosition,
-      keywords: matchingPosition?.keywords || [],
-    };
-    const result = await generateAiAnalysis(store, user.id, resume, position);
-    const record = {
-      id: nextId(store.analysisRecords),
-      userId: user.id,
-      resumeId: resume.id,
-      resumeVersion: Number(resume.version) || 1,
-      resumeContentHash: buildResumeDTO(resume).contentHash,
-      targetPositionId,
-      targetPosition,
-      ...result,
-      createdAt: now(),
-    };
-    store.analysisRecords.push(record);
-    await writeStore(store);
-    return send(res, 201, { item: record });
-  }
-
-  const optimizeMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/optimize$/);
-  if (method === "POST" && optimizeMatch) {
-    const user = requireUser(store, req);
-    const body = await readJson(req);
-    const resume = getOwnedResume(store, user, optimizeMatch[1], { createIfMissing: true });
-    if (!resume) return send(res, 404, { message: "简历不存在" });
-    const result = await generateAiOptimize(store, user.id, resume, body.content || "", body.optimizeType || "general");
-    const record = {
-      id: nextId(store.optimizeRecords),
-      userId: user.id,
-      resumeId: resume.id,
-      resumeVersion: Number(resume.version) || 1,
-      resumeContentHash: buildResumeDTO(resume).contentHash,
-      optimizeType: body.optimizeType || "general",
-      originalContent: body.content || "",
-      optimizedContent: result.optimizedContent,
-      aiMode: result.aiMode,
-      promptText: body.promptText || "",
-      createdAt: now(),
-    };
-    store.optimizeRecords.push(record);
-    await writeStore(store);
-    return send(res, 201, { item: record });
-  }
-
-  const grammarMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/grammar-check$/);
-  if (method === "POST" && grammarMatch) {
-    const user = requireUser(store, req);
-    const body = await readJson(req);
-    const resume = getOwnedResume(store, user, grammarMatch[1], { createIfMissing: true });
-    if (!resume) return send(res, 404, { message: "简历不存在" });
-    const result = await generateAiGrammar(store, user.id, resume, body.content || "");
-    const record = {
-      id: nextId(store.grammarRecords),
-      userId: user.id,
-      resumeId: resume.id,
-      resumeVersion: Number(resume.version) || 1,
-      resumeContentHash: buildResumeDTO(resume).contentHash,
-      content: body.content || "",
-      ...result,
-      createdAt: now(),
-    };
-    store.grammarRecords.push(record);
-    await writeStore(store);
-    return send(res, 201, { item: record });
-  }
-
-  if (key === "GET /api/records/analysis") {
-    const user = requireUser(store, req);
-    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
-    const items = store.analysisRecords.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId));
-    return send(res, 200, { items });
-  }
-
-  if (key === "GET /api/records/optimize") {
-    const user = requireUser(store, req);
-    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
-    const items = store.optimizeRecords.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId));
-    return send(res, 200, { items });
-  }
-
-  if (key === "GET /api/records/grammar") {
-    const user = requireUser(store, req);
-    const resumeId = parseOptionalPositiveInteger(url.searchParams.get("resumeId"), "resumeId");
-    const items = store.grammarRecords.filter((item) => item.userId === user.id && (resumeId === null || item.resumeId === resumeId));
-    return send(res, 200, { items });
   }
 
   if (key === "GET /api/records/interviews") {
@@ -4611,9 +4282,6 @@ async function handleApi(req, res) {
       metrics: {
         users: store.users.length,
         resumes: store.resumes.length,
-        analysisRecords: store.analysisRecords.length,
-        optimizeRecords: store.optimizeRecords.length,
-        grammarRecords: store.grammarRecords.length,
         interviews: store.mockInterviews.length,
         positions: store.jobPositions.length,
         knowledgeDocuments: store.knowledgeDocuments.length,

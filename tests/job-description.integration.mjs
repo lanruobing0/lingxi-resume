@@ -68,7 +68,7 @@ async function main() {
     users: [{ id: 7, username: "jd-test", passwordHash: "test-only", role: "USER", status: 1 }],
     sessions: [{ id: 1, userId: 7, tokenHash: createHash("sha256").update(token).digest("base64url"), expiresAt: new Date(Date.now() + 60_000).toISOString() }],
     resumes: [{ id: 11, userId: 7, version: 2, title: "测试简历", currentPosition: "工程师", selfEvaluation: "具备后端和协作经验", sectionContent: { "专业技能": ["Java", "Spring Boot"] }, sectionDetails: {}, moduleOrder: ["基本信息", "专业技能"] }],
-    resumeHistories: [{ id: 1, resumeId: 11, resumeVersion: 1, version: 1, summary: "旧版本", snapshot: null, contentHash: "" }], analysisRecords: [], optimizeRecords: [], grammarRecords: [], interviewQuestions: [],
+    resumeHistories: [{ id: 1, resumeId: 11, resumeVersion: 1, version: 1, summary: "旧版本", snapshot: null, contentHash: "" }], interviewQuestions: [],
     jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
     aiSettingsByUser: { "7": { aiConfig: { provider: "DeepSeek" }, aiProviderConfigs: { DeepSeek: { provider: "DeepSeek", baseUrl: `http://127.0.0.1:${mockAiPort}/v1`, modelId: "deepseek-v4-flash", apiKey: "test-key", enabled: true } } } },
   };

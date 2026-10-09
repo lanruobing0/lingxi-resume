@@ -37,9 +37,8 @@ Core product flows:
 
 - Resume editor with live A4 preview.
 - Resume template gallery with actually different layouts.
-- AI resume analysis.
-- AI resume polishing.
-- AI grammar / wording check.
+- Grounded resume/job matching reports.
+- Evidence-backed resume suggestions and versioning.
 - Mock interview feedback.
 - History records and admin overview.
 
@@ -140,9 +139,6 @@ Current backend supports OpenAI-compatible APIs:
 
 - `GET /api/ai-config`
 - `PUT /api/ai-config`
-- `POST /api/resumes/:id/analyze`
-- `POST /api/resumes/:id/optimize`
-- `POST /api/resumes/:id/grammar-check`
 - `POST /api/interviews/:id/answers`
 
 For OpenAI official:

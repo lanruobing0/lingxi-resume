@@ -6,6 +6,7 @@ USE ai_resume_coach;
 
 DROP TABLE IF EXISTS interview_answer;
 DROP TABLE IF EXISTS mock_interview;
+-- Retired tool tables are dropped only when explicitly running this reset script.
 DROP TABLE IF EXISTS resume_grammar_check_record;
 DROP TABLE IF EXISTS resume_optimize_record;
 DROP TABLE IF EXISTS resume_analysis_record;
@@ -122,49 +123,6 @@ CREATE TABLE resume_version_history (
   CONSTRAINT fk_history_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
 );
 
-CREATE TABLE resume_analysis_record (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
-  resume_id BIGINT NOT NULL,
-  target_position_id BIGINT,
-  total_score INT,
-  completeness_score INT,
-  match_score INT,
-  keyword_score INT,
-  project_score INT,
-  analysis_result TEXT,
-  suggestions TEXT,
-  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_analysis_user FOREIGN KEY (user_id) REFERENCES user(id),
-  CONSTRAINT fk_analysis_resume FOREIGN KEY (resume_id) REFERENCES resume(id),
-  CONSTRAINT fk_analysis_position FOREIGN KEY (target_position_id) REFERENCES job_position(id)
-);
-
-CREATE TABLE resume_optimize_record (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
-  resume_id BIGINT NOT NULL,
-  optimize_type VARCHAR(50) NOT NULL,
-  original_content TEXT,
-  optimized_content TEXT,
-  prompt_text TEXT,
-  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_optimize_user FOREIGN KEY (user_id) REFERENCES user(id),
-  CONSTRAINT fk_optimize_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
-);
-
-CREATE TABLE resume_grammar_check_record (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
-  resume_id BIGINT NOT NULL,
-  score INT,
-  original_content TEXT,
-  issue_json TEXT,
-  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_grammar_user FOREIGN KEY (user_id) REFERENCES user(id),
-  CONSTRAINT fk_grammar_resume FOREIGN KEY (resume_id) REFERENCES resume(id)
-);
-
 CREATE TABLE interview_question (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   position_id BIGINT NOT NULL,
@@ -235,9 +193,6 @@ INSERT INTO resume_version_history (resume_id, version_no, summary, snapshot_jso
 (1, 2, '补充项目经历和岗位方向', '{}'),
 (1, 3, '加入 AI 诊断后的量化结果', '{}');
 
-INSERT INTO resume_grammar_check_record (user_id, resume_id, score, original_content, issue_json) VALUES
-(2, 1, 82, '负责招聘平台页面开发，完成筛选和面试排期功能，Thier 页面响应比较快。', '[{"type":"拼写","original":"Thier","suggestion":"Their"},{"type":"表达","original":"负责","suggestion":"主导"}]');
-
 INSERT INTO interview_question (position_id, question_text, question_type, difficulty, reference_answer) VALUES
 (1, '请介绍一个你主导或深度参与的前端项目，并说明你解决的核心问题。', '项目经历', '中等', '建议按项目背景、个人职责、技术难点、解决方案和结果进行回答。'),
 (1, '如果一个页面首屏加载很慢，你会从哪些角度定位和优化？', '技术能力', '中等', '可从资源体积、接口耗时、渲染阻塞、缓存策略和代码分割等角度回答。');
@@ -259,24 +214,6 @@ INSERT INTO system_notice (title, content) VALUES
 --   ADD COLUMN resume_version INT NULL COMMENT 'ResumeDTO version at snapshot time';
 -- CREATE INDEX idx_resume_version_history_resume_version
 --   ON resume_version_history (resume_id, resume_version);
---
--- ALTER TABLE resume_analysis_record
---   ADD COLUMN resume_version INT NULL,
---   ADD COLUMN resume_content_hash CHAR(64) NULL;
--- CREATE INDEX idx_resume_analysis_record_user_resume
---   ON resume_analysis_record (user_id, resume_id, resume_version);
---
--- ALTER TABLE resume_optimize_record
---   ADD COLUMN resume_version INT NULL,
---   ADD COLUMN resume_content_hash CHAR(64) NULL;
--- CREATE INDEX idx_resume_optimize_record_user_resume
---   ON resume_optimize_record (user_id, resume_id, resume_version);
---
--- ALTER TABLE resume_grammar_check_record
---   ADD COLUMN resume_version INT NULL,
---   ADD COLUMN resume_content_hash CHAR(64) NULL;
--- CREATE INDEX idx_resume_grammar_record_user_resume
---   ON resume_grammar_check_record (user_id, resume_id, resume_version);
 --
 -- ALTER TABLE mock_interview
 --   ADD COLUMN resume_id BIGINT NULL,

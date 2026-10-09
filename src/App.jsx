@@ -57,7 +57,6 @@ const appNav = [
   { id: "resume", label: "我的简历", icon: FileText },
   { id: "jobs", label: "岗位 JD", icon: BriefcaseBusiness },
   { id: "templates", label: "简历模板", icon: LayoutTemplate },
-  { id: "ai-tools", label: "AI 工具", icon: Sparkles },
   { id: "providers", label: "AI 服务商", icon: Bot },
   { id: "interview", label: "模拟面试", icon: MessageSquareText },
   { id: "history", label: "历史记录", icon: Save },
@@ -196,8 +195,8 @@ function templateResumePayload(template) {
 }
 
 const providers = [
-  { name: "DeepSeek", desc: "兼容 OpenAI 格式，适合简历诊断和面试反馈。", active: false },
-  { name: "豆包", desc: "国内模型服务，可用于简历润色和语法检查。", active: true },
+  { name: "DeepSeek", desc: "兼容 OpenAI 格式，适合岗位分析和面试反馈。", active: false },
+  { name: "豆包", desc: "国内模型服务，可用于简历建议和面试反馈。", active: true },
   { name: "OpenAI", desc: "支持通用文本生成和结构化 JSON 输出。", active: false },
   { name: "Gemini", desc: "适合多模态简历导入和文本理解。", active: false },
 ];
@@ -389,8 +388,8 @@ function App() {
 function initialView() {
   if (typeof window === "undefined") return "landing";
   const rawHash = window.location.hash.replace("#", "").split("?")[0];
-  const hash = rawHash === "grammar" ? "ai-tools" : rawHash === "sample" ? "templates" : rawHash;
-  const allowed = ["landing", "auth", "resume-edit", ...appNav.map((item) => item.id), "analysis", "optimize"];
+  const hash = ["ai-tools", "grammar", "analysis", "optimize"].includes(rawHash) ? "resume" : rawHash === "sample" ? "templates" : rawHash;
+  const allowed = ["landing", "auth", "resume-edit", ...appNav.map((item) => item.id)];
   return allowed.includes(hash) ? hash : "landing";
 }
 
@@ -578,7 +577,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
           AI 求职准备工作台
         </span>
         <h1 className="fade-up" style={{ "--enter-delay": "140ms" }}>简历、岗位、面试，在一张工作台准备</h1>
-        <p className="fade-up" style={{ "--enter-delay": "210ms" }}>从简历编辑、AI 诊断、岗位匹配到模拟面试，帮你把求职准备变成可保存、可追踪、可优化的完整流程。</p>
+        <p className="fade-up" style={{ "--enter-delay": "210ms" }}>从简历编辑、岗位匹配、简历建议到模拟面试，帮你把求职准备变成可保存、可追踪、可优化的完整流程。</p>
         <div className="hero-buttons fade-up" style={{ "--enter-delay": "280ms" }}>
           <button className="black-cta" onClick={() => go("templates")}>
             浏览简历模板
@@ -639,7 +638,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
             求职进度
           </span>
           <h2>每一次优化，都能被看见</h2>
-          <p>把简历版本、岗位匹配、AI 诊断和模拟面试反馈收在同一个工作台里，下一步该改什么一眼清楚。</p>
+          <p>把简历版本、岗位匹配、简历建议和模拟面试反馈收在同一个工作台里，下一步该改什么一眼清楚。</p>
           <div className="soft-list active">
             <strong>多版本简历</strong>
             <span>按岗位保存不同版本，随时回到上一次更好的表达</span>
@@ -647,7 +646,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
           </div>
           <div className="soft-list">
             <strong>优化记录归档</strong>
-            <span>诊断评分、匹配结果和面试反馈自动沉淀</span>
+            <span>简历建议、匹配结果和面试反馈自动沉淀</span>
             <ChevronDown size={16} />
           </div>
         </div>
@@ -669,7 +668,7 @@ function LandingPage({ go, currentUser, appearance, onToggleAppearance }) {
 function FluxHeroWorkbench({ go, currentUser }) {
   const openWorkspace = () => go(currentUser ? "resume" : "templates");
   const insights = [
-    { title: "AI 诊断完成", value: "ATS 匹配评分 86 分", note: "项目结果还可以继续量化", icon: Gauge },
+    { title: "岗位分析完成", value: "岗位匹配评分 86 分", note: "项目结果还可以继续量化", icon: Gauge },
     { title: "岗位匹配较高", value: "React、TypeScript、性能优化已覆盖", note: "目标岗位: 前端开发工程师", icon: BriefcaseBusiness },
     { title: "已生成面试追问", value: "5 道项目深挖题", note: "围绕难点、协作和复盘提问", icon: MessageSquareText },
   ];
@@ -693,8 +692,8 @@ function FluxHeroWorkbench({ go, currentUser }) {
         <div className="flux-workbench-grid">
           <aside className="flux-sidebar">
             <button className="active" onClick={openWorkspace}><FileText size={15} /> 简历编辑</button>
-            <button onClick={() => go("optimize")}><Sparkles size={15} /> AI 润色</button>
-            <button onClick={() => go("analysis")}><BriefcaseBusiness size={15} /> 岗位匹配</button>
+            <button onClick={() => go("jobs")}><Sparkles size={15} /> 简历建议</button>
+            <button onClick={() => go("jobs")}><BriefcaseBusiness size={15} /> 岗位匹配</button>
             <button onClick={() => go("interview")}><MessageSquareText size={15} /> 模拟面试</button>
           </aside>
 
@@ -746,7 +745,7 @@ function FluxHeroWorkbench({ go, currentUser }) {
 function FeatureShowcase() {
   const features = [
     { title: "智能识别，专业建议", text: "AI 自动识别不恰当表达，给出可直接应用的修改建议。", badge: "AI 驱动" },
-    { title: "语法检查", text: "自动检测错别字、标点和语义不清的简历表述。" },
+    { title: "事实依据", text: "结合简历与岗位原文展示建议依据，避免编造个人经历。" },
     { title: "岗位匹配", text: "根据目标岗位分析关键词覆盖和项目亮点。" },
   ];
 
@@ -804,12 +803,10 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const navigationItems = appNav.filter((item) => item.id !== "admin" || currentUser?.role === "ADMIN");
   const activeMeta = appNav.find((item) => item.id === active) || {
-    analysis: { label: "AI 简历诊断" },
-    optimize: { label: "AI 简历润色" },
     auth: { label: "用户登录注册" },
     "resume-edit": { label: "编辑简历" },
   }[active] || { label: "我的简历" };
-  const requiresLogin = ["resume", "resume-edit", "jobs", "ai-tools", "providers", "interview", "history", "settings", "analysis", "optimize"].includes(active);
+  const requiresLogin = ["resume", "resume-edit", "jobs", "providers", "interview", "history", "settings"].includes(active);
 
   const openNavigationItem = (id) => {
     if (id === "admin" && currentUser?.role !== "ADMIN") {
@@ -889,13 +886,10 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           {["jobs", "interview"].includes(active) && currentUser && <JobDescriptionWorkspace entry={active} notify={notify} activeResumeId={activeResumeId} onOpenResume={onOpenResume} go={go} />}
           {active === "resume-edit" && currentUser && activeResumeId && <ResumeEditor key={`${currentUser.id}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
-          {active === "ai-tools" && currentUser && <AiToolsPanel notify={notify} go={go} resumeId={activeResumeId} />}
           {active === "providers" && currentUser && <ProviderSettings notify={notify} />}
           {active === "history" && currentUser && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && currentUser && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
-          {active === "analysis" && currentUser && <AnalysisPanel notify={notify} go={go} resumeId={activeResumeId} />}
-          {active === "optimize" && currentUser && <OptimizePanel notify={notify} resumeId={activeResumeId} />}
         </section>
       </main>
     </div>
@@ -1371,7 +1365,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
       "优化列表渲染与接口缓存策略，核心页面加载效率提升 35%。",
     ],
     项目经历: [
-      "实现简历编辑、AI 诊断、内容优化和模拟面试核心流程。",
+      "实现简历编辑、岗位匹配、简历建议和模拟面试核心流程。",
       "设计三栏工作台，支持编辑信息与 A4 简历实时预览。",
     ],
   });
@@ -1388,7 +1382,7 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
       role: "前端负责人",
       startDate: "2024/03",
       endDate: "2025/01",
-      highlights: ["实现简历编辑、AI 诊断、内容优化和模拟面试核心流程。", "设计三栏工作台，支持编辑信息与 A4 简历实时预览。"],
+      highlights: ["实现简历编辑、岗位匹配、简历建议和模拟面试核心流程。", "设计三栏工作台，支持编辑信息与 A4 简历实时预览。"],
     })],
   }));
   const [form, setForm] = useState({
@@ -1842,12 +1836,6 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
             </label>
           )}
         </div>
-        <div className="form-card ai-card">
-          <strong>AI 工具</strong>
-          <div>
-            <button onClick={() => go("ai-tools")}>打开 AI 工具</button>
-          </div>
-        </div>
       </section>
 
       <section className="resume-preview" ref={resumePreviewRef}>
@@ -2254,91 +2242,6 @@ function TemplatePreviewDialog({ open, template, color, onClose, onApply }) {
         </footer>
       </section>
     </div>
-  );
-}
-
-function AiToolsPanel({ notify, go, resumeId }) {
-  const generatePositionKeywords = () => {
-    go("analysis");
-  };
-
-  return (
-    <section className="ai-tools-page">
-      <div className="ai-tools-head">
-        <div>
-          <span className="section-kicker">AI 工具</span>
-          <h2>简历优化与检查</h2>
-        </div>
-        <div className="ai-tools-actions">
-          <button className="white-small" onClick={generatePositionKeywords}>岗位关键词</button>
-          <button className="white-small" onClick={() => go("optimize")}>项目润色</button>
-          <button className="black-small" onClick={() => go("interview")}>模拟面试</button>
-        </div>
-      </div>
-      <GrammarPanel notify={notify} resumeId={resumeId} />
-    </section>
-  );
-}
-
-function GrammarPanel({ notify, resumeId }) {
-  const [content, setContent] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [resultVersion, setResultVersion] = useState(0);
-  const [result, setResult] = useState(null);
-
-  const runCheck = async () => {
-    if (!resumeId) {
-      notify("请先在我的简历中选择一份简历");
-      return;
-    }
-    setChecking(true);
-    try {
-      const data = await apiRequest(`/api/resumes/${resumeId}/grammar-check`, {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      });
-      setResult(data.item);
-      setResultVersion((current) => current + 1);
-      notify("语法检查完成，记录已归档");
-    } catch (error) {
-      notify(`语法检查失败: ${error.message}`);
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  return (
-    <section className="grammar-page">
-      <div className="grammar-input">
-        <h2>AI 语法检查</h2>
-        <p>检查错别字、英文拼写、标点和简历表达问题。</p>
-        <textarea value={content} onChange={(event) => setContent(event.target.value)} />
-        <button className="black-small" onClick={runCheck} disabled={checking}>
-          <Check size={16} />
-          {checking ? "检查中..." : "开始检查"}
-        </button>
-      </div>
-      <div className={`grammar-result ${resultVersion ? "ai-result-enter" : ""}`} key={resultVersion}>
-        {checking ? <ResultSkeleton lines={3} /> : result ? <>
-        <span><AnimatedScore value={result.score} shouldAnimate={resultVersion > 0} /> 分</span>
-        <h3>检查结果</h3>
-        {(result.issues || []).length === 0 && (
-          <article>
-            <strong>未发现明显问题</strong>
-            <p>当前文本没有返回可修改项。</p>
-            <small>可以换成完整简历段落继续检查。</small>
-          </article>
-        )}
-        {(result.issues || []).map((issue, index) => (
-          <article className={resultVersion ? "card-stagger" : ""} style={{ "--stagger-index": index }} key={`${issue.original}-${index}`}>
-            <strong>{issue.type}</strong>
-            <p>{issue.original} → {issue.suggestion}</p>
-            <small>{issue.reason}</small>
-          </article>
-        ))}
-        </> : <article><strong>尚未开始检查</strong><p>输入需要检查的简历段落后开始检查，结果会绑定当前选中的简历。</p></article>}
-      </div>
-    </section>
   );
 }
 
@@ -4174,32 +4077,20 @@ function GeneralSettings({ notify, currentUser, onUserUpdated }) {
 
 function HistoryPage({ notify, resumeId }) {
   const [history, setHistory] = useState([]);
-  const [analysis, setAnalysis] = useState([]);
-  const [optimize, setOptimize] = useState([]);
-  const [grammar, setGrammar] = useState([]);
   const [interviews, setInterviews] = useState([]);
 
   const loadHistory = async () => {
     if (!resumeId) {
       setHistory([]);
-      setAnalysis([]);
-      setOptimize([]);
-      setGrammar([]);
       setInterviews([]);
       return;
     }
     try {
-      const [resumeHistory, analysisRecords, optimizeRecords, grammarRecords, interviewRecords] = await Promise.all([
+      const [resumeHistory, interviewRecords] = await Promise.all([
         apiRequest(`/api/resumes/${resumeId}/history`),
-        apiRequest(`/api/records/analysis?resumeId=${resumeId}`),
-        apiRequest(`/api/records/optimize?resumeId=${resumeId}`),
-        apiRequest(`/api/records/grammar?resumeId=${resumeId}`),
         apiRequest(`/api/records/interviews?resumeId=${resumeId}`),
       ]);
       setHistory(resumeHistory.items || []);
-      setAnalysis(analysisRecords.items || []);
-      setOptimize(optimizeRecords.items || []);
-      setGrammar(grammarRecords.items || []);
       setInterviews(interviewRecords.items || []);
       notify("历史记录已刷新");
     } catch (error) {
@@ -4216,15 +4107,12 @@ function HistoryPage({ notify, resumeId }) {
       <div className="records-head">
         <div>
           <span className="section-kicker">记录归档</span>
-          <p>{resumeId ? `展示简历 #${resumeId} 的版本、AI 诊断、润色和面试反馈。` : "请先在我的简历中选择一份简历。"}</p>
+          <p>{resumeId ? `展示简历 #${resumeId} 的版本和面试反馈。` : "请先在我的简历中选择一份简历。"}</p>
         </div>
         <button className="black-small" onClick={loadHistory}>刷新记录</button>
       </div>
       <div className="records-grid">
         <RecordColumn title="简历版本" items={history.map((item) => `v${item.version} · ${item.summary}`)} />
-        <RecordColumn title="诊断记录" items={analysis.map((item) => `${item.totalScore} 分 · ${item.analysisResult}`)} />
-        <RecordColumn title="润色记录" items={optimize.map((item) => item.optimizedContent)} />
-        <RecordColumn title="语法检查" items={grammar.map((item) => `${item.score} 分 · ${(item.issues || []).length} 个问题`)} />
         <RecordColumn title="模拟面试" items={interviews.map((item) => `${item.targetPosition || item.title} · ${item.totalScore ?? "进行中"} 分 · ${item.overallFeedback || `${item.answerCount || 0} 题已完成`}`)} />
       </div>
     </section>
@@ -4264,9 +4152,6 @@ function AdminPanel({ notify }) {
   const cards = [
     ["用户数", metrics?.users ?? 0],
     ["简历数", metrics?.resumes ?? 0],
-    ["诊断记录", metrics?.analysisRecords ?? 0],
-    ["润色记录", metrics?.optimizeRecords ?? 0],
-    ["语法检查", metrics?.grammarRecords ?? 0],
     ["模拟面试", metrics?.interviews ?? 0],
     ["岗位方向", metrics?.positions ?? 0],
     ["知识资料", metrics?.knowledgeDocuments ?? 0],
@@ -4559,192 +4444,6 @@ function knowledgeStatusLabel(value) {
 
 function vectorStatusLabel(value) {
   return ({ NOT_INDEXED: "未建立索引", INDEXING: "索引中", INDEXED: "已建立索引", STALE: "需要重建", FAILED: "索引失败" })[value] || value || "未建立索引";
-}
-
-function AnalysisPanel({ notify, go, resumeId }) {
-  const [targetPosition, setTargetPosition] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [needsAiConfig, setNeedsAiConfig] = useState(false);
-  const [applyingKeyword, setApplyingKeyword] = useState("");
-  const [appliedKeyword, setAppliedKeyword] = useState("");
-  const [resultVersion, setResultVersion] = useState(0);
-  const [analysis, setAnalysis] = useState(null);
-
-  useEffect(() => {
-    if (!resumeId) {
-      setTargetPosition("");
-      setAnalysis(null);
-      return undefined;
-    }
-    let disposed = false;
-    apiRequest(`/api/resumes/${resumeId}`)
-      .then(({ item }) => {
-        if (!disposed) setTargetPosition(item.targetPosition || item.currentPosition || "");
-      })
-      .catch((error) => !disposed && notify(`读取当前简历失败: ${error.message}`));
-    return () => { disposed = true; };
-  }, [notify, resumeId]);
-
-  const runAnalysis = useCallback(async (requestedTargetPosition = targetPosition) => {
-    if (!resumeId) {
-      notify("请先在我的简历中选择一份简历");
-      return;
-    }
-    const nextTargetPosition = requestedTargetPosition.trim();
-    if (!nextTargetPosition) {
-      notify("请先在我的简历中填写目标岗位");
-      return;
-    }
-
-    // A new request must never leave an older result visible if the provider
-    // rejects the new request.
-    setAnalysis(null);
-    setResultVersion(0);
-    setNeedsAiConfig(false);
-    setIsLoading(true);
-    try {
-      const data = await apiRequest(`/api/resumes/${resumeId}/analyze`, {
-        method: "POST",
-        body: JSON.stringify({ targetPosition: nextTargetPosition }),
-      });
-      setAnalysis(data.item);
-      setResultVersion((current) => current + 1);
-      setTargetPosition(data.item.targetPosition || nextTargetPosition);
-      setNeedsAiConfig(false);
-      notify("AI 诊断已完成并保存记录");
-    } catch (error) {
-      const isAiNotConfigured = error.message.includes("AI 服务未配置") || error.message.includes("API Key");
-      setNeedsAiConfig(isAiNotConfigured);
-      notify(isAiNotConfigured ? "AI 尚未配置，请先配置服务商 API Key" : `诊断失败: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [notify, resumeId, targetPosition]);
-
-  const applyKeyword = async (keyword) => {
-    if (!keyword || applyingKeyword) return;
-    setApplyingKeyword(keyword);
-    try {
-      if (!resumeId) {
-        notify("请先在我的简历中选择一份简历");
-        return;
-      }
-      const resumeData = await apiRequest(`/api/resumes/${resumeId}`);
-      const currentSummary = String(resumeData.item?.selfEvaluation || "").trim();
-      if (currentSummary.toLowerCase().includes(keyword.toLowerCase())) {
-        notify(`个人简介已包含“${keyword}”`);
-        return;
-      }
-
-      const nextSummary = currentSummary ? `${currentSummary}；${keyword}` : keyword;
-      await apiRequest(`/api/resumes/${resumeId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          selfEvaluation: nextSummary,
-          summary: `将 AI 关键词“${keyword}”加入个人简介`,
-        }),
-      });
-      setAppliedKeyword(keyword);
-      notify(`已将“${keyword}”加入个人简介`);
-    } catch (error) {
-      notify(`加入关键词失败: ${error.message}`);
-    } finally {
-      setApplyingKeyword("");
-    }
-  };
-
-  return (
-    <section className={`simple-panel analysis-panel ${resultVersion ? "has-ai-result" : ""}`}>
-      <div className={`score-circle ${isLoading ? "is-loading" : ""}`}>
-        {isLoading ? <LoaderCircle size={44} /> : <AnimatedScore value={analysis?.totalScore} shouldAnimate={resultVersion > 0} />}
-      </div>
-      <h2>{isLoading ? "正在生成岗位匹配结果" : analysis ? `${analysis.targetPosition || targetPosition}匹配度${analysis.totalScore >= 85 ? "较高" : "待提升"}` : "尚未生成岗位匹配结果"}</h2>
-      <div className="analysis-target">
-        <span>岗位方向</span>
-        <strong>{analysis?.targetPosition || targetPosition || "请先选择简历"}</strong>
-      </div>
-      {isLoading ? <ResultSkeleton lines={3} /> : <p>{analysis?.analysisResult || "选择简历后可生成真实 AI 诊断，不展示默认分数或建议。"}</p>}
-      {needsAiConfig && (
-        <div className="ai-config-callout">
-          <span>尚未配置可用的 AI 服务，无法生成真实关键词和匹配度。</span>
-          <button className="white-small" onClick={() => go("providers")}>去配置 AI 服务商</button>
-        </div>
-      )}
-      <div className="analysis-keywords">
-        <span>AI 生成的岗位关键词，点击加入个人简介</span>
-        <div className="simple-list">
-          {(analysis?.keywords || []).map((item, index) => (
-            <button
-              className={`keyword-chip ${resultVersion ? "card-stagger" : ""} ${appliedKeyword === item ? "is-applied" : ""}`}
-              style={{ "--stagger-index": index }}
-              key={item}
-              type="button"
-              disabled={Boolean(applyingKeyword)}
-              onClick={() => applyKeyword(item)}
-            >
-              {applyingKeyword === item ? "正在加入" : appliedKeyword === item ? "已加入" : item}
-            </button>
-          ))}
-          {!isLoading && !analysis?.keywords?.length && <span>生成诊断后显示岗位关键词</span>}
-        </div>
-      </div>
-      {analysis && resultVersion > 0 && <div className="analysis-metrics" aria-label="诊断维度">
-        {[["岗位匹配", "matchScore"], ["关键词覆盖", "keywordScore"], ["项目成果", "projectScore"], ["完整度", "completenessScore"]].map(([label, field], index) => {
-          const rawScore = analysis[field];
-          const score = typeof rawScore === "number" && Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : null;
-          return <div className="analysis-metric card-stagger" style={{ "--stagger-index": index }} key={field}><span>{label}</span><i>{score !== null && <b style={{ "--metric-value": `${score}%` }} />}</i><strong>{score === null ? "--" : `${score}%`}</strong></div>;
-        })}
-      </div>}
-      <div className="simple-list">
-        {(analysis?.suggestions || []).map((item, index) => <span className={resultVersion ? "card-stagger" : ""} style={{ "--stagger-index": index }} key={item}>{item}</span>)}
-      </div>
-      <button className="black-small" onClick={() => runAnalysis()} disabled={isLoading}>
-        {isLoading ? <LoaderCircle className="spin" size={16} /> : <Gauge size={16} />}
-        {isLoading ? "AI 正在诊断" : "重新诊断"}
-      </button>
-    </section>
-  );
-}
-
-function OptimizePanel({ notify, resumeId }) {
-  const [content, setContent] = useState("");
-  const [optimized, setOptimized] = useState("");
-  const [optimizing, setOptimizing] = useState(false);
-  const [resultVersion, setResultVersion] = useState(0);
-
-  const runOptimize = async () => {
-    if (!resumeId) {
-      notify("请先在我的简历中选择一份简历");
-      return;
-    }
-    setOptimizing(true);
-    try {
-      const data = await apiRequest(`/api/resumes/${resumeId}/optimize`, {
-        method: "POST",
-        body: JSON.stringify({ optimizeType: "project_experience", content }),
-      });
-      setOptimized(data.item.optimizedContent);
-      setResultVersion((current) => current + 1);
-      notify("AI 润色已完成并保存记录");
-    } catch (error) {
-      notify(`润色失败: ${error.message}`);
-    } finally {
-      setOptimizing(false);
-    }
-  };
-
-  return (
-    <section className="simple-panel">
-      <Sparkles size={42} />
-      <h2>AI 优化建议</h2>
-      <textarea value={content} onChange={(event) => setContent(event.target.value)} />
-      {optimizing ? <ResultSkeleton lines={3} /> : <p className={resultVersion ? "ai-result-enter" : ""} key={resultVersion}>{optimized || "输入简历内容后生成真实润色结果。"}</p>}
-      <button className="black-small" disabled={optimizing} onClick={runOptimize}>
-        {optimizing ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-        {optimizing ? "AI 正在润色" : "生成润色"}
-      </button>
-    </section>
-  );
 }
 
 function MiniWorkbench() {

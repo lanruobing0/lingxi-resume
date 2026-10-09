@@ -63,7 +63,7 @@ async function main() {
       { id: 2, userId: 2, tokenHash: tokenHash(secondAdminToken), expiresAt: new Date(Date.now() + 60_000).toISOString() },
       { id: 3, userId: 3, tokenHash: tokenHash(userToken), expiresAt: new Date(Date.now() + 60_000).toISOString() },
     ],
-    resumes: [], resumeHistories: [], analysisRecords: [], optimizeRecords: [], grammarRecords: [], interviewQuestions: [],
+    resumes: [], resumeHistories: [], interviewQuestions: [],
     jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], resumeJobMatches: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
   };
   await writeFile(path.join(dataDir, "store.json"), JSON.stringify(store), "utf8");

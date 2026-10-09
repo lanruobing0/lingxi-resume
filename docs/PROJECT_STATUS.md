@@ -13,7 +13,7 @@
 
 - 登录、会话、用户数据隔离与 AI 配置管理。
 - 简历库、编辑器、A4 预览、多个结构化简历模板与版本快照。
-- 真实 AI 简历诊断、润色、语法检查、模拟面试和历史记录。
+- 岗位匹配报告、简历建议、模拟面试和历史记录。旧独立诊断、润色、语法检查已于 2026-10-09 移除。
 - 真实 JD 的保存、编辑、AI 解析、原文证据校验及 JobApplication 关联。
 - 阶段 3 基础岗位匹配：基于固化 ResumeVersion 与 JD ParseResult 的七项输入绑定、六维固定权重评分与后端 `totalScore` 重算、简历/JD 双向证据校验、匹配历史及 FAILED 状态、多用户权限隔离、AI Prompt 隐私过滤，以及必备技能、加分技能和关键词展示。
 - 阶段 3 回归覆盖：A/B 简历匹配同一 JD、同一简历匹配双 JD、JD 删除级联和同一 Application 成功后失败的历史保护。
@@ -53,7 +53,7 @@
 
 - 认证与账户：`/api/auth/*`、`/api/users/me`
 - 简历：`/api/resumes`、`/api/resumes/:id`、`/api/resumes/:id/versions/*`
-- AI：`/api/resumes/:id/{analyze,optimize,grammar-check}`、`/api/ai-config`
+- AI 配置：`/api/ai-config`；旧 analyze/optimize/grammar-check 与对应 records 接口已移除。
 - JD 与申请：`/api/job-descriptions`、`/api/job-descriptions/:id/parse`、`/api/job-applications`
 - 基础匹配：`POST/GET /api/job-applications/:id/matches`、`GET /api/resume-job-matches/:matchId`、`POST /api/resume-job-matches/:matchId/retry`
 - 面试与记录：旧版兼容 `/api/interviews`、`/api/records/*`；Stage 8 `/api/job-applications/:id/interview-sessions`、`/api/interview-sessions/:id/*`

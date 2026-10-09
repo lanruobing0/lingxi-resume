@@ -153,7 +153,7 @@ async function main() {
       { id: 11, userId: 7, version: 3, title: "Java 简历", currentPosition: "后端工程师", realName: pii.name, email: pii.email, phone: pii.phone, website: pii.website, city: pii.city, profileFields: [{ label: "作品集", value: pii.profile }], selfEvaluation: "Java 与 Spring Boot 开发", sectionContent: { "专业技能": ["Java", "Spring Boot", "Redis"], "项目经历": ["订单系统提升 20%"] }, sectionDetails: {}, moduleOrder: ["专业技能", "项目经历"] },
       { id: 12, userId: 7, version: 1, title: "React 简历", currentPosition: "前端工程师", selfEvaluation: "React 与 TypeScript 开发", sectionContent: { "专业技能": ["React", "TypeScript", "性能优化"], "项目经历": ["前端性能优化 30%"] }, sectionDetails: {}, moduleOrder: ["专业技能", "项目经历"] },
     ],
-    resumeHistories: [], analysisRecords: [], optimizeRecords: [], grammarRecords: [], interviewQuestions: [], jobPositions: [], jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], resumeJobMatches: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
+    resumeHistories: [], interviewQuestions: [], jobPositions: [], jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], resumeJobMatches: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
   };
   await writeFile(path.join(dataDir, "store.json"), JSON.stringify(store), "utf8");
   const probe = createServer(); const apiPort = await listen(probe); await close(probe);
