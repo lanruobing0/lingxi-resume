@@ -39,6 +39,14 @@ try {
   assert.equal((await call(2,"/api/interview-materials")).items.length,0);
   assert.equal((await call(1,"/api/admin/knowledge-documents")).items.length,0);
   const publicDoc=await call(1,"/api/admin/knowledge-documents",payload("Public material"),201);await call(1,`/api/admin/knowledge-documents/${publicDoc.item.id}/process`,{});await call(1,`/api/admin/knowledge-documents/${publicDoc.item.id}/index`,{});
+  await call(null,`/api/interview-materials/${publicDoc.item.id}`,undefined,401);
+  await call(2,`/api/interview-materials/${id}`,undefined,404);
+  await call(2,`/api/interview-materials/${otherId}`,undefined,404);
+  const publicContent = (await call(2,`/api/interview-materials/${publicDoc.item.id}`)).item;
+  assert.equal(publicContent.content,payload("Public material").rawText);
+  assert.deepEqual(Object.keys(publicContent).sort(),["content","id","processingVersion","title"]);
+  const publicDraft = await call(1,"/api/admin/knowledge-documents",payload("Unpublished public"),201);
+  await call(2,`/api/interview-materials/${publicDraft.item.id}`,undefined,404);
   for(const mode of ["KEYWORD","VECTOR","HYBRID"]){const own=await call(2,"/api/personal-materials/search",{query:"commonneedle",mode,filters:{personalUserId:3},useReranker:false});assert.deepEqual([...new Set(own.results.map(r=>r.documentId))].sort((a,b)=>a-b),[id,publicDoc.item.id].sort((a,b)=>a-b));}
   const must=mocks.state.searchFilters.at(-1).must;assert.ok(must.find(rule=>rule.key==="documentId"&&rule.match.any.includes(id)&&!rule.match.any.includes(otherId)));
   mocks.state.ignoreSearchFilters=true;

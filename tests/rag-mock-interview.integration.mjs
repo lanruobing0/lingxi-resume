@@ -178,6 +178,7 @@ async function main() {
     store.knowledgeChunks.push({ ...store.knowledgeChunks[0], id: 2, documentId: 2, content: knowledgeText + " OTHER-USER-MATERIAL-SECRET" });
   }
   if (browserMode) {
+    Object.assign(store.knowledgeDocuments[0], { rawText: "# 缓存面试量表\n\n" + knowledgeText + "\n\n## 完整正文验证\n\n应说明缓存失效、一致性与降级策略。正文末尾：需要验证服务重启后的缓存恢复。", updatedAt: new Date().toISOString() });
     store.knowledgeDocuments.push({ ...store.knowledgeDocuments[0], id: 3, title: "个人缓存复习笔记", scope: "PRIVATE", userId: 1, aiConsent: true, activeIndexRunId: 13 });
     store.knowledgeChunks.push({ ...store.knowledgeChunks[0], id: 3, documentId: 3 });
   }

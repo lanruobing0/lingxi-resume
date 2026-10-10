@@ -4109,7 +4109,7 @@ textarea {
 .public-material-group-title { display:flex; align-items:baseline; flex-wrap:wrap; gap:10px; }
 .public-material-group .public-material-group-title strong { flex:0 1 auto; font-size:16px; }
 .public-material-group .public-material-group-overview p { margin:8px 0 0; overflow-wrap:anywhere; line-height:1.7; }
-.public-material-group .public-material-document-summary { margin:8px 0 12px 26px; white-space:pre-line; }
+.public-material-content { margin:12px 0 18px 26px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.85; color:var(--ink); }
 .public-material-group article { margin: 0 22px; padding: 18px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .public-material-group h3 { margin: 0 0 8px; font-size: 16px; }
 .public-material-group p { margin: 0 0 12px; color: #526071; font-size: 14px; line-height: 1.6; }

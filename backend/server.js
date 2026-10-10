@@ -1,5 +1,5 @@
 import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
-import { interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
+import { materialReady, interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4079,6 +4079,14 @@ async function handleApiRequest(req, res) {
   if (key === "GET /api/interview-material-options") {
     const user = requireUser(store, req);
     return send(res, 200, { userId: user.id, items: interviewMaterialOptions(store, user.id) });
+  }
+
+  if (req.method === "GET" && /^\/api\/interview-materials\/\d+$/.test(pathname)) {
+    requireUser(store, req);
+    const documentId = Number(pathname.split("/").at(-1));
+    const document = store.knowledgeDocuments.find(item => item.id === documentId && isPublicKnowledge(item) && materialReady(item));
+    if (!document) return send(res, 404, { message: "公共资料不存在或当前不可用" });
+    return send(res, 200, { item: { id: document.id, title: document.title, content: document.normalizedText || document.rawText || "", processingVersion: document.processingVersion } });
   }
 
   if (key === "GET /api/interview-materials") {

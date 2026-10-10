@@ -29,3 +29,9 @@
 公共库改为默认收起的单列分组卡片：箭头、标题、数量和实际资料摘要常显；点击标题/箭头展开本组全部资料，各条摘要直接显示并保留勾选，去掉二次“查看摘要”折叠。分组概览去重后截取最多 240 字，不生成虚构摘要。沿用浅色产品样式。
 
 `node --check backend/server.js` 和 `corepack pnpm build` 通过。隔离真实 API fixture 浏览器验证默认收起摘要可见、点击展开、勾选计数、Enter 收起后选择保留；1440×900 和 390×900 检查，手机 scrollWidth=375/innerWidth=390。仅展示改动，不修改检索或历史数据链。截图 `artifacts/materials-selection/overview-expanded.jpg`。本地保存待独立验收。
+
+## 展开完整正文（用户纠正，2026-10-10）
+
+上一版展开仍是摘要，未满足完整内容要求。本次增加登录用户只读 `GET /api/interview-materials/:id`：仅当前有效索引的公共资料可读，返回 id/title/content/processingVersion 四字段；个人资料、未发布草稿及缺失 ID 返回 404。content 使用实际 normalizedText/rawText，不截断。分组展开后按需加载每份正文，保留换行、勾选及元数据；加载/错误/重试可见，收起后取消未完成 UI 更新。内容仅 React text 渲染，不执行上传 HTML。
+
+后端语法检查、构建、个人资料 integration 通过，新增正文完整相等、返回字段白名单、未登录 401、个人及草稿 404 检查。隔离浏览器验证摘要之外的正文末尾实际可见、手机正文无溢出（375/390）及勾选可用，截图 `artifacts/materials-selection/full-content.jpg`。正式后端已按 PID/entry/startTime 核对后重启加载，前端与 Qdrant 复用。未使用真实 AI。保存本地提交，待独立验收。
