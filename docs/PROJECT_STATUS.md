@@ -1,5 +1,9 @@
 # 项目状态
 
+## Docker 冷启动修复（2026-10-10）
+
+本项目启动入口已加入 Docker Desktop/Windows 残留 socket 保护，并纳入 Git；现有快捷方式兼容。两轮冷启动与热启动复用、真实 readiness、Qdrant collection 可读、安全测试及构建通过，待独立验收。未重置 Docker 或删除其他项目容器/卷。交接：`docs/tasks/DOCKER_STARTUP_FIX.md`。
+
 ## 个人面试资料（2026-10-10）
 
 用户明确批准继续个人版。实现上传/新建、正文核对、编辑、删除和失败重试，个人资料仅所属用户可访问，默认不提交模型；确认启用后参与本人的新模拟面试，公共库和公共管理保持分离。已完成隔离测试与桌面/手机浏览器验证，等待 Claude 独立验收。交接：`docs/tasks/PERSONAL_INTERVIEW_MATERIALS.md`。

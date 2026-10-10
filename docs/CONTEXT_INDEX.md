@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 当前运行修复：`docs/tasks/DOCKER_STARTUP_FIX.md`（2026-10-10）；项目启动器新增 Docker 冷启动 socket 残留保护，真实冷/热启动验证完成，待独立验收。
+
 - 长期开发规则：`AGENTS.md`
 - 当前代码与阶段状态：`docs/PROJECT_STATUS.md`
 - 当前任务边界：`docs/CURRENT_TASK.md`
