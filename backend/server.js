@@ -13,7 +13,7 @@ import { extractKnowledgeFile, readKnowledgeUpload } from "./knowledge-file-impo
 import { KnowledgeVectorIndexError, KnowledgeVectorIndexService } from "./knowledge-vector-index.js";
 import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
 import { validateKnowledgeClaims, sourceAvailability } from "./citation-validator.js";
-import { buildCandidatePromptPayload, buildReportRetrievalPlans, createReportInputHash, allowedBaseEvidence, reportGenerationConfigHash } from "./grounded-report-service.js";
+import { buildCandidatePromptPayload, buildReportRetrievalPlans, createReportInputHash, allowedBaseEvidence, normalizeBaseEvidence, reportGenerationConfigHash } from "./grounded-report-service.js";
 import { buildGroundedReportPrompt, groundedReportPromptVersion, groundedReportSchema } from "./grounded-report-prompt.js";
 import { buildResumeSuggestionPrompt, buildResumeSuggestionSchema, resumeSuggestionPromptVersion } from "./resume-suggestion-prompt.js";
 import {
@@ -1748,7 +1748,7 @@ function normalizeGroundedReport(data, match) {
     const claimType = String(claim?.claimType || "").trim();
     if (!["BASE_MATCH_FACT", "KNOWLEDGE_CLAIM", "MODEL_SUGGESTION"].includes(claimType)) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI 返回未知 Claim 类型");
     const citations = Array.isArray(claim?.citations) ? claim.citations : null;
-    const claimBaseEvidence = Array.isArray(claim?.baseEvidence) ? [...new Set(claim.baseEvidence.map((item) => String(item || "").trim()).filter(Boolean))] : null;
+    const claimBaseEvidence = Array.isArray(claim?.baseEvidence) ? [...new Set(claim.baseEvidence.map((item) => normalizeBaseEvidence(item || "")).filter(Boolean))] : null;
     if (!citations || !claimBaseEvidence) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "AI Claim 缺少结构字段");
     if (claimType === "BASE_MATCH_FACT") {
       if (citations.length || !claimBaseEvidence.length || claimBaseEvidence.some((item) => !baseEvidence.has(item))) throw reportFailure(422, "REPORT_INVALID_RESPONSE", "基础匹配事实没有引用已验证证据");
@@ -1783,13 +1783,24 @@ function resolveMatchReportContext(store, user, application, match) {
 }
 
 async function generateAiGroundedReport(store, userId, context, match, candidates) {
-  const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates });
-  const ai = await runAiJson(store, userId, { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true, maxOutputTokens: 8192, requestTimeoutMs: 60000 });
-  if (!ai.ok) {
-    const code = mappedAiFailureCode(ai, { notConfigured: "REPORT_PROVIDER_NOT_CONFIGURED", invalidResponse: "REPORT_INVALID_RESPONSE", unavailable: "REPORT_PROVIDER_UNAVAILABLE" });
-    throw reportFailure(ai.status || 502, code, ai.error || "报告生成服务不可用");
+  const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates, baseEvidence: [...allowedBaseEvidence(match)] });
+  const request = { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true, maxOutputTokens: 8192, requestTimeoutMs: 60000 };
+  const normalize = (ai) => {
+    if (!ai.ok) {
+      const code = mappedAiFailureCode(ai, { notConfigured: "REPORT_PROVIDER_NOT_CONFIGURED", invalidResponse: "REPORT_INVALID_RESPONSE", unavailable: "REPORT_PROVIDER_UNAVAILABLE" });
+      throw reportFailure(ai.status || 502, code, ai.error || "报告生成服务不可用");
+    }
+    return normalizeGroundedReport(ai.data, match);
+  };
+  const ai = await runAiJson(store, userId, request);
+  try { return normalize(ai); } catch (error) {
+    // Only correct a parsed report's structural/evidence failure, never retry an outage or truncation.
+    if (!ai.ok || error.code !== "REPORT_INVALID_RESPONSE") throw error;
+    const corrected = await runAiJson(store, userId, { ...request,
+      user: `${request.user}\n\nValidation correction (one attempt only): ${error.message}. Generate a complete corrected report. BASE_MATCH_FACT baseEvidence must copy complete strings from the allowed list, with citations []. Omit unsupported claims. KNOWLEDGE_CLAIM must have baseEvidence [] and exact knowledge citations; MODEL_SUGGESTION must begin with 建议： and have both evidence arrays empty. Never invent or silently fix personal facts.`,
+    });
+    return normalize(corrected);
   }
-  return normalizeGroundedReport(ai.data, match);
 }
 
 async function executeGroundedMatchReport(store, user, application, match, options) {

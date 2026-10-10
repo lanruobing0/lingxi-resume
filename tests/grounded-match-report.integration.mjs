@@ -129,6 +129,8 @@ async function main() {
     if (state.mode === "timeout") { await wait(250); return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: JSON.stringify(reportPayload("valid")) })); }
     if (state.mode === "invalidJson") return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: "not-json" }));
     const request = JSON.parse(body); const prompt = request.input?.[1]?.content?.[0]?.text || request.messages?.[1]?.content || ""; const match = prompt.match(/"retrievalRunId":(\d+)/); const output = reportPayload(state.mode, Number(match?.[1] || 1));
+    if (state.mode === "correctableBase" && !prompt.includes("Validation correction") || state.mode === "forgedBase") output.claims[0].baseEvidence = ["伪造的个人经验"];
+    if (state.mode === "whitespaceBase") output.claims[0].baseEvidence = ["Java\n匹配事实"];
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: JSON.stringify(output) }));
   });
   const embedding = createServer(async (_req, res) => res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ data: [{ embedding: [1, 0, 0, 0] }] })));
@@ -196,6 +198,20 @@ async function main() {
     assert.ok(result.data.item.reportVersion > 1, "new generation must create a new report version rather than overwrite history");
     assert.equal((await call(token, `/api/match-reports/${reportId}`, undefined, 200)).data.item.content.executiveSummary, "Java 岗位匹配报告。", "failed reports must not overwrite previous successful body");
     state.mode = "noKnowledge"; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201); assert.equal(result.data.item.status, "DEGRADED"); assert.equal(result.data.item.evidenceCoverage.validKnowledgeClaimCount, 0);
+    let correctionRequests = state.providerBodies.length;
+    state.mode = "correctableBase";
+    result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);
+    assert.equal(result.data.item.status, "COMPLETED");
+    assert.equal(state.providerBodies.length - correctionRequests, 2, "only one parsed report correction");
+    assert.ok(state.providerBodies.at(-1).includes("Allowed BASE_MATCH_FACT baseEvidence strings"));
+    correctionRequests = state.providerBodies.length;
+    state.mode = "forgedBase";
+    result = await call(token, "/api/job-applications/1/reports", { matchId: 1 });
+    assert.equal(result.data.failureCode, "REPORT_INVALID_RESPONSE");
+    assert.equal(state.providerBodies.length - correctionRequests, 2, "persistent forged evidence must stop after one correction");
+    state.mode = "whitespaceBase";
+    result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);
+    assert.deepEqual(result.data.item.content.claims[0].baseEvidence, ["Java 匹配事实"]);
     for (const mode of ["empty", "onlyInvalid", "badEnum", "invalidJson", "provider503"]) { state.mode = mode; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }); assert.ok(result.status >= 400, mode); if (mode === "onlyInvalid") assert.equal(result.data.failureCode, "REPORT_NO_SUPPORTED_CLAIMS"); }
     for (const mode of ["responsesLength", "chatLength"]) {
       state.mode = mode;

@@ -51,3 +51,4 @@ export function buildCandidatePromptPayload(traces) {
 }
 
 export function allowedBaseEvidence(match) { return new Set(evidenceFromMatch(match)); }
+export const normalizeBaseEvidence = text;

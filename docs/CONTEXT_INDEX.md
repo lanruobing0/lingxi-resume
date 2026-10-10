@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新修复：`docs/tasks/REPORT_BASE_EVIDENCE.md`，报告基础事实证据白名单与一次纠正，待独立验收。
+
 - 最新修复：`docs/tasks/REPORT_OUTPUT_LIMIT.md`，报告输出截断额度与错误归类，待独立验收。
 
 - 最新修复：`docs/tasks/MATCH_EVIDENCE_VALIDATION.md`，匹配原文证据解码校验与经历引用约束，待独立验收。

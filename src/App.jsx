@@ -3258,7 +3258,8 @@ function reportStatusLabel(status) {
 
 function GroundedReportFailure({ failure, onRetry, canRetry }) {
   const code = failure?.code === "REPORT_PROVIDER_UNAVAILABLE" && failure?.message === "AI 输出达到长度上限，报告未生成完整" ? "AI_OUTPUT_TRUNCATED" : failure?.code || "REPORT_RETRIEVAL_FAILED";
-  return <div className="grounded-report-failure" role="alert"><div><strong>报告未能完整生成</strong><p>{reportFailureMessage(code)}</p><small>错误代码：{code}</small></div>{canRetry && <button className="white-small" onClick={onRetry}><RefreshCw size={15} />重新生成</button>}</div>;
+  const message = code === "REPORT_INVALID_RESPONSE" && failure?.message === "基础匹配事实没有引用已验证证据" ? "AI 报告中的基础事实未引用已验证证据，系统没有接受这份报告。请重新生成。" : reportFailureMessage(code);
+  return <div className="grounded-report-failure" role="alert"><div><strong>报告未能完整生成</strong><p>{message}</p><small>错误代码：{code}</small></div>{canRetry && <button className="white-small" onClick={onRetry}><RefreshCw size={15} />重新生成</button>}</div>;
 }
 
 function GroundedReportHistory({ reports, selectedReportId, onSelect }) {

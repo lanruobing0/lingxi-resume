@@ -1,4 +1,4 @@
-export const groundedReportPromptVersion = "grounded-match-report-v1";
+export const groundedReportPromptVersion = "grounded-match-report-v2";
 
 const citationSchema = {
   type: "object", additionalProperties: false,
@@ -27,7 +27,7 @@ export const groundedReportSchema = {
   },
 };
 
-export function buildGroundedReportPrompt({ aiResume, jobDescription, parseResult, match, candidates }) {
+export function buildGroundedReportPrompt({ aiResume, jobDescription, parseResult, match, candidates, baseEvidence = [] }) {
   return {
     system: `You generate an evidence-grounded Chinese job-match report. Use only the locked base-match facts and supplied knowledge candidates. ${groundedReportPromptVersion}. A KNOWLEDGE_CLAIM must express only general knowledge directly supported by its candidate quotes: cite candidate chunk IDs and quote a continuous exact substring. Do not infer that the user, candidate, or resume has any ability, experience, result, employer, project, score, number, duration, tool, or skill from knowledge material. User facts may only be BASE_MATCH_FACT with exact supplied baseEvidence and no knowledge citation. A knowledge claim must not add a number, duration, tool, skill, project, company, result, positive conclusion, or certainty absent from the quote; never turn advice, possibility, limitation, or negation into a proven fact. MODEL_SUGGESTION must begin with “建议：” and must not be presented as a fact. If strict support is unavailable, omit the KNOWLEDGE_CLAIM or use MODEL_SUGGESTION. Never invent sources, scores, experience, employers, projects, or skills. Do not edit the resume and do not describe agent actions.`,
     user: [
@@ -35,6 +35,8 @@ export function buildGroundedReportPrompt({ aiResume, jobDescription, parseResul
       `Locked JD normalized text: ${jobDescription.normalizedText}`,
       `Locked JD parse result: ${JSON.stringify(parseResult.parsedData)}`,
       `Locked base match facts: ${JSON.stringify(match.report)}`,
+      `Allowed BASE_MATCH_FACT baseEvidence strings: ${JSON.stringify(baseEvidence)}`,
+      'For each BASE_MATCH_FACT, citations must be [] and baseEvidence must copy one or more complete strings from the allowed list exactly. Do not use field names, evidence IDs, newly paraphrased text or arbitrary resume excerpts as baseEvidence. If no allowed string supports the claim, omit the claim. Keep claims concise and avoid repeating the same evidence throughout the report.',
       `Knowledge candidates grouped by retrieval run: ${JSON.stringify(candidates)}`,
       "Return only the strict JSON schema. Do not include contact information or any content not in the supplied materials.",
     ].join("\n"),
