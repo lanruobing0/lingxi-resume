@@ -905,7 +905,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
 const captchaStaleCheckIntervalMs = 30 * 1000;
 
 function firstAnalysisReadyVersionId(versions = []) {
-  return String(versions.find((version) => version.isAnalysisReady)?.id || "");
+  return String([...versions].filter((version) => version.isAnalysisReady).sort((a, b) => Number(b.resumeVersion || b.version) - Number(a.resumeVersion || a.version))[0]?.id || "");
 }
 
 function GuestWorkspaceNotice({ pageLabel, go }) {
@@ -3078,6 +3078,10 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
   if (mode === "detail" && detail?.item) {
     const job = detail.item;
     const parsed = detail.currentParseResult?.parsedData;
+    const boundApplication = applications.find(item => String(item.id) === String(selectedApplicationId));
+    const boundResume = resumes.find(item => item.id === boundApplication?.resumeId);
+    const selectionDiffersFromTask = Boolean(boundApplication && (String(boundApplication.resumeId) !== String(selectedResumeId) || String(boundApplication.resumeVersionId) !== String(selectedResumeVersionId)));
+    const taskUsesOlderVersion = Boolean(boundApplication && Number(boundResume?.version) > Number(boundApplication.resumeVersion));
     return (
       <section className="job-page job-detail-page">
         {isInterviewPage && <div className="job-page-head interview-page-head"><div><h2>{job.title}</h2><p>{job.companyName || ""} · 锁定简历 v{selectedInterview?.resumeVersion || applications.find(item => String(item.id) === String(selectedApplicationId))?.resumeVersion || "—"}</p></div><div className="job-page-actions"><button className="white-small" onClick={() => { window.location.hash = "#interview"; }}>返回面试记录</button><button className="white-small" onClick={() => navigateWorkspace("match")}>查看岗位报告</button></div></div>}
@@ -3089,7 +3093,10 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
         <section className="job-application-panel job-context-bar">
           <div><h3>选择简历与版本</h3><p>分析任务会锁定所选简历快照与 JD 解析结果。</p></div>
           <div className="job-application-controls"><select aria-label="分析简历" value={selectedResumeId} onChange={(event) => selectResume(event.target.value)}><option value="">选择简历</option>{resumes.map((resumeItem) => <option key={resumeItem.id} value={resumeItem.id}>{resumeItem.title || `简历 #${resumeItem.id}`}</option>)}</select><select aria-label="锁定简历版本" value={selectedResumeVersionId} onChange={(event) => setSelectedResumeVersionId(event.target.value)} disabled={!selectedResumeId}><option value="">选择明确版本</option>{resumeVersions.map((version) => <option key={version.id} value={version.id} disabled={!version.isAnalysisReady}>v{version.resumeVersion || version.version} · {formatResumeDate(version.createdAt)}{version.isAnalysisReady ? "" : " · 缺少完整快照"}</option>)}</select><button className="black-small" disabled={working || !parsed || !selectedResumeId || !selectedResumeVersionId} onClick={createApplication}>创建分析任务</button></div>
-          {activeResumeId && <button className="link-button" onClick={() => onOpenResume?.(activeResumeId)}>打开当前简历</button>}
+          {selectedResumeId && <button className="link-button" onClick={() => onOpenResume?.(Number(selectedResumeId))}>打开所选简历</button>}
+          {boundApplication && <p>当前分析任务使用简历 #{boundApplication.resumeId} · v{boundApplication.resumeVersion} 的已保存快照。</p>}
+          {taskUsesOlderVersion && <p className="job-error" role="status">当前简历已更新至 v{boundResume.version}，下方仍是 v{boundApplication.resumeVersion} 的分析。修改简历不会改变旧任务；请选择最新版本，点击“创建分析任务”后重新生成报告。</p>}
+          {selectionDiffersFromTask && <p className="job-error" role="status">上方新选择尚未用于当前任务。请点击“创建分析任务”，再生成所选简历版本的报告。</p>}
           {!resumes.length && <button className="link-button" onClick={() => go?.("resume")}>先创建简历</button>}
           {selectedResumeId && !resumeVersions.length && <p className="job-error">该简历暂无可选版本，请先保存简历后再创建任务。</p>}
           {selectedResumeId && resumeVersions.length > 0 && !resumeVersions.some((version) => version.isAnalysisReady) && <p className="job-error">现有历史版本缺少完整快照。请到“我的简历”打开这份简历并保存一次，生成可用于分析的新版本。</p>}
@@ -3110,7 +3117,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
         )}
         {!isInterviewPage && workspaceTab === "match" && <>
         <section className="job-match-panel">
-          <div className="job-match-head"><div><h3>基础岗位匹配</h3><p>{selectedApplicationId ? "基于已锁定的简历版本与 JD 解析结果生成，不会修改你的简历。" : "先创建并选择一个求职分析任务。"}</p></div><button className="black-small" disabled={working || !selectedApplicationId} onClick={() => createMatch()}>{working ? <><LoaderCircle className="spin" size={16} />正在生成报告</> : <><Gauge size={16} />生成匹配报告</>}</button></div>
+          <div className="job-match-head"><div><h3>基础岗位匹配</h3><p>{selectedApplicationId ? "基于已锁定的简历版本与 JD 解析结果生成，不会修改你的简历。" : "先创建并选择一个求职分析任务。"}</p></div><button className="black-small" disabled={working || !selectedApplicationId || selectionDiffersFromTask} onClick={() => createMatch()}>{working ? <><LoaderCircle className="spin" size={16} />正在生成报告</> : <><Gauge size={16} />生成匹配报告</>}</button></div>
           {working && <ResultSkeleton lines={5} />}
           {!working && selectedMatch?.status === "COMPLETED" && <ResumeJobMatchReport match={selectedMatch} />}
           {!working && (selectedMatch?.status === "FAILED" || matchFailureMessage) && <p className="job-error">本次匹配失败：{selectedMatch?.failureMessage || matchFailureMessage}</p>}
@@ -3124,7 +3131,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
               <h3 id="grounded-report-title">AI 岗位匹配报告</h3>
               <p>{selectedApplicationId && selectedMatch?.status === "COMPLETED" ? `将基于简历 v${selectedMatch.resumeVersion}、当前 JD 与基础匹配 ${selectedMatch.totalScore} 分生成；不会修改简历。` : "请先选择一份已完成的基础岗位匹配报告。"}</p>
             </div>
-            <button className="black-small" disabled={reportWorking || selectedReport?.status === "PENDING" || selectedMatch?.status !== "COMPLETED" || !selectedApplicationId} onClick={createGroundedReport}>
+            <button className="black-small" disabled={reportWorking || selectedReport?.status === "PENDING" || selectedMatch?.status !== "COMPLETED" || !selectedApplicationId || selectionDiffersFromTask} onClick={createGroundedReport}>
               {reportWorking ? <><LoaderCircle className="spin" size={16} />正在生成</> : <><Sparkles size={16} />生成 AI 岗位匹配报告</>}
             </button>
           </div>

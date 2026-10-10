@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新修复：`docs/tasks/REPORT_RESUME_VERSION_BINDING.md`，Agent 简历旧 v1 报告提示与选择绑定保护，待独立验收。
+
 - 最新修复：`docs/tasks/RESUME_AUTOSAVE.md`，简历编辑器真正自动保存、串行请求与失败重试，完成待独立验收。
 
 - 最新界面调整：`docs/tasks/JD_LIST_DELETE.md`，岗位 JD 列表确认删除，完成待独立验收。
