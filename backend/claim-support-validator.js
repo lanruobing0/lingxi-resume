@@ -1,4 +1,4 @@
-export const claimSupportVersion = "claim-support-v5";
+export const claimSupportVersion = "claim-support-v6";
 export const minimumSemanticCoverage = 0.55;
 export const minimumCitationClauseCoverage = 0.2;
 
@@ -131,7 +131,10 @@ export function validateClaimSupport({ claimText, citations, localQuotes }) {
   const resultMetrics = metrics(claimText, quotes);
   const claim = String(claimText || "");
   if (!quotes.length) return failure("INSUFFICIENT_SEMANTIC_OVERLAP", resultMetrics);
-  const attributionText = claim.replace(/资源(?:需|需要|必须)?属于当前用户|用户规模/g, phrase => quotes.some(quote => normalize(quote).includes(normalize(phrase))) ? "技术资源" : phrase);
+  // These are technical scope controls or explicit non-attribution statements.
+  // Mask only the complete phrase when supported verbatim by a local quote;
+  // any applicant assertion elsewhere in the claim still triggers the guard.
+  const attributionText = claim.replace(/资源(?:需|需要|必须)?属于当前用户|用户规模|检索前执行用户或资料范围过滤|不代表候选人有相关项目经历/g, phrase => quotes.some(quote => normalize(quote).includes(normalize(phrase))) ? "技术资料边界" : phrase);
   if (userAttribution.test(attributionText)) return failure("UNSUPPORTED_USER_ATTRIBUTION", resultMetrics);
   if (resultMetrics.numbers.some((number) => !resultMetrics.quoteNumbers.includes(number))) return failure("UNSUPPORTED_NUMBER", resultMetrics);
   if (resultMetrics.entities.some((entity) => !resultMetrics.quoteEntities.includes(entity))) return failure("UNSUPPORTED_ENTITY", resultMetrics);
