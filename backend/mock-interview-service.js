@@ -18,6 +18,7 @@ export function interviewGenerationConfigHash(options = {}) {
     questionCount: options.questionCount,
     searchMode: options.searchMode,
     useReranker: options.useReranker,
+    materialSelection: options.materialSelection || null,
     retrievalPlanVersion: "job-resume-gap-direction-v1",
   })).digest("hex");
 }

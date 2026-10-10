@@ -60,12 +60,13 @@ await page.route('**/api/**', async route => {
     data = { deletedId: Number(path.split('/').at(-1)) };
   }
   else if (path === '/api/job-applications/9/interview-sessions' && route.request().method() === 'POST') {
-    assert.deepEqual(route.request().postDataJSON(), { matchReportId: 50, questionCount: 4, searchMode: 'HYBRID', useReranker: false });
+    assert.deepEqual(route.request().postDataJSON(), { matchReportId: 50, questionCount: 4, searchMode: 'HYBRID', useReranker: false, materialSelection: {mode:'AUTO',documentIds:[]} });
     createCount++;
     const created = { ...session, id: 22, answeredCount: 0, questions: [{ ...session.questions[0], id: 23, answerId: null }] };
     historySessions.unshift(created);
     data = { item: created };
   }
+  else if (path === '/api/interview-material-options') data = {userId:1,items:[]};
   else if (path === '/api/job-applications/9/interview-sessions') data = { items: historySessions };
   else if (path === '/api/interview-sessions/20') data = { item: session };
   else if (path === '/api/interview-sessions/22') data = { item: historySessions.find(item => item.id === 22) };
@@ -287,6 +288,7 @@ try {
   await page.getByRole('button', { name: '进入面试准备', exact: true }).click();
   await visible('.interview-page-head');
   await page.getByRole('button', { name: '开始新的模拟面试', exact: true }).click();
+  await page.getByRole('button', { name: '确认资料并创建面试', exact: true }).click();
   await visible('.interview-answer-area textarea');
   assert.equal(createCount, 1);
   assert.match(page.url(), /session=22/);

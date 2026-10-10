@@ -7,6 +7,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { startMockServices } from "./vector-index.integration.mjs";
 import { sourceAvailability } from "../backend/citation-validator.js";
+import { KnowledgeRetrievalService } from "../backend/knowledge-retrieval-service.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const mocks = await startMockServices();
@@ -42,6 +43,13 @@ try {
   const must=mocks.state.searchFilters.at(-1).must;assert.ok(must.find(rule=>rule.key==="documentId"&&rule.match.any.includes(id)&&!rule.match.any.includes(otherId)));
   mocks.state.ignoreSearchFilters=true;
   const leaked=await call(2,"/api/personal-materials/search",{query:"commonneedle",mode:"VECTOR"});assert.ok(leaked.results.every(result=>result.documentId!==otherId));
+  const selectionStore=JSON.parse(await readFile(path.join(dir,"store.json"),"utf8"));
+  const selectedService=new KnowledgeRetrievalService({env:{...process.env,VECTOR_STORE_DRIVER:"qdrant",EMBEDDING_BASE_URL:`http://127.0.0.1:${mocks.embeddingPort}/v1`,EMBEDDING_API_KEY:"personal-test-only",EMBEDDING_MODEL:"mock-embed",EMBEDDING_DIMENSION:"4",QDRANT_URL:`http://127.0.0.1:${mocks.qdrantPort}`}});
+  for(const mode of ["KEYWORD","VECTOR","HYBRID"]){
+    const selected=await selectedService.search(selectionStore,{query:"commonneedle",mode,filters:{allowedDocumentIds:[otherId]}},2,{includePersonal:true,allowedDocumentIds:[id]});
+    assert.ok(selected.results.length);assert.ok(selected.results.every(result=>result.documentId===id),"unselected PUBLIC and foreign PRIVATE documents must be excluded even when Qdrant ignores filters");
+    const empty=await selectedService.search(selectionStore,{query:"commonneedle",mode},2,{includePersonal:true,allowedDocumentIds:[]});assert.deepEqual(empty.results,[],"empty internal allowlist must never mean all documents");
+  }
   const revoked=await call(2,`/api/personal-materials/${id}`,{aiConsent:false},200,"PUT");assert.equal(revoked.item.aiConsent,false);
   assert.equal((await call(2,"/api/personal-materials/search",{query:"commonneedle",mode:"KEYWORD"})).results.some(result=>result.documentId===id),false);
   await call(2,`/api/personal-materials/${id}`,{aiConsent:true},200,"PUT");

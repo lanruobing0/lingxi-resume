@@ -6,6 +6,10 @@ import { createServer } from "vite";
 const vite = await createServer({ logLevel: "error", server: { middlewareMode: true }, appType: "custom" });
 try {
   const { MockInterviewWorkspace } = await vite.ssrLoadModule("/src/App.jsx");
+  const { InterviewMaterialHistory } = await vite.ssrLoadModule("/src/InterviewMaterialPicker.jsx");
+  const selectedHistory = renderToStaticMarkup(React.createElement(InterviewMaterialHistory, { selection: { mode: "MANUAL", documentIds: [1, 2], usedDocumentIds: [1], documents: [{ id: 1, title: "公共准备", scope: "PUBLIC", processingVersion: 2 }, { id: 2, title: "个人笔记", scope: "PRIVATE", processingVersion: 3 }] } }));
+  assert.match(selectedHistory, /公共准备/); assert.match(selectedHistory, /个人笔记/); assert.match(selectedHistory, /已召回/); assert.match(selectedHistory, /未召回/);
+  assert.match(renderToStaticMarkup(React.createElement(InterviewMaterialHistory)), /早于资料选择功能/);
   const handlers = { onCreate() {}, onSelectSession() {}, onSelectQuestion() {}, onSubmitAnswer() {}, onComplete() {}, onRefresh() {} };
   const questions = [
     { id: 1, sequence: 1, question: "请介绍简历中的接口项目。", category: "RESUME", difficulty: "MEDIUM", rationale: "核实项目取舍", answerId: 11, sourceRefs: [{ sourceType: "RESUME" }] },

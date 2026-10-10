@@ -1,4 +1,5 @@
 import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
+import { interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2403,9 +2404,11 @@ function resolveInterviewContext(store, user, application, report) {
 
 async function executeInterviewSession(store, user, application, report, options) {
   const context = resolveInterviewContext(store, user, application, report);
+  const materialSelection = options.materialSelection || resolveMaterialSelection(store, user.id);
+  verifyMaterialSelection(store, user.id, materialSelection);
   const aiResume = buildAiResumeContext(context.resumeSnapshot);
   const config = getAiConfig(store, user.id);
-  const generationConfigHash = interviewGenerationConfigHash(options);
+  const generationConfigHash = interviewGenerationConfigHash({ ...options, materialSelection });
   const session = {
     id: nextId(store.interviewSessions),
     userId: user.id,
@@ -2425,6 +2428,7 @@ async function executeInterviewSession(store, user, application, report, options
     generationConfigHash,
     inputHash: "",
     questionCount: options.questionCount,
+    materialSelection: structuredClone(materialSelection),
     retrievalRunIds: [],
     retrievalStatus: "PENDING",
     failureCode: null,
@@ -2438,10 +2442,15 @@ async function executeInterviewSession(store, user, application, report, options
     let retrieval = null;
     const retrievalRunOffset = store.knowledgeRetrievalRuns.length;
     try {
-      retrieval = await knowledgeRetrievalService().search(store, buildInterviewRetrievalRequest({ aiResume, parseResult: context.parseResult, matchReport: report, match: context.match, ...options }), user.id, { includePersonal: true });
-      session.retrievalRunIds = [retrieval.run.id];
-      session.retrievalStatus = retrieval.degraded || retrieval.rerankerFallback ? "DEGRADED" : "COMPLETED";
-      if (retrieval.rerankerFallback && !retrieval.run.degraded) {
+      if (materialSelection.mode !== "NONE") {
+        const retrievalRequest = buildInterviewRetrievalRequest({ aiResume, parseResult: context.parseResult, matchReport: report, match: context.match, ...options });
+        retrievalRequest.filters = {};
+        retrieval = await knowledgeRetrievalService().search(store, retrievalRequest, user.id, { includePersonal: true, allowedDocumentIds: materialSelection.documentIds });
+        session.retrievalRunIds = [retrieval.run.id];
+        session.materialSelection.usedDocumentIds = [...new Set(retrieval.results.map(item => item.documentId))];
+        session.retrievalStatus = retrieval.degraded || retrieval.rerankerFallback ? "DEGRADED" : "COMPLETED";
+      } else session.retrievalStatus = "SKIPPED";
+      if (retrieval?.rerankerFallback && !retrieval.run.degraded) {
         session.retrievalStatus = "DEGRADED";
         session.failureCode = retrieval.rerankerFailureCode || "INTERVIEW_RERANKER_DEGRADED";
       }
@@ -2489,8 +2498,9 @@ async function executeInterviewSession(store, user, application, report, options
       retrievalRunIds: session.retrievalRunIds,
       promptVersion: session.promptVersion,
       generationConfigHash,
+      materialSelection: session.materialSelection,
     }));
-    const degraded = report.status === "DEGRADED" || session.retrievalStatus !== "COMPLETED" || !sources.some((source) => source.sourceType === "KNOWLEDGE");
+    const degraded = report.status === "DEGRADED" || (materialSelection.mode !== "NONE" && (session.retrievalStatus !== "COMPLETED" || !sources.some((source) => source.sourceType === "KNOWLEDGE")));
     session.status = degraded ? "DEGRADED" : "IN_PROGRESS";
     if (degraded && !session.failureCode) session.failureCode = !sources.some((source) => source.sourceType === "KNOWLEDGE") ? "INTERVIEW_NO_KNOWLEDGE_EVIDENCE" : "INTERVIEW_RETRIEVAL_DEGRADED";
     if (degraded && !session.failureMessage) session.failureMessage = "面试已降级生成；检索状态或知识证据不完整。";
@@ -3549,12 +3559,15 @@ async function handleApiRequest(req, res) {
     if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "INTERVIEW_INPUT_INVALID" });
     const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
     if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "INTERVIEW_REPORT_NOT_FOUND" });
+    let materialSelection;
+    try { materialSelection = resolveMaterialSelection(store, user.id, body.materialSelection); }
+    catch (error) { return send(res, error.status || 400, { message: error.message, failureCode: error.code }); }
     if (body.async === true) {
-      const job = await jobQueue.enqueue(store, { type: "MOCK_INTERVIEW_GENERATION", userId: user.id, resourceId: application.id, payload: { matchReportId, options: { questionCount, searchMode, useReranker: body.useReranker === true } } });
+      const job = await jobQueue.enqueue(store, { type: "MOCK_INTERVIEW_GENERATION", userId: user.id, resourceId: application.id, payload: { matchReportId, options: { questionCount, searchMode, useReranker: body.useReranker === true, materialSelection } } });
       return send(res, 202, { job: publicJob(job) });
     }
     try {
-      const item = await executeInterviewSession(store, user, application, report, { questionCount, searchMode, useReranker: body.useReranker === true });
+      const item = await executeInterviewSession(store, user, application, report, { questionCount, searchMode, useReranker: body.useReranker === true, materialSelection });
       return send(res, 201, { item: publicInterviewSession(store, item, { includeQuestions: true }) });
     } catch (error) {
       return send(res, error.status || 502, { message: error.message || "模拟面试生成失败", failureCode: error.code || "INTERVIEW_GENERATION_FAILED" });
@@ -4063,8 +4076,13 @@ async function handleApiRequest(req, res) {
     }
   }
 
+  if (key === "GET /api/interview-material-options") {
+    const user = requireUser(store, req);
+    return send(res, 200, { userId: user.id, items: interviewMaterialOptions(store, user.id) });
+  }
+
   if (key === "GET /api/interview-materials") {
-    requireUser(store, req);
+    const user = requireUser(store, req);
     // Public library exposes only current, indexed documents and a display
     // allowlist. Raw source text and admin/audit/provider metadata stay private.
     const items = store.knowledgeDocuments
@@ -4077,8 +4095,9 @@ async function handleApiRequest(req, res) {
         seniority: document.seniority, skillTags: document.skillTags,
         characterCount: (document.rawText || "").length, updatedAt: document.updatedAt,
         sourceType: document.sourceType, sourceName: document.sourceName,
+        summary: interviewMaterialOptions(store, user.id).find(item => item.id === document.id)?.summary || "暂无摘要",
       }));
-    return send(res, 200, { items });
+    return send(res, 200, { userId: user.id, items });
   }
 
   if (key === "GET /api/admin/knowledge-documents") {

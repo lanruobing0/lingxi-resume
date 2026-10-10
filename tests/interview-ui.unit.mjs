@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { resolveMaterialSelection, verifyMaterialSelection } from "../backend/interview-material-selection.js";
+import { interviewGenerationConfigHash } from "../backend/mock-interview-service.js";
 import {
   feedbackTextItems,
   interviewApiRequest,
@@ -25,4 +27,12 @@ assert.equal(JSON.parse(interviewApiRequest("create", { applicationId: 5, matchR
 assert.equal(JSON.parse(interviewApiRequest("answer", { sessionId: 8, questionId: 2, answerText: "真实回答" }).options.body).answerText, "真实回答");
 assert.equal(interviewApiRequest("complete", { sessionId: 8 }).path, "/api/interview-sessions/8/complete");
 
+const selectionStore = { knowledgeDocuments: [{ id: 1, title: "资料", scope: "PUBLIC", status: "PROCESSED", vectorStatus: "INDEXED", processingVersion: 1, indexedProcessingVersion: 1, activeIndexRunId: 7 }], knowledgeChunks: [] };
+const confirmed = resolveMaterialSelection(selectionStore, 1, { mode: "MANUAL", documentIds: [1] });
+verifyMaterialSelection(selectionStore, 1, confirmed);
+selectionStore.knowledgeDocuments[0].activeIndexRunId = 8;
+assert.throws(() => verifyMaterialSelection(selectionStore, 1, confirmed), error => error.status === 409);
+assert.equal(confirmed.documents[0].indexRunId, 7);
+assert.notEqual(interviewGenerationConfigHash({ materialSelection: confirmed }), interviewGenerationConfigHash({ materialSelection: { mode: "NONE", documents: [], documentIds: [] } }));
+assert.deepEqual(JSON.parse(interviewApiRequest("create", { applicationId: 5, matchReportId: 7, materialSelection: { mode: "NONE", documentIds: [] } }).options.body).materialSelection, { mode: "NONE", documentIds: [] });
 console.log("interview UI state tests passed");

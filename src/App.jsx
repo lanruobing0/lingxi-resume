@@ -53,6 +53,7 @@ import { shouldRefreshCaptcha } from "./captchaState";
 import { InterviewLibrary } from "./InterviewLibrary";
 import { KnowledgeFileImport } from "./KnowledgeFileImport";
 import { InterviewMaterials } from "./InterviewMaterials";
+import { InterviewMaterialPicker, InterviewMaterialHistory } from "./InterviewMaterialPicker";
 import { jobWorkspaceTabs, readJobWorkspaceRoute, jobWorkspaceHash, collectJobGroupEvidence } from "./jobWorkspaceState";
 
 const appNav = [
@@ -2980,7 +2981,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
     }
   };
 
-  const createInterviewSession = async () => {
+  const createInterviewSession = async (materialSelection) => {
     const application = applications.find((item) => item.id === Number(selectedApplicationId));
     if (!application || !selectedReport?.id || !["COMPLETED", "DEGRADED"].includes(selectedReport.status)) {
       setInterviewError({ code: "INTERVIEW_REPORT_NOT_READY", message: "请先打开一份已完成或降级可用的 AI 岗位匹配报告。" });
@@ -2989,7 +2990,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
     setInterviewWorking(true);
     setInterviewError(null);
     try {
-      const request = interviewApiRequest("create", { applicationId: application.id, matchReportId: selectedReport.id });
+      const request = interviewApiRequest("create", { applicationId: application.id, matchReportId: selectedReport.id, materialSelection });
       const data = await apiRequest(request.path, request.options);
       const session = data.item || null;
       setSelectedInterview(session);
@@ -3001,9 +3002,11 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
       }
       await loadInterviewSessions(String(application.id), { autoSelect: false });
       notify(session?.status === "DEGRADED" ? "模拟面试已创建，知识检索降级但仍可继续。" : "模拟面试已创建，题目已绑定当前简历版本与岗位报告。");
+      return true;
     } catch (error) {
       await loadInterviewSessions(String(application.id), { autoSelect: false });
       setInterviewError({ code: error.failureCode || "INTERVIEW_GENERATION_FAILED", message: error.message });
+      return false;
     } finally {
       setInterviewWorking(false);
     }
@@ -3202,6 +3205,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           working={interviewWorking || historyDeleting}
           error={interviewError}
           onCreate={createInterviewSession}
+          request={apiRequest}
           onSelectSession={(sessionId) => {
             window.history.replaceState(null, "", jobWorkspaceHash({ tab: "interview", jobId: job.id, applicationId: selectedApplicationId, sessionId }));
             window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -3346,6 +3350,7 @@ function SuggestionDiff({ before, after }) {
 
 export function MockInterviewWorkspace({
   draftCache,
+  request,
   applicationId,
   report,
   sessions = [],
@@ -3366,6 +3371,7 @@ export function MockInterviewWorkspace({
 }) {
   const [answerDraft, setAnswerDraft] = useState("");
   const [showSources, setShowSources] = useState(false);
+  const [choosingMaterials, setChoosingMaterials] = useState(false);
   const questions = session?.questions || [];
   const currentQuestion = questions[activeQuestionIndex] || questions[0] || null;
   const currentRecord = currentQuestion ? feedbackByQuestion[currentQuestion.id] : null;
@@ -3401,11 +3407,13 @@ export function MockInterviewWorkspace({
           <h3 id="mock-interview-title">围绕岗位报告逐题练习</h3>
           <p>{applicationId ? "题目绑定当前求职任务的简历版本、JD、匹配缺口与知识检索结果；刷新后可从后端恢复。" : "请先选择一个求职分析任务。"}</p>
         </div>
-        <button className="black-small" disabled={working || loading || !applicationId || !["COMPLETED", "DEGRADED"].includes(report?.status)} onClick={onCreate}>
+        <button className="black-small" disabled={working || loading || !applicationId || !["COMPLETED", "DEGRADED"].includes(report?.status)} onClick={() => setChoosingMaterials(true)}>
           {working && !session ? <LoaderCircle className="spin" size={16} /> : <MessageSquareText size={16} />}
           {working && !session ? "正在生成题目" : "开始新的模拟面试"}
         </button>
       </div>
+
+      {choosingMaterials && request && <InterviewMaterialPicker key={`${applicationId}:${report?.id}`} request={request} working={working} onCancel={() => setChoosingMaterials(false)} onConfirm={async selection => { if (await onCreate(selection) !== false) setChoosingMaterials(false); }} />}
 
       {error && <div className="interview-state-error" role="alert"><div><strong>面试操作未完成</strong><p>{interviewFailureMessage(error.code, error.message)}</p>{error.code && <small>错误代码：{error.code}</small>}</div><button className="white-small" disabled={loading || working} onClick={onRefresh}>从后端刷新</button></div>}
       {loading && <div className="interview-state-loading" role="status"><strong>正在恢复面试记录</strong><ResultSkeleton lines={4} /></div>}
@@ -3420,6 +3428,8 @@ export function MockInterviewWorkspace({
           {session.status === "DEGRADED" && <p role="status">知识检索或反馈依据处于降级状态；已保存的可用题目仍可继续，来源状态会明确标注。</p>}
           {session.status === "FAILED" && <p role="alert">本次题目生成失败，系统没有把失败结果显示为正常面试。{session.failureCode ? ` 错误代码：${session.failureCode}` : ""}</p>}
         </header>
+
+        <InterviewMaterialHistory selection={session.materialSelection} />
 
         {session.status !== "FAILED" && questions.length > 0 && <div className="interview-workspace">
           <nav aria-label="面试题目进度">

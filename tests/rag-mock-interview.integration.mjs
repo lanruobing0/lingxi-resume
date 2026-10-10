@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, request as proxyRequest } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -117,6 +117,7 @@ function feedbackPayload(mode, sourceId = "RESUME-1") {
 }
 
 async function main() {
+  const browserMode = process.argv.includes("--browser");
   const state = { mode: "valid", bodies: [] };
   const provider = createServer(async (req, res) => {
     const chunks = [];
@@ -131,7 +132,7 @@ async function main() {
     const feedbackMode = state.mode === "correctableFeedback" ? (body.includes("反馈事实纠正：") ? "valid" : "improvedFabricated") : state.mode;
     const payload = isFeedback ? feedbackPayload(feedbackMode, currentSourceId) : questionPayload(questionMode);
     if (!isFeedback && state.mode === "correctableCategory" && !correction) payload.questions[0].sourceIds = ["JD-1"];
-    if (!isFeedback && state.mode.startsWith("noKnowledge")) {
+    if (!isFeedback && (state.mode.startsWith("noKnowledge") || browserMode && !JSON.parse(JSON.parse(body).input.find(item => item.role === "user").content[0].text.split("\n\n事实边界纠正：")[0]).allowedCategories.includes("KNOWLEDGE"))) {
       const requestPrompt = JSON.parse(JSON.parse(body).input.find((item) => item.role === "user").content[0].text.split("\n\n事实边界纠正：")[0]);
       assert.deepEqual(requestPrompt.allowedCategories, ["RESUME", "JD", "MATCH_GAP"]);
       const schema = JSON.parse(body).text.format.schema;
@@ -165,7 +166,7 @@ async function main() {
     jobDescriptionParseResults: [{ id: 1, userId: 1, jobDescriptionId: 1, rawTextHash: jdHash, status: "SUCCEEDED", parsedData: parsed }],
     jobApplications: [{ id: 1, userId: 1, resumeId: 1, resumeVersionId: 1, resumeVersion: 1, resumeContentHash: snapshot.contentHash, jobDescriptionId: 1, jobDescriptionParseResultId: 1, jobDescriptionRawTextHash: jdHash, jobDescriptionNormalizedTextHash: jdHash }],
     resumeJobMatches: [match], matchReports: [report],
-    knowledgeDocuments: [{ id: 1, title: "缓存面试量表", sourceName: "内部知识库", status: "PROCESSED", processingVersion: 1, vectorStatus: "INDEXED", activeIndexRunId: 11, documentType: "INTERVIEW_RUBRIC", jobFamily: "Java 研发", seniority: "中级", skillTags: ["Java", "Redis"], language: "zh-CN" }],
+    knowledgeDocuments: [{ id: 1, title: "缓存面试量表", sourceName: "内部知识库", status: "PROCESSED", processingVersion: 1, vectorStatus: "INDEXED", indexedProcessingVersion: 1, activeIndexRunId: 11, documentType: "INTERVIEW_RUBRIC", jobFamily: "Java 研发", seniority: "中级", skillTags: ["Java", "Redis"], language: "zh-CN" }],
     knowledgeChunks: [{ id: 1, documentId: 1, processingVersion: 1, title: "缓存评估", headingPath: [], content: knowledgeText, contentHash: sha(knowledgeText) }],
     knowledgeRetrievalRuns: [], interviewSessions: [], interviewSessionQuestions: [], interviewAnswers: [], answerFeedbacks: [], mockInterviews: [],
     aiSettingsByUser: { "1": { aiConfig: { provider: "OpenAI" }, aiProviderConfigs: { OpenAI: { baseUrl: `http://127.0.0.1:${providerPort}/v1`, modelId: "mock-stage8", apiKey: "provider-SECRET", enabled: true } } } },
@@ -176,6 +177,10 @@ async function main() {
     store.knowledgeDocuments.push({ ...store.knowledgeDocuments[0], id: 2, userId: 2, title: "OTHER-USER-MATERIAL-SECRET", activeIndexRunId: 12 });
     store.knowledgeChunks.push({ ...store.knowledgeChunks[0], id: 2, documentId: 2, content: knowledgeText + " OTHER-USER-MATERIAL-SECRET" });
   }
+  if (browserMode) {
+    store.knowledgeDocuments.push({ ...store.knowledgeDocuments[0], id: 3, title: "个人缓存复习笔记", scope: "PRIVATE", userId: 1, aiConsent: true, activeIndexRunId: 13 });
+    store.knowledgeChunks.push({ ...store.knowledgeChunks[0], id: 3, documentId: 3 });
+  }
   await writeFile(path.join(dir, "store.json"), JSON.stringify(store));
   let backend; let backendOutput = "";
   const start = () => { backend = spawn(process.execPath, ["backend/server.js"], { cwd: root, env: { ...process.env, API_PORT: String(apiPort), LINGXI_DATA_DIR: dir, OPENAI_API_KEY: "", OPENAI_BASE_URL: "", OPENAI_MODEL: "", AI_PROVIDER_TIMEOUT_MS: "100" }, stdio: ["ignore", "pipe", "pipe"] }); backend.stdout.on("data", (part) => { backendOutput += part; }); backend.stderr.on("data", (part) => { backendOutput += part; }); };
@@ -184,6 +189,19 @@ async function main() {
   const call = async (tokenValue, pathname, body, expected, method = body === undefined ? "GET" : "POST") => { const response = await fetch(`http://127.0.0.1:${apiPort}${pathname}`, { method, headers: { Cookie: `lingxi_session=${tokenValue}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000) }); const data = await response.json(); if (expected !== undefined) assert.equal(response.status, expected, JSON.stringify(data)); return { status: response.status, data }; };
   try {
     start(); await healthy();
+    if (browserMode) {
+      const proxy = createServer((req, res) => {
+        if (req.url === "/api/fixture/stop") { res.writeHead(200).end("stopped"); void cleanup(); return; }
+        const forwarded = proxyRequest({ host: "127.0.0.1", port: apiPort, path: req.url, method: req.method, headers: { ...req.headers, cookie: `lingxi_session=${token}` } }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
+        forwarded.on("error", () => res.writeHead(503).end('{"message":"Fixture unavailable"}')); req.pipe(forwarded);
+      });
+      await new Promise(resolve => proxy.listen(8924, "127.0.0.1", resolve));
+      const vite = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5176", "--strictPort"], { cwd: root, env: { ...process.env, VITE_API_PROXY_TARGET: "http://127.0.0.1:8924" }, stdio: "ignore", windowsHide: true });
+      async function cleanup() { if (vite.exitCode === null) { vite.kill(); await new Promise(resolve => vite.once("exit", resolve)); } await stop(); await new Promise(resolve => proxy.close(resolve)); await new Promise(resolve => provider.close(resolve)); await rm(dir, { recursive: true, force: true }); process.exit(0); }
+      process.on("SIGINT", cleanup); process.on("SIGTERM", cleanup);
+      console.log("Isolated selection browser fixture: http://127.0.0.1:5176/#materials ; real API + mock generation; stop via http://127.0.0.1:8924/api/fixture/stop");
+      await new Promise(() => {});
+    }
     const created = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD" }, 201);
     assert.equal(created.data.item.resumeVersion, 1, "session must retain the application ResumeVersion instead of current resume version 2");
     assert.equal(created.data.item.resumeVersionId, 1);
@@ -403,6 +421,49 @@ async function main() {
     await writeFile(path.join(dir, "store.json"), JSON.stringify(deletedStore));
     await stop(); start(); await healthy();
     await call(token, `/api/interview-sessions/${deleteId}`, undefined, 404);
+    // Real owned API creation: selected document scope must reach provider sources.
+    const selectionStore = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    selectionStore.knowledgeDocuments = [
+      { ...store.knowledgeDocuments[0], scope: "PUBLIC", id: 1 },
+      { ...store.knowledgeDocuments[0], scope: "PUBLIC", id: 3, title: "手动缓存资料", activeIndexRunId: 13 },
+      { ...store.knowledgeDocuments[0], scope: "PRIVATE", userId: 1, aiConsent: true, id: 4, title: "本人缓存资料", activeIndexRunId: 14 },
+      { ...store.knowledgeDocuments[0], scope: "PRIVATE", userId: 2, aiConsent: true, id: 5, title: "FOREIGN-SELECTION-SECRET", activeIndexRunId: 15 },
+      { ...store.knowledgeDocuments[0], scope: "PRIVATE", userId: 1, aiConsent: false, id: 6, title: "未启用资料" },
+    ];
+    selectionStore.knowledgeChunks = selectionStore.knowledgeDocuments.map(document => ({ ...store.knowledgeChunks[0], id: document.id, documentId: document.id }));
+    await writeFile(path.join(dir, "store.json"), JSON.stringify(selectionStore));
+    const options = await call(token, "/api/interview-material-options", undefined, 200);
+    assert.equal(options.data.userId, 1);
+    assert.ok(!options.data.items.some(item => item.id === 5));
+    assert.equal(options.data.items.find(item => item.id === 6).available, false);
+    assert.ok(options.data.items.find(item => item.id === 3).summary);
+    const beforeInvalid = state.bodies.length;
+    for (const selection of [{ mode: "MANUAL", documentIds: [] }, { mode: "MANUAL", documentIds: ["3"] }, { mode: "AUTO", documentIds: [3] }, { mode: "NONE", documentIds: [3] }, { mode: "INVALID" }, { mode: "MANUAL", documentIds: [3, 3] }]) {
+      await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, materialSelection: selection }, 400);
+    }
+    for (const id of [5, 6, 999]) await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, materialSelection: { mode: "MANUAL", documentIds: [id] } }, 404);
+    assert.equal(state.bodies.length, beforeInvalid);
+    state.mode = "valid";
+    const manual = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD", materialSelection: { mode: "MANUAL", documentIds: [3, 4], userId: 2 } }, 201);
+    assert.deepEqual(manual.data.item.materialSelection.documentIds, [3, 4]);
+    assert.deepEqual(manual.data.item.materialSelection.usedDocumentIds.sort(), [3, 4]);
+    assert.ok(manual.data.item.questions.flatMap(item => item.sourceRefs).filter(item => item.sourceType === "KNOWLEDGE").every(item => [3, 4].includes(item.documentId)));
+    const auto = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "KEYWORD", materialSelection: { mode: "AUTO" } }, 201);
+    assert.deepEqual(auto.data.item.materialSelection.documentIds, [1, 3, 4]);
+    state.mode = "noKnowledgeValid";
+    const none = await call(token, "/api/job-applications/1/interview-sessions", { matchReportId: 1, searchMode: "VECTOR", materialSelection: { mode: "NONE" } }, 201);
+    assert.equal(none.data.item.status, "IN_PROGRESS");
+    assert.equal(none.data.item.retrievalStatus, "SKIPPED");
+    assert.deepEqual(none.data.item.retrievalRunIds, []);
+    assert.ok(none.data.item.questions.every(item => item.category !== "KNOWLEDGE"));
+    const afterSelection = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8"));
+    afterSelection.knowledgeDocuments = afterSelection.knowledgeDocuments.filter(item => item.id !== 3);
+    await writeFile(path.join(dir, "store.json"), JSON.stringify(afterSelection));
+    await stop(); start(); await healthy();
+    const persisted = await call(token, `/api/interview-sessions/${manual.data.item.id}`, undefined, 200);
+    assert.deepEqual(persisted.data.item.materialSelection, manual.data.item.materialSelection);
+    assert.equal(persisted.data.item.materialSelection.documents.find(item => item.id === 3).title, "手动缓存资料");
+    assert.ok(state.bodies.every(body => !body.includes("FOREIGN-SELECTION-SECRET")));
     console.log("Stage 8 RAG mock interview integration passed: immutable ResumeVersion, sourced questions, retrieval traces, grounded feedback, failures, degradation, ownership, fact boundary, and history deletion.");
   } finally {
     await stop(); await new Promise((resolve) => provider.close(resolve)); await rm(dir, { recursive: true, force: true });

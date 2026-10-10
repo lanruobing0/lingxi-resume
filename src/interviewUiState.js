@@ -70,7 +70,7 @@ export function feedbackTextItems(items = []) {
 
 export function interviewApiRequest(kind, values = {}) {
   if (kind === "history") return { path: `/api/job-applications/${values.applicationId}/interview-sessions` };
-  if (kind === "create") return { path: `/api/job-applications/${values.applicationId}/interview-sessions`, options: { method: "POST", body: JSON.stringify({ matchReportId: values.matchReportId, questionCount: 4, searchMode: "HYBRID", useReranker: false }) } };
+  if (kind === "create") return { path: `/api/job-applications/${values.applicationId}/interview-sessions`, options: { method: "POST", body: JSON.stringify({ matchReportId: values.matchReportId, questionCount: 4, searchMode: "HYBRID", useReranker: false, ...(values.materialSelection ? { materialSelection: values.materialSelection } : {}) }) } };
   if (kind === "session") return { path: `/api/interview-sessions/${values.sessionId}` };
   if (kind === "feedback") return { path: `/api/interview-sessions/${values.sessionId}/answers/${values.answerId}/feedback` };
   if (kind === "answer") return { path: `/api/interview-sessions/${values.sessionId}/questions/${values.questionId}/answers`, options: { method: "POST", body: JSON.stringify({ answerText: values.answerText }) } };

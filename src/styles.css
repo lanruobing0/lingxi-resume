@@ -6069,3 +6069,27 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 
 .personal-material-toolbar > button { flex-shrink:0; white-space:nowrap; }
 .personal-material-toolbar input::placeholder { color:#696761; opacity:1; }
+
+/* Per-interview knowledge selection uses native, labelled controls. */
+.public-material-select { display:flex; align-items:flex-start; gap:10px; font-weight:600; line-height:1.6; cursor:pointer; }
+.public-material-select input,.interview-material-option input,.interview-material-modes input { width:16px; height:16px; min-height:0; padding:0; flex:0 0 16px; accent-color:var(--blue); margin:5px 0 0; }
+.public-material-select span { min-width:0; overflow-wrap:anywhere; }
+.public-material-summary { margin:10px 0 14px; }
+.public-material-group .public-material-summary > summary { display:block; padding:0; color:var(--blue); font-size:13px; }
+.public-material-summary p { margin-top:10px; }
+.interview-material-picker { margin:20px 0; padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.interview-material-picker h4 { margin:0 0 8px; font-size:17px; }
+.interview-material-picker p { color:var(--muted); font-size:14px; line-height:1.7; }
+.interview-material-picker fieldset { border:0; padding:0; margin:16px 0; min-width:0; }
+.interview-material-picker legend { font-size:14px; font-weight:600; margin-bottom:10px; }
+.interview-material-modes { display:flex; flex-wrap:wrap; gap:14px 24px; }
+.interview-material-modes label { display:flex; gap:8px; font-size:14px; cursor:pointer; }
+.interview-material-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+.interview-material-option { display:flex; gap:10px; padding:12px 0; border-top:1px solid var(--line); font-size:14px; }
+.interview-material-option span { min-width:0; overflow-wrap:anywhere; }
+.interview-material-option strong,.interview-material-option small { display:block; line-height:1.7; }
+.interview-material-option small { margin-top:5px; color:var(--muted); font-size:12px; }
+.interview-material-history { margin:16px 0; padding:14px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); font-size:13px; }
+.interview-material-history summary { cursor:pointer; font-weight:600; }
+.interview-material-history p,.interview-material-history li { color:var(--muted); line-height:1.7; overflow-wrap:anywhere; }
+@media(max-width:700px) { .interview-material-picker { padding:16px; } .interview-material-options { grid-template-columns:1fr; gap:0; } .interview-material-modes { flex-direction:column; } }
