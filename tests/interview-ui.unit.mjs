@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { recoverInterruptedInterviews } from "../backend/interview-recovery.js";
 import { resolveMaterialSelection, verifyMaterialSelection } from "../backend/interview-material-selection.js";
 import { interviewGenerationConfigHash } from "../backend/mock-interview-service.js";
 import {
@@ -36,3 +37,12 @@ assert.equal(confirmed.documents[0].indexRunId, 7);
 assert.notEqual(interviewGenerationConfigHash({ materialSelection: confirmed }), interviewGenerationConfigHash({ materialSelection: { mode: "NONE", documents: [], documentIds: [] } }));
 assert.deepEqual(JSON.parse(interviewApiRequest("create", { applicationId: 5, matchReportId: 7, materialSelection: { mode: "NONE", documentIds: [] } }).options.body).materialSelection, { mode: "NONE", documentIds: [] });
 console.log("interview UI state tests passed");
+const recoveryStore = { interviewSessions: [{ id: 1, status: "PENDING" }, { id: 2, status: "IN_PROGRESS" }, { id: 3, status: "COMPLETED" }, { id: 4, status: "RUNNING" }, { id: 5, status: "PENDING", deletedAt: "deleted" }] };
+assert.equal(recoverInterruptedInterviews(recoveryStore, "restarted"), true);
+assert.equal(recoveryStore.interviewSessions[0].failureCode, "INTERVIEW_GENERATION_INTERRUPTED");
+assert.equal(recoveryStore.interviewSessions[0].completedAt, "restarted");
+assert.equal(recoveryStore.interviewSessions[1].status, "IN_PROGRESS");
+assert.equal(recoveryStore.interviewSessions[2].status, "COMPLETED");
+assert.equal(recoveryStore.interviewSessions[3].status, "FAILED");
+assert.equal(recoveryStore.interviewSessions[4].status, "PENDING");
+assert.equal(recoverInterruptedInterviews(recoveryStore), false);

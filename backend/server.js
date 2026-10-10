@@ -1,5 +1,6 @@
 import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
 import { materialReady, interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
+import { recoverInterruptedInterviews } from "./interview-recovery.js";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4411,6 +4412,8 @@ const server = createServer((req, res) => {
   });
 });
 
+const startupStore = await readStore();
+if (recoverInterruptedInterviews(startupStore)) await writeStore(startupStore);
 server.listen(port, "127.0.0.1", () => {
   console.log(`AI Resume Coach API running at http://127.0.0.1:${port}`);
 });

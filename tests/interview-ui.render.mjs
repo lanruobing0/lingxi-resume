@@ -40,6 +40,10 @@ try {
   const failed = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { applicationId: "5", report: { status: "COMPLETED" }, sessions: [{ id: 9, status: "FAILED", resumeVersion: 3, questionCount: 4, answeredCount: 0 }], session: { id: 9, status: "FAILED", resumeVersion: 3, questionCount: 4, answeredCount: 0, failureCode: "INTERVIEW_PROVIDER_UNAVAILABLE", questions: [] }, feedbackByQuestion: {}, ...handlers }));
   assert.match(failed, /本次题目生成失败/);
   assert.doesNotMatch(failed, /提交本题回答/);
+  const preparing = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { session: { id: 7, status: "PENDING", questions: [] }, ...handlers }));
+  assert.match(preparing, /正在生成面试题目/); assert.match(preparing, /刷新生成状态/);
+  const interrupted = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { session: { id: 7, status: "FAILED", failureCode: "INTERVIEW_GENERATION_INTERRUPTED", questions: [] }, ...handlers }));
+  assert.match(interrupted, /服务重启中断了本次题目生成/);
 
   const duplicate = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { applicationId: "5", report: { status: "COMPLETED" }, sessions: [], session: null, feedbackByQuestion: {}, error: { code: "INTERVIEW_ANSWER_DUPLICATE", message: "raw" }, ...handlers }));
   assert.match(duplicate, /已经提交过回答/);

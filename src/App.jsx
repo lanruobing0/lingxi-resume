@@ -3371,6 +3371,7 @@ export function MockInterviewWorkspace({
   const allAnswered = questions.length > 0 && questions.every((question) => question.answerId);
   const allFeedbackReady = allAnswered && questions.every((question) => ["COMPLETED", "DEGRADED"].includes(feedbackByQuestion[question.id]?.feedback?.status));
   const isCompleted = Boolean(session?.completedAt) || session?.status === "COMPLETED";
+  const isGenerating = ["PENDING", "RUNNING"].includes(session?.status);
   const safeSources = safeKnowledgeSources([
     ...(currentQuestion?.sourceRefs || []),
     ...(currentFeedback?.sourceRefs || []),
@@ -3414,10 +3415,13 @@ export function MockInterviewWorkspace({
         <header className="interview-session-summary">
           <div><span className={`interview-status status-${String(session.status || "pending").toLowerCase()}`}>{interviewStatusLabel(session.status)}</span><strong>面试 #{session.id}</strong><small>锁定简历 v{session.resumeVersion} · {session.answeredCount || 0}/{session.questionCount || questions.length} 题</small></div>
           {session.status === "DEGRADED" && <p role="status">知识检索或反馈依据处于降级状态；已保存的可用题目仍可继续，来源状态会明确标注。</p>}
-          {session.status === "FAILED" && <p role="alert">本次题目生成失败，系统没有把失败结果显示为正常面试。{session.failureCode ? ` 错误代码：${session.failureCode}` : ""}</p>}
+          {session.status === "FAILED" && <p role="alert">{session.failureCode === "INTERVIEW_GENERATION_INTERRUPTED" ? "服务重启中断了本次题目生成，请点击“开始新的模拟面试”重新确认资料并创建。" : "本次题目生成失败，系统没有把失败结果显示为正常面试。"}{session.failureCode ? ` 错误代码：${session.failureCode}` : ""}</p>}
         </header>
 
         <InterviewMaterialHistory selection={session.materialSelection} />
+
+        {isGenerating && <div className="interview-state-loading" role="status"><strong>正在生成面试题目</strong><p>正在检索资料并生成题目，完成前暂时无法作答。</p><button className="white-small" disabled={loading || working} onClick={onRefresh}>刷新生成状态</button></div>}
+        {!isGenerating && session.status !== "FAILED" && !questions.length && <div className="interview-state-error" role="alert"><strong>这份面试没有可用题目</strong><p>请刷新记录；仍无题目时，重新确认资料并创建面试。</p><button className="white-small" disabled={loading || working} onClick={onRefresh}>刷新记录</button></div>}
 
         {session.status !== "FAILED" && questions.length > 0 && <div className="interview-workspace">
           <nav aria-label="面试题目进度">
