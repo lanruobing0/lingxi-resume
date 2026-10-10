@@ -46,7 +46,9 @@ export function reportGenerationConfigHash({ searchMode, useReranker, promptVers
 export function buildCandidatePromptPayload(traces) {
   return traces.map((trace) => ({
     dimensionKey: trace.dimensionKey, retrievalRunId: trace.retrievalRunId,
-    candidates: trace.candidates.map((candidate) => ({ chunkId: candidate.chunkId, documentId: candidate.documentId, processingVersion: candidate.processingVersion, title: candidate.documentTitle, headingPath: candidate.headingPath, content: candidate.content })),
+    candidates: trace.candidates.map((candidate) => ({ chunkId: candidate.chunkId, documentId: candidate.documentId, processingVersion: candidate.processingVersion, title: candidate.documentTitle, headingPath: candidate.headingPath, content: candidate.content,
+      citationIdentity: { retrievalRunId: trace.retrievalRunId, chunkId: candidate.chunkId, documentId: candidate.documentId, processingVersion: candidate.processingVersion },
+    })),
   }));
 }
 

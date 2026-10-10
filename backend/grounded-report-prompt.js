@@ -1,4 +1,4 @@
-export const groundedReportPromptVersion = "grounded-match-report-v2";
+export const groundedReportPromptVersion = "grounded-match-report-v3";
 
 const citationSchema = {
   type: "object", additionalProperties: false,
@@ -38,6 +38,7 @@ export function buildGroundedReportPrompt({ aiResume, jobDescription, parseResul
       `Allowed BASE_MATCH_FACT baseEvidence strings: ${JSON.stringify(baseEvidence)}`,
       'For each BASE_MATCH_FACT, citations must be [] and baseEvidence must copy one or more complete strings from the allowed list exactly. Do not use field names, evidence IDs, newly paraphrased text or arbitrary resume excerpts as baseEvidence. If no allowed string supports the claim, omit the claim. Keep claims concise and avoid repeating the same evidence throughout the report.',
       `Knowledge candidates grouped by retrieval run: ${JSON.stringify(candidates)}`,
+      'For every knowledge citation copy all four IDs together from that candidate citationIdentity; never mix IDs from different candidates or retrieval runs. Prefer a short continuous exact quote as the claim text itself. Avoid added introductions such as "资料在某要点中指出" and unsupported explanations. A reference to application users or resource ownership is general technical knowledge, never proof of the job seeker having experience. Do not add candidate abilities to a knowledge claim.',
       "Return only the strict JSON schema. Do not include contact information or any content not in the supplied materials.",
     ].join("\n"),
   };

@@ -1,4 +1,4 @@
-export const claimSupportVersion = "claim-support-v4";
+export const claimSupportVersion = "claim-support-v5";
 export const minimumSemanticCoverage = 0.55;
 export const minimumCitationClauseCoverage = 0.2;
 
@@ -120,10 +120,19 @@ function hasCrossCitationInference(claimText, quotes, resultMetrics) {
 
 export function validateClaimSupport({ claimText, citations, localQuotes }) {
   const quotes = unique((localQuotes || citations?.map((citation) => citation.quote) || []).map((quote) => String(quote || "").trim()));
+  // Ignore only an attributed source introduction, never the factual claim after it.
+  const titles = ["知识资料", "面试资料", ...(citations || []).map(citation => citation.sourceTitle).filter(Boolean)];
+  for (const title of titles) {
+    if (!String(claimText || "").startsWith(title)) continue;
+    const suffix = String(claimText).slice(title.length);
+    const introduction = /^(?:在[^：:\n]{1,32})?(?:中)?(?:指出|提到|说明)[：:]\s*/.exec(suffix);
+    if (introduction) { claimText = suffix.slice(introduction[0].length); break; }
+  }
   const resultMetrics = metrics(claimText, quotes);
   const claim = String(claimText || "");
   if (!quotes.length) return failure("INSUFFICIENT_SEMANTIC_OVERLAP", resultMetrics);
-  if (userAttribution.test(claim)) return failure("UNSUPPORTED_USER_ATTRIBUTION", resultMetrics);
+  const attributionText = claim.replace(/资源(?:需|需要|必须)?属于当前用户|用户规模/g, phrase => quotes.some(quote => normalize(quote).includes(normalize(phrase))) ? "技术资源" : phrase);
+  if (userAttribution.test(attributionText)) return failure("UNSUPPORTED_USER_ATTRIBUTION", resultMetrics);
   if (resultMetrics.numbers.some((number) => !resultMetrics.quoteNumbers.includes(number))) return failure("UNSUPPORTED_NUMBER", resultMetrics);
   if (resultMetrics.entities.some((entity) => !resultMetrics.quoteEntities.includes(entity))) return failure("UNSUPPORTED_ENTITY", resultMetrics);
   const quoteText = quotes.join("\n");

@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新修复：`docs/tasks/REPORT_CITATION_CHAIN.md`，报告完整引用编号、技术语境误判和统一一次纠正，待独立验收。
+
 - 最新修复：`docs/tasks/REPORT_BASE_EVIDENCE.md`，报告基础事实证据白名单与一次纠正，待独立验收。
 
 - 最新修复：`docs/tasks/REPORT_OUTPUT_LIMIT.md`，报告输出截断额度与错误归类，待独立验收。

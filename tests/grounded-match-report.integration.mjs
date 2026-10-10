@@ -131,6 +131,11 @@ async function main() {
     const request = JSON.parse(body); const prompt = request.input?.[1]?.content?.[0]?.text || request.messages?.[1]?.content || ""; const match = prompt.match(/"retrievalRunId":(\d+)/); const output = reportPayload(state.mode, Number(match?.[1] || 1));
     if (state.mode === "correctableBase" && !prompt.includes("Validation correction") || state.mode === "forgedBase") output.claims[0].baseEvidence = ["伪造的个人经验"];
     if (state.mode === "whitespaceBase") output.claims[0].baseEvidence = ["Java\n匹配事实"];
+    if (state.mode === "correctableCitation" && !prompt.includes("Validation correction")) output.claims[1].citations[0].retrievalRunId = 999999;
+    if (state.mode === "citationCorrectionOutage") {
+      if (prompt.includes("Validation correction")) return res.writeHead(503).end("{}");
+      output.claims[1].citations[0].retrievalRunId = 999999;
+    }
     res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: JSON.stringify(output) }));
   });
   const embedding = createServer(async (_req, res) => res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ data: [{ embedding: [1, 0, 0, 0] }] })));
@@ -212,6 +217,18 @@ async function main() {
     state.mode = "whitespaceBase";
     result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);
     assert.deepEqual(result.data.item.content.claims[0].baseEvidence, ["Java 匹配事实"]);
+    correctionRequests = state.providerBodies.length;
+    state.mode = "correctableCitation";
+    result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);
+    assert.equal(result.data.item.status, "COMPLETED");
+    assert.equal(result.data.item.evidenceCoverage.ratio, 1);
+    assert.equal(state.providerBodies.length - correctionRequests, 2, "citation correction must be bounded to one attempt");
+    assert.ok(state.providerBodies.at(-1).includes("citationIdentity"));
+    state.mode = "citationCorrectionOutage";
+    result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);
+    assert.equal(result.data.item.status, "DEGRADED");
+    assert.equal(result.data.item.droppedClaimCount, 1);
+    assert.ok(result.data.item.content.claims.some(claim => claim.claimType === "BASE_MATCH_FACT"));
     for (const mode of ["empty", "onlyInvalid", "badEnum", "invalidJson", "provider503"]) { state.mode = mode; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }); assert.ok(result.status >= 400, mode); if (mode === "onlyInvalid") assert.equal(result.data.failureCode, "REPORT_NO_SUPPORTED_CLAIMS"); }
     for (const mode of ["responsesLength", "chatLength"]) {
       state.mode = mode;

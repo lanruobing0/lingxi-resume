@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import { validateClaimSupport } from "../backend/claim-support-validator.js";
+const quote = "工具必须在允许清单中；输入需满足类型、长度与枚举要求；资源需属于当前用户；写操作需要满足业务前置条件。";
+const validate = text => validateClaimSupport({ claimText: text, citations: [{ sourceTitle: "AI Agent 开发资料", quote }], localQuotes: [quote] });
+assert.equal(validate(quote).supported, true);
+assert.equal(validate(`面试资料在工具调用要点中指出：${quote}`).supported, true);
+assert.equal(validate(`AI Agent 开发资料在工具调用要点中指出：${quote}`).supported, true);
+for (const text of ["面试资料在工具调用要点中指出：候选人已经精通工具调用。", "资源需属于当前用户；用户已经掌握系统开发。", "工具必须在允许清单中，因此候选人已具备生产开发能力。", "资源需属于其他用户"]) assert.equal(validate(text).supported, false);
+const scale = "不编造百分比、用户规模、收入或耗时。";
+assert.equal(validateClaimSupport({ claimText: scale, localQuotes: [scale] }).supported, true);
+console.log("Technical claims passed: source introduction, resource ownership and user metrics accepted; job-seeker attribution and changed ownership rejected.");

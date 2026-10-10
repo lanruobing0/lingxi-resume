@@ -1782,7 +1782,7 @@ function resolveMatchReportContext(store, user, application, match) {
   return { resumeSnapshot, jobDescription: { ...jobDescription, normalizedText, normalizedTextHash }, parseResult };
 }
 
-async function generateAiGroundedReport(store, userId, context, match, candidates) {
+async function generateAiGroundedReport(store, userId, context, match, candidates, report) {
   const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates, baseEvidence: [...allowedBaseEvidence(match)] });
   const request = { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true, maxOutputTokens: 8192, requestTimeoutMs: 60000 };
   const normalize = (ai) => {
@@ -1793,13 +1793,26 @@ async function generateAiGroundedReport(store, userId, context, match, candidate
     return normalizeGroundedReport(ai.data, match);
   };
   const ai = await runAiJson(store, userId, request);
-  try { return normalize(ai); } catch (error) {
+  let correctionReason;
+  let usableFirstReport;
+  try {
+    const generated = normalize(ai);
+    usableFirstReport = generated;
+    const checked = validateKnowledgeClaims(store, report, generated.claims);
+    if (!checked.droppedClaimCount) return generated;
+    correctionReason = checked.validationFailures.map(item => `${item.claimId}: ${item.code}`).join("; ");
+  } catch (error) {
     // Only correct a parsed report's structural/evidence failure, never retry an outage or truncation.
     if (!ai.ok || error.code !== "REPORT_INVALID_RESPONSE") throw error;
-    const corrected = await runAiJson(store, userId, { ...request,
-      user: `${request.user}\n\nValidation correction (one attempt only): ${error.message}. Generate a complete corrected report. BASE_MATCH_FACT baseEvidence must copy complete strings from the allowed list, with citations []. Omit unsupported claims. KNOWLEDGE_CLAIM must have baseEvidence [] and exact knowledge citations; MODEL_SUGGESTION must begin with 建议： and have both evidence arrays empty. Never invent or silently fix personal facts.`,
-    });
-    return normalize(corrected);
+    correctionReason = error.message;
+  }
+  const corrected = await runAiJson(store, userId, { ...request,
+    user: `${request.user}\n\nValidation correction (one attempt only): ${correctionReason}. Generate a complete corrected report. Copy all citation IDs from one candidate citationIdentity. Use short continuous verbatim knowledge quotes as claim text, without an attribution introduction or extra conclusions. BASE_MATCH_FACT baseEvidence must copy complete strings from the allowed list, with citations []. Omit unsupported claims. KNOWLEDGE_CLAIM must have baseEvidence [] and exact knowledge citations; MODEL_SUGGESTION must begin with 建议： and have both evidence arrays empty. Never invent or silently fix personal facts.`,
+  });
+  try { return normalize(corrected); } catch (error) {
+    // A correction outage must not discard the first report's verified base facts.
+    if (usableFirstReport) return usableFirstReport;
+    throw error;
   }
 }
 
@@ -1827,7 +1840,7 @@ async function executeGroundedMatchReport(store, user, application, match, optio
     report.retrievalRunIds = traces.map((trace) => trace.retrievalRunId);
     report.retrievalQueries = traces.map(({ dimensionKey, retrievalRunId, query, queryHash, candidates }) => ({ dimensionKey, retrievalRunId, query, queryHash, candidateChunkIds: candidates.map((candidate) => candidate.chunkId) }));
     report.inputHash = createReportInputHash({ application, match, retrievalRunIds: report.retrievalRunIds, promptVersion: report.promptVersion, generationConfigHash });
-    const generated = await generateAiGroundedReport(store, user.id, context, match, buildCandidatePromptPayload(traces));
+    const generated = await generateAiGroundedReport(store, user.id, context, match, buildCandidatePromptPayload(traces), report);
     const validated = validateKnowledgeClaims(store, report, generated.claims);
     const claims = validated.claims;
     if (!claims.length) throw reportFailure(422, "REPORT_NO_SUPPORTED_CLAIMS", "所有报告主张均未通过验证");
