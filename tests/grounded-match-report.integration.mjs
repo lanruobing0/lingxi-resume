@@ -7,10 +7,17 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createEmbeddingProfile } from "../backend/embedding-provider.js";
 import { claimSupportVersion, validateClaimSupport } from "../backend/claim-support-validator.js";
-import { createReportInputHash, reportGenerationConfigHash } from "../backend/grounded-report-service.js";
+import { buildReportRetrievalPlans, createReportInputHash, reportGenerationConfigHash } from "../backend/grounded-report-service.js";
+import { parseRetrievalRequest } from "../backend/knowledge-query.js";
+import { keywordRetrieve } from "../backend/knowledge-keyword-retriever.js";
 import { groundedReportPromptVersion } from "../backend/grounded-report-prompt.js";
 
 const root = path.resolve(import.meta.dirname, "..");
+const cataloguePlan = buildReportRetrievalPlans({ report: { dimensions: [{ key: "skills", label: "技能", summary: "Agent 工具调用", jdEvidence: ["理解 Agent 工具调用"], missingEvidence: [] }] } }, { parsedData: { jobTitle: { text: "AI Agent 研发工程师（内部中台方向）" }, requiredSkills: [{ text: "能够设计可维护的 Agent 工具调用工作流" }] } }, { searchMode: "KEYWORD" })[0];
+const catalogueRequest = parseRetrievalRequest(cataloguePlan.request);
+const catalogueDocument = { id: 1, title: "Agent 面试资料", documentType: "INTERVIEW_QUESTION", jobFamily: "研发", skillTags: ["Agent"], language: "zh-CN", status: "PROCESSED", vectorStatus: "INDEXED", processingVersion: 1 };
+const catalogueResults = keywordRetrieve({ knowledgeDocuments: [catalogueDocument, { ...catalogueDocument, id: 2, scope: "PRIVATE", userId: 99 }], knowledgeChunks: [{ id: 1, documentId: 1, processingVersion: 1, content: "Agent 工具调用需要校验参数和权限。" }, { id: 2, documentId: 2, processingVersion: 1, content: "Agent 工具调用私人资料。" }] }, catalogueRequest.normalizedQuery, catalogueRequest.filters, 6);
+assert.deepEqual(catalogueResults.map(item => item.document.id), [1], "public interview material must match without exact JD title/tag equality; private material stays excluded");
 const hash = (value) => createHash("sha256").update(value).digest("base64url");
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

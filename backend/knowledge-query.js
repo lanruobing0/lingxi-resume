@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export const retrievalModes = ["KEYWORD", "VECTOR", "HYBRID"];
 export const retrievalEnums = {
-  documentType: ["ROLE_SKILL_DESCRIPTION", "STAR_CASE", "INTERVIEW_RUBRIC", "RESUME_GUIDE", "OTHER"],
+  documentType: ["ROLE_SKILL_DESCRIPTION", "STAR_CASE", "INTERVIEW_RUBRIC", "INTERVIEW_QUESTION", "RESUME_GUIDE", "OTHER"],
   seniority: ["实习", "初级", "中级", "高级", "专家", "不限"],
   language: ["zh-CN", "en", "mixed"],
 };

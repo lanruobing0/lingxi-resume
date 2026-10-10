@@ -3566,7 +3566,7 @@ function GroundedMatchReport({ report, match }) {
       <div><span className={`report-status status-${report.status.toLowerCase()}`}>{reportStatusLabel(report.status)}</span><strong>{Number.isFinite(Number(match?.totalScore)) ? `${match.totalScore} 分` : "--"}</strong><small>基础匹配分</small></div>
       <dl><div><dt>简历版本</dt><dd>v{report.resumeVersion}</dd></div><div><dt>报告版本</dt><dd>v{report.reportVersion}</dd></div><div><dt>岗位 / JD</dt><dd>已锁定</dd></div><div><dt>生成时间</dt><dd>{formatResumeDate(report.completedAt || report.createdAt)}</dd></div><div><dt>证据覆盖</dt><dd>{formatEvidenceCoverage(report.evidenceCoverage)}</dd></div></dl>
     </div>
-    {report.status === "DEGRADED" && <div className="grounded-report-degraded" role="status"><strong>部分知识证据不可用</strong><p>报告仅保留已通过验证的内容；未通过验证的知识主张不会显示为事实。</p></div>}
+    {report.status === "DEGRADED" && <div className="grounded-report-degraded" role="status"><strong>{report.failureCode === "REPORT_NO_KNOWLEDGE_EVIDENCE" ? "本次报告没有可用的知识引用" : report.failureCode === "REPORT_RETRIEVAL_DEGRADED" ? "部分知识检索未完成" : "部分知识引用未通过校验"}</strong><p>{report.failureCode === "REPORT_NO_KNOWLEDGE_EVIDENCE" ? "本次检索没有形成可验证的知识引用，报告保留简历与岗位的已验证分析。" : report.failureCode === "REPORT_RETRIEVAL_DEGRADED" ? "生成这份报告时部分检索不可用，报告仅保留已验证内容。知识库更新后，需重新生成报告。" : "未通过引用校验的知识主张已移除，报告仅保留通过验证的内容。"}</p></div>}
     <section className="grounded-summary"><h4>综合结论</h4><p>{content.executiveSummary}</p></section>
     <section className="grounded-dimensions"><h4>六维分析</h4><div>{(content.dimensionReports || []).map((dimension) => {
       const base = baseDimensions.find((item) => item.key === dimension.key);

@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新修复：`docs/tasks/REPORT_MATERIAL_RETRIEVAL_FIX.md`，报告检索排除公共面试资料，待独立验收。
+
 - 最新修复：`docs/tasks/INTERVIEW_INTERRUPTED_RECOVERY.md`，重启遗留面试准备中恢复与空白提示，待独立验收。
 
 - 最新追加：独立面试记录列表删除，交接 `docs/tasks/WORKSPACE_HISTORY_DELETE.md`，待独立验收。
