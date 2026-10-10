@@ -1091,6 +1091,7 @@ function aiHttpError(ai, message) {
 
 function mappedAiFailureCode(ai, { notConfigured, invalidResponse, unavailable }) {
   if (ai.code === "AI_PROVIDER_TIMEOUT") return "AI_PROVIDER_TIMEOUT";
+  if (ai.code === "AI_OUTPUT_TRUNCATED") return "AI_OUTPUT_TRUNCATED";
   if (ai.code === "AI_NOT_CONFIGURED") return notConfigured;
   if (ai.code === "REPORT_INVALID_RESPONSE") return invalidResponse;
   return unavailable;
@@ -1783,7 +1784,7 @@ function resolveMatchReportContext(store, user, application, match) {
 
 async function generateAiGroundedReport(store, userId, context, match, candidates) {
   const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates });
-  const ai = await runAiJson(store, userId, { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true });
+  const ai = await runAiJson(store, userId, { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true, maxOutputTokens: 8192, requestTimeoutMs: 60000 });
   if (!ai.ok) {
     const code = mappedAiFailureCode(ai, { notConfigured: "REPORT_PROVIDER_NOT_CONFIGURED", invalidResponse: "REPORT_INVALID_RESPONSE", unavailable: "REPORT_PROVIDER_UNAVAILABLE" });
     throw reportFailure(ai.status || 502, code, ai.error || "报告生成服务不可用");

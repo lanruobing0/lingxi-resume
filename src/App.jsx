@@ -3225,6 +3225,8 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
 }
 
 const reportFailureLabels = {
+  AI_OUTPUT_TRUNCATED: "AI 输出达到长度上限，报告被截断。输出额度已增加，请重新生成。",
+  AI_PROVIDER_TIMEOUT: "AI 生成报告超时，请重新生成。",
   REPORT_PROVIDER_NOT_CONFIGURED: "AI 服务尚未配置。",
   REPORT_PROVIDER_UNAVAILABLE: "AI 服务暂时不可用，请稍后重试。",
   REPORT_RETRIEVAL_FAILED: "知识检索失败，请稍后重试。",
@@ -3255,7 +3257,7 @@ function reportStatusLabel(status) {
 }
 
 function GroundedReportFailure({ failure, onRetry, canRetry }) {
-  const code = failure?.code || "REPORT_RETRIEVAL_FAILED";
+  const code = failure?.code === "REPORT_PROVIDER_UNAVAILABLE" && failure?.message === "AI 输出达到长度上限，报告未生成完整" ? "AI_OUTPUT_TRUNCATED" : failure?.code || "REPORT_RETRIEVAL_FAILED";
   return <div className="grounded-report-failure" role="alert"><div><strong>报告未能完整生成</strong><p>{reportFailureMessage(code)}</p><small>错误代码：{code}</small></div>{canRetry && <button className="white-small" onClick={onRetry}><RefreshCw size={15} />重新生成</button>}</div>;
 }
 

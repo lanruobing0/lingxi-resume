@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新修复：`docs/tasks/REPORT_OUTPUT_LIMIT.md`，报告输出截断额度与错误归类，待独立验收。
+
 - 最新修复：`docs/tasks/MATCH_EVIDENCE_VALIDATION.md`，匹配原文证据解码校验与经历引用约束，待独立验收。
 
 - 最新修复：`docs/tasks/REPORT_RESUME_VERSION_BINDING.md`，Agent 简历旧 v1 报告提示与选择绑定保护，待独立验收。

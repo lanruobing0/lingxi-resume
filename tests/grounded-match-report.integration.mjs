@@ -121,6 +121,11 @@ async function main() {
   const provider = createServer(async (req, res) => {
     let body = ""; for await (const part of req) body += part; state.providerBodies.push(body);
     if (state.mode === "provider503") return res.writeHead(503).end("{}");
+    if (state.mode === "responsesLength") return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output_text: "{" }));
+    if (state.mode === "chatLength") {
+      if (req.url.endsWith("/responses")) return res.writeHead(404).end("{}");
+      return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ choices: [{ finish_reason: "length", message: { content: "{" } }] }));
+    }
     if (state.mode === "timeout") { await wait(250); return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: JSON.stringify(reportPayload("valid")) })); }
     if (state.mode === "invalidJson") return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: "not-json" }));
     const request = JSON.parse(body); const prompt = request.input?.[1]?.content?.[0]?.text || request.messages?.[1]?.content || ""; const match = prompt.match(/"retrievalRunId":(\d+)/); const output = reportPayload(state.mode, Number(match?.[1] || 1));
@@ -192,6 +197,18 @@ async function main() {
     assert.equal((await call(token, `/api/match-reports/${reportId}`, undefined, 200)).data.item.content.executiveSummary, "Java 岗位匹配报告。", "failed reports must not overwrite previous successful body");
     state.mode = "noKnowledge"; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201); assert.equal(result.data.item.status, "DEGRADED"); assert.equal(result.data.item.evidenceCoverage.validKnowledgeClaimCount, 0);
     for (const mode of ["empty", "onlyInvalid", "badEnum", "invalidJson", "provider503"]) { state.mode = mode; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }); assert.ok(result.status >= 400, mode); if (mode === "onlyInvalid") assert.equal(result.data.failureCode, "REPORT_NO_SUPPORTED_CLAIMS"); }
+    for (const mode of ["responsesLength", "chatLength"]) {
+      state.mode = mode;
+      const truncated = await call(token, "/api/job-applications/1/reports", { matchId: 1 });
+      assert.equal(truncated.status, 502, mode);
+      assert.equal(truncated.data.failureCode, "AI_OUTPUT_TRUNCATED", mode);
+      const history = (await call(token, "/api/job-applications/1/reports", undefined, 200)).data.items;
+      assert.equal(history[0].status, "FAILED");
+      assert.equal(history[0].failureCode, "AI_OUTPUT_TRUNCATED");
+    }
+    const reportRequests = state.providerBodies.map(body => JSON.parse(body));
+    assert.ok(reportRequests.filter(body => body.input).every(body => body.max_output_tokens === 8192));
+    assert.ok(reportRequests.filter(body => body.messages).every(body => body.max_tokens === 8192));
     state.mode = "timeout";
     let providerRequestCount = state.providerBodies.length;
     let timeoutStartedAt = Date.now();
