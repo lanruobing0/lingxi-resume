@@ -54,7 +54,7 @@ function matchReport({ resumeKind, jdKind, zero = false, forged = false, crossRe
   const job = jobFixture(jdKind);
   const matched = !zero && resumeKind === jdKind;
   const resumeSkill = resumeKind === "react" ? "React" : "Java";
-  const projectEvidence = resumeKind === "react" ? "前端性能优化 30%" : "订单系统提升 20%";
+  const projectEvidence = resumeKind === "react" ? "前端性能优化 30%" : "订单系统实现 \"Tool Calling\"\n提升 20%";
   const dimensionScores = zero ? [0, 0, 0, 0, 0, 0] : matched ? [100, 80, 0, 0, 0, 0] : [0, 0, 0, 0, 0, 0];
   const dimensions = [
     ["required_skills", "必备技能", [matched ? resumeSkill : ""].filter(Boolean), [job.required[0]]],
@@ -65,7 +65,7 @@ function matchReport({ resumeKind, jdKind, zero = false, forged = false, crossRe
     ["expression", "表达质量", [], []],
   ].map(([key, label, resumeEvidence, jdEvidence], index) => ({
     key, label, score: dimensionScores[index], summary: "基于锁定材料的匹配结论",
-    resumeEvidence: forged && key === "required_skills" ? ["伪造的简历证据"] : crossResumeEvidence && key === "required_skills" ? ["订单系统提升 20%"] : resumeEvidence,
+    resumeEvidence: forged && key === "required_skills" ? ["伪造的简历证据"] : crossResumeEvidence && key === "required_skills" ? ["订单系统实现 \"Tool Calling\"\n提升 20%"] : resumeEvidence,
     jdEvidence: crossJdEvidence && key === "required_skills" ? ["负责 Java 服务开发"] : jdEvidence,
     missingEvidence: dimensionScores[index] === 0 ? ["待补充"] : [], suggestions: ["按 JD 补充可核验成果"],
   }));
@@ -150,7 +150,7 @@ async function main() {
     users: [{ id: 7, username: "match-a", passwordHash: "test", role: "USER", status: 1 }, { id: 8, username: "match-b", passwordHash: "test", role: "USER", status: 1 }],
     sessions: [{ id: 1, userId: 7, tokenHash: tokenHash(tokenA), expiresAt: new Date(Date.now() + 60_000).toISOString() }, { id: 2, userId: 8, tokenHash: tokenHash(tokenB), expiresAt: new Date(Date.now() + 60_000).toISOString() }],
     resumes: [
-      { id: 11, userId: 7, version: 3, title: "Java 简历", currentPosition: "后端工程师", realName: pii.name, email: pii.email, phone: pii.phone, website: pii.website, city: pii.city, profileFields: [{ label: "作品集", value: pii.profile }], selfEvaluation: "Java 与 Spring Boot 开发", sectionContent: { "专业技能": ["Java", "Spring Boot", "Redis"], "项目经历": ["订单系统提升 20%"] }, sectionDetails: {}, moduleOrder: ["专业技能", "项目经历"] },
+      { id: 11, userId: 7, version: 3, title: "Java 简历", currentPosition: "后端工程师", realName: pii.name, email: pii.email, phone: pii.phone, website: pii.website, city: pii.city, profileFields: [{ label: "作品集", value: pii.profile }], selfEvaluation: "Java 与 Spring Boot 开发", sectionContent: { "专业技能": ["Java", "Spring Boot", "Redis"], "项目经历": ["订单系统实现 \"Tool Calling\"\n提升 20%"] }, sectionDetails: {}, moduleOrder: ["专业技能", "项目经历"] },
       { id: 12, userId: 7, version: 1, title: "React 简历", currentPosition: "前端工程师", selfEvaluation: "React 与 TypeScript 开发", sectionContent: { "专业技能": ["React", "TypeScript", "性能优化"], "项目经历": ["前端性能优化 30%"] }, sectionDetails: {}, moduleOrder: ["专业技能", "项目经历"] },
     ],
     resumeHistories: [], interviewQuestions: [], jobPositions: [], jobDescriptions: [], jobDescriptionParseResults: [], jobApplications: [], resumeJobMatches: [], mockInterviews: [], interviewAnswers: [], systemNotices: [],
@@ -192,7 +192,7 @@ async function main() {
     assert.equal(javaMatch.item.report.missingPreferredSkills[0].skillName, "Docker");
     assert.equal(reactToJavaMatch.item.report.missingRequiredSkills[0].skillName, "Java");
     assert.equal(reactToJavaMatch.item.report.missingRequiredSkills[0].explanation, "当前简历中未找到相关证据");
-    assert.equal(JSON.stringify(reactToJavaMatch.item.report).includes("订单系统提升 20%"), false, "React report must not cite Java resume evidence");
+    assert.equal(JSON.stringify(reactToJavaMatch.item.report).includes(JSON.stringify("订单系统实现 \"Tool Calling\"\n提升 20%").slice(1, -1)), false, "React report must not cite Java resume evidence");
     assert.notEqual(javaMatch.item.resumeId, reactToJavaMatch.item.resumeId);
     assert.notEqual(javaMatch.item.resumeVersion, reactToJavaMatch.item.resumeVersion);
     assert.notEqual(javaMatch.item.resumeContentHash, reactToJavaMatch.item.resumeContentHash);

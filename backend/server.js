@@ -1,6 +1,7 @@
 import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
 import { materialReady, interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
 import { recoverInterruptedInterviews } from "./interview-recovery.js";
+import { matchEvidenceSources, containsMatchEvidence } from "./match-evidence.js";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1522,7 +1523,7 @@ function normalizeMatchEvidence(value, fieldName, sourceText, { required = false
   if (!Array.isArray(value)) throw new Error(`AI 返回字段 ${fieldName} 不是数组`);
   const items = [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
   if (required && !items.length) throw new Error(`AI 返回字段 ${fieldName} 缺少证据`);
-  for (const item of items) if (!sourceText.includes(item)) throw new Error(`AI 返回字段 ${fieldName} 包含无法验证的证据`);
+  for (const item of items) if (!containsMatchEvidence(sourceText, item)) throw new Error(`AI 返回字段 ${fieldName} 包含无法验证的证据`);
   return items;
 }
 
@@ -1552,8 +1553,8 @@ function normalizeMatchSkillList(value, fieldName, expectedStatuses, resumeText,
 }
 
 function normalizeMatchReport(data, { resumeSnapshot, jobDescription, parseResult }) {
-  const resumeText = JSON.stringify(buildAiResumeContext(resumeSnapshot));
-  const jdText = `${jobDescription.rawText}\n${JSON.stringify(parseResult.parsedData || {})}`;
+  const resumeText = matchEvidenceSources(buildAiResumeContext(resumeSnapshot));
+  const jdText = [jobDescription.rawText, ...matchEvidenceSources(parseResult.parsedData || {})];
   if (!Array.isArray(data?.dimensions) || data.dimensions.length !== matchDimensionDefinitions.length) throw new Error("AI 返回的匹配维度不完整");
   const dimensions = matchDimensionDefinitions.map(([key, label, weight], index) => {
     const item = data.dimensions[index];
@@ -1589,8 +1590,8 @@ function normalizeMatchReport(data, { resumeSnapshot, jobDescription, parseResul
 function collectMatchValidationErrors(data, context) {
   const errors = [];
   const check = (validate) => { try { validate(); } catch (error) { errors.push(error.message); } };
-  const resumeText = JSON.stringify(buildAiResumeContext(context.resumeSnapshot));
-  const jdText = `${context.jobDescription.rawText}\n${JSON.stringify(context.parseResult.parsedData || {})}`;
+  const resumeText = matchEvidenceSources(buildAiResumeContext(context.resumeSnapshot));
+  const jdText = [context.jobDescription.rawText, ...matchEvidenceSources(context.parseResult.parsedData || {})];
   check(() => requireNonEmptyText(data?.summary, "summary"));
   if (Array.isArray(data?.dimensions)) data.dimensions.forEach((dimension, index) => {
     const key = matchDimensionDefinitions[index]?.[0];
@@ -1621,6 +1622,7 @@ async function generateAiResumeJobMatch(store, userId, context) {
     system: `You produce an evidence-backed Chinese resume-to-JD matching report. Assess only the supplied resume snapshot and JD. Never infer personal ability beyond the resume. When the resume lacks evidence, use exactly '${missingResumeEvidenceText}'. Every non-empty resumeEvidence must be a verbatim excerpt from the resume context; every non-empty jdEvidence must be a verbatim excerpt from the JD or its parsed result. Use exactly six dimensions in this order: required_skills, project_relevance, keyword_coverage, experience, education, expression. Do not decide the final total score; it will be calculated by the server. Return JSON only.`,
     user: [
       `Locked resume context: ${JSON.stringify(aiResume)}`,
+      "Evidence rules: Copy each quote from one individual string value in the locked source. Do not quote JSON keys or combine separate fields. For experience, use exact role, date, or responsibility values as separate quotes; calculated years, joined date ranges and inferred seniority belong in explanations, never in resumeEvidence. When no exact experience quote exists, return an empty evidence array and explain the missing information. Do not escape a quote twice or rewrite punctuation.",
       `Locked JD raw text: ${context.jobDescription.rawText}`,
       `Locked JD parse result: ${JSON.stringify(context.parseResult.parsedData)}`,
       "Return a report with summary, dimensions, required/preferred skill lists, keyword lists, strongestResumeEvidence, risks, and prioritizedSuggestions. Every skill and keyword item needs skillName, matchStatus, resumeEvidence, jdEvidence, explanation, confidence. Every entry in all seven skill/keyword lists must include at least one exact JD quote in jdEvidence. MATCHED and PARTIALLY_MATCHED entries must also include at least one exact resume quote; NOT_FOUND entries must have empty resumeEvidence. Only list keywords required by the locked JD, not resume-only technologies. If no JD evidence exists, omit that item rather than invent a quote. Do not include name, contact information, or any private profile field.",
