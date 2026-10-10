@@ -2265,6 +2265,9 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
   };
   const [mode, setMode] = useState("list");
   const [jobs, setJobs] = useState([]);
+  const [jobDeleteCandidate, setJobDeleteCandidate] = useState(null);
+  const [jobDeleting, setJobDeleting] = useState(false);
+  const [jobDeleteError, setJobDeleteError] = useState("");
   const [detail, setDetail] = useState(null);
   const [resumes, setResumes] = useState([]);
   const [resumeVersions, setResumeVersions] = useState([]);
@@ -2321,6 +2324,21 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
       setLoading(false);
     }
   }, [notify]);
+
+  const deleteJob = async () => {
+    if (!jobDeleteCandidate || jobDeleting) return;
+    const id = jobDeleteCandidate.id;
+    setJobDeleting(true); setJobDeleteError("");
+    try {
+      await apiRequest(`/api/job-descriptions/${id}`, { method: "DELETE" });
+      setJobs(items => items.filter(item => item.id !== id));
+      setJobDeleteCandidate(null);
+      notify("岗位 JD 已删除");
+      await loadJobs();
+    } catch (error) {
+      setJobDeleteCandidate(null); setJobDeleteError(`删除岗位 JD 失败：${error.message}`);
+    } finally { setJobDeleting(false); }
+  };
 
   const loadResumeVersionHistory = useCallback(async (resumeId) => {
     if (!resumeId) {
@@ -3228,7 +3246,9 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
   return (
     <section className="job-page">
       <div className="job-page-head"><div><span className="section-kicker">{entry === "interview" ? "模拟面试" : "岗位 JD"}</span><h2>{entry === "interview" ? "选择岗位，开始或继续面试" : "针对真实招聘信息准备简历"}</h2><p>{entry === "interview" ? "打开岗位后查看面试记录；开始新面试需要已完成的岗位匹配报告。" : "保存原文、解析明确要求，再与具体简历建立分析任务。"}</p></div><button className="black-small" onClick={() => { setEditingId(null); setForm({ title: "", companyName: "", sourceUrl: "", rawText: "" }); setMode("create"); }}>新建岗位 JD</button></div>
-      {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <button className="job-list-item" key={job.id} onClick={() => navigateWorkspace(entry === "interview" ? "interview" : "requirements", job.id, "")}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
+      {jobDeleteError && <p role="alert">{jobDeleteError}</p>}
+      {loading ? <ResultSkeleton lines={4} /> : jobs.length ? <div className="job-list">{jobs.map((job) => <div className="job-list-row" key={job.id}><button className="job-list-item" disabled={jobDeleting} onClick={() => navigateWorkspace(entry === "interview" ? "interview" : "requirements", job.id, "")}><span>{job.parseStatus === "SUCCEEDED" ? "已解析" : job.parseStatus === "FAILED" ? "解析失败" : "待解析"}</span><strong>{job.title}</strong><small>{job.companyName || "未填写公司"} · 更新于 {formatResumeDate(job.updatedAt)}</small></button><button className="history-delete" aria-label={`删除岗位 JD #${job.id}`} title="删除岗位 JD" disabled={jobDeleting || working} onClick={() => { setJobDeleteError(""); setJobDeleteCandidate(job); }}><Trash2 size={15} /><span>删除</span></button></div>)}</div> : <div className="job-empty"><strong>还没有岗位 JD</strong><p>粘贴第一份真实招聘信息，即可保存原文并生成结构化要求。</p><button className="black-small" onClick={() => setMode("create")}>新建岗位 JD</button></div>}
+      <ConfirmDialog open={Boolean(jobDeleteCandidate)} title="删除岗位 JD" description={`删除“${jobDeleteCandidate?.title || "这份岗位 JD"}”？岗位原文、解析结果、关联的匹配报告、简历建议、模拟面试及 Agent 分析将一并删除，无法恢复。简历和已保存的简历版本会保留。`} confirmLabel="删除岗位" isWorking={jobDeleting} onClose={() => !jobDeleting && setJobDeleteCandidate(null)} onConfirm={deleteJob} />
     </section>
   );
 }

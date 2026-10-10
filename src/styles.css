@@ -5665,8 +5665,12 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 
 .workspace-history-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .workspace-history-row .history-select { flex: 1; min-width: 0; }
-.workspace-history-row .history-delete,.interview-record-row .history-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 8px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; }
-.workspace-history-row .history-delete:hover:not(:disabled),.interview-record-row .history-delete:hover:not(:disabled) { color: #b42318; background: #fff1f0; }
+.job-list-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.job-list-row .job-list-item { flex: 1; width: auto; min-width: 0; }
+.job-list-row button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.job-list-row button:disabled { opacity: .5; cursor: not-allowed; }
+.workspace-history-row .history-delete,.interview-record-row .history-delete,.job-list-row .history-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 8px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; }
+.workspace-history-row .history-delete:hover:not(:disabled),.interview-record-row .history-delete:hover:not(:disabled),.job-list-row .history-delete:hover:not(:disabled) { color: #b42318; background: #fff1f0; }
 .workspace-history-row button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .workspace-history-row button:disabled { opacity: .5; cursor: not-allowed; }
 .interview-status { display: inline-flex; align-items: center; width: fit-content; min-height: 23px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-style: normal; font-weight: 750; white-space: nowrap; }

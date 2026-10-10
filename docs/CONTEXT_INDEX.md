@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新界面调整：`docs/tasks/JD_LIST_DELETE.md`，岗位 JD 列表确认删除，完成待独立验收。
+
 - 最新修复：`docs/tasks/REPORT_MATERIAL_RETRIEVAL_FIX.md`，报告检索排除公共面试资料，待独立验收。
 
 - 最新修复：`docs/tasks/INTERVIEW_INTERRUPTED_RECOVERY.md`，重启遗留面试准备中恢复与空白提示，待独立验收。
