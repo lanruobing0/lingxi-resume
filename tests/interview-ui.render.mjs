@@ -35,7 +35,7 @@ try {
   assert.match(html, /降级可用/);
   assert.match(html, /后端最终平均分/);
   assert.match(html, />82</);
-  assert.match(html, /历史面试/);
+  assert.doesNotMatch(html, /当前求职任务的历史面试|interview-session-history|删除面试/);
 
   const failed = renderToStaticMarkup(React.createElement(MockInterviewWorkspace, { applicationId: "5", report: { status: "COMPLETED" }, sessions: [{ id: 9, status: "FAILED", resumeVersion: 3, questionCount: 4, answeredCount: 0 }], session: { id: 9, status: "FAILED", resumeVersion: 3, questionCount: 4, answeredCount: 0, failureCode: "INTERVIEW_PROVIDER_UNAVAILABLE", questions: [] }, feedbackByQuestion: {}, ...handlers }));
   assert.match(failed, /本次题目生成失败/);

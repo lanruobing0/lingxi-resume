@@ -5663,15 +5663,7 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 .interview-state-error p { margin-top: 4px; color: #7f2f2b; font-size: 13px; line-height: 1.55; }
 .interview-state-error small { display: block; margin-top: 5px; color: var(--muted); }
 
-.interview-session-history { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
-.interview-session-history > strong { font-size: 13px; }
-.interview-session-history > div { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 3px; }
-.interview-session-history .history-select { display: grid; gap: 5px; padding: 10px; border: 1px solid transparent; border-radius: 8px; background: var(--panel); color: var(--muted); text-align: left; }
-.interview-session-history .history-select:hover, .interview-session-history .history-select.active { border-color: var(--line-strong); background: var(--page); color: var(--ink); }
-.interview-session-history .history-select > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.interview-session-history .history-select small { font-size: 12px; }
 .workspace-history-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
-.interview-session-history .workspace-history-row { flex: 0 0 min(340px, 100%); }
 .workspace-history-row .history-select { flex: 1; min-width: 0; }
 .workspace-history-row .history-delete,.interview-record-row .history-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 8px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; }
 .workspace-history-row .history-delete:hover:not(:disabled),.interview-record-row .history-delete:hover:not(:disabled) { color: #b42318; background: #fff1f0; }

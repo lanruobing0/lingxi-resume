@@ -41,3 +41,9 @@
 用户截图要求在独立模拟面试列表添加删除。InterviewLibrary 每行的继续/反馈入口与删除是两个相邻按钮，无嵌套 button。复用 App 的 ConfirmDialog，说明题目/回答/反馈删除不可恢复；取消不删除，提交时阻止重复删除，失败保留列表并提示真实原因，成功移除并重新加载列表。PENDING/RUNNING 按钮禁用，既有后端 HISTORY_BUSY/ownership/级联与墓碑保留。没有修改真实个人历史或后端删除逻辑。
 
 后端语法、`corepack pnpm build` 通过。隔离真实 Node API fixture + mock 生成一份 NONE 面试，实际 UI 验证列表删除入口、取消保留、确认后删空、刷新后仍为空；1440/390 布局检查，手机 scrollWidth=390/innerWidth=390。截图 `artifacts/materials-selection/library-delete.jpg`。前端正式 Vite 自动加载改动。按现行 DECISIONS 保存本地提交，待独立验收，不推送或部署。
+
+## 练习页历史入口去重（2026-10-10）
+
+用户追加要求移除练习页内重复的历史功能。移除 MockInterviewWorkspace 的“当前求职任务的历史面试”、内部切换/删除按钮与专属样式，保留返回面试记录、当前题目/反馈/资料来源及独立 InterviewLibrary 的查看/继续/删除。历史存储、owned API 和当前记录恢复不变。
+
+`node --check backend/server.js`、`corepack pnpm test:interview-ui`、最终 `corepack pnpm build` 通过。渲染断言更新为练习页不显示重复历史；初次移除时遗漏空状态对 sessions 的依赖，测试发现后修正并复验通过。保存本地提交，待独立验收。

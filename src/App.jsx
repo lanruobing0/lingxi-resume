@@ -3196,7 +3196,6 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
         <MockInterviewWorkspace
           applicationId={selectedApplicationId}
           report={selectedReport}
-          sessions={interviewSessions}
           session={selectedInterview}
           draftCache={interviewDrafts.current}
           feedbackByQuestion={interviewFeedback}
@@ -3206,12 +3205,6 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           error={interviewError}
           onCreate={createInterviewSession}
           request={apiRequest}
-          onSelectSession={(sessionId) => {
-            window.history.replaceState(null, "", jobWorkspaceHash({ tab: "interview", jobId: job.id, applicationId: selectedApplicationId, sessionId }));
-            window.dispatchEvent(new HashChangeEvent("hashchange"));
-            openInterviewSession(sessionId);
-          }}
-          onDeleteSession={(item) => setHistoryDeleteCandidate({ kind: "interview", item })}
           onSelectQuestion={setActiveInterviewQuestion}
           onSubmitAnswer={submitInterviewAnswer}
           onRetryFeedback={retryInterviewFeedback}
@@ -3353,7 +3346,6 @@ export function MockInterviewWorkspace({
   request,
   applicationId,
   report,
-  sessions = [],
   session,
   feedbackByQuestion = {},
   activeQuestionIndex = 0,
@@ -3361,8 +3353,6 @@ export function MockInterviewWorkspace({
   working = false,
   error = null,
   onCreate,
-  onSelectSession,
-  onDeleteSession,
   onSelectQuestion,
   onSubmitAnswer,
   onRetryFeedback,
@@ -3418,9 +3408,7 @@ export function MockInterviewWorkspace({
       {error && <div className="interview-state-error" role="alert"><div><strong>面试操作未完成</strong><p>{interviewFailureMessage(error.code, error.message)}</p>{error.code && <small>错误代码：{error.code}</small>}</div><button className="white-small" disabled={loading || working} onClick={onRefresh}>从后端刷新</button></div>}
       {loading && <div className="interview-state-loading" role="status"><strong>正在恢复面试记录</strong><ResultSkeleton lines={4} /></div>}
 
-      {!loading && sessions.length > 0 && <div className="interview-session-history"><strong>当前求职任务的历史面试</strong><div>{sessions.map((item) => <div key={item.id} className="workspace-history-row"><button disabled={working} className={`history-select ${session?.id === item.id ? "active" : ""}`} onClick={() => onSelectSession?.(item.id)}><span><b>面试 #{item.id}</b><em className={`interview-status status-${String(item.status || "pending").toLowerCase()}`}>{interviewStatusLabel(item.status)}</em></span><small>简历 v{item.resumeVersion} · {item.answeredCount || 0}/{item.questionCount || 0} 题 · {formatResumeDate(item.createdAt)}</small></button><button className="history-delete" aria-label={`删除面试 #${item.id}`} title="删除记录" disabled={working || ["PENDING", "RUNNING"].includes(item.status)} onClick={() => onDeleteSession?.(item)}><Trash2 size={15} /><span>删除</span></button></div>)}</div></div>}
-
-      {!loading && !session && !sessions.length && <div className="job-empty"><strong>尚未开始岗位模拟面试</strong><p>{["COMPLETED", "DEGRADED"].includes(report?.status) ? "从当前 AI 岗位匹配报告生成第一组可追溯题目。" : "先完成并打开一份 AI 岗位匹配报告，才可生成面试题。"}</p></div>}
+      {!loading && !session && <div className="job-empty"><strong>尚未开始岗位模拟面试</strong><p>{["COMPLETED", "DEGRADED"].includes(report?.status) ? "从当前 AI 岗位匹配报告生成第一组可追溯题目。" : "先完成并打开一份 AI 岗位匹配报告，才可生成面试题。"}</p></div>}
 
       {!loading && session && <div className="interview-session-shell">
         <header className="interview-session-summary">
