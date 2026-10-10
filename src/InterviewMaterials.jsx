@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FileText, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { FileText, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, Upload, X } from "lucide-react";
 import { KnowledgeFileImport } from "./KnowledgeFileImport";
 import { PublicMaterialLibrary } from "./PublicMaterialLibrary";
 
@@ -81,7 +81,11 @@ function PersonalMaterials({ request, onBusyChange }) {
   const field = (name) => ({ value: form[name], disabled: busy, onChange: (event) => setForm((current) => ({ ...current, [name]: event.target.value })) });
   const visible = items.filter((item) => [item.title, item.description, item.jobFamily, ...(item.skillTags || [])].join(" ").toLowerCase().includes(query.trim().toLowerCase()));
   return <section className="personal-materials" aria-labelledby="personal-materials-title">
-    <header className="knowledge-manager-head"><div><h2 id="personal-materials-title">我的面试资料</h2><p>保存题目、技术笔记与复习提纲。资料仅自己可见，启用后与公共库一起参与新模拟面试的检索。</p></div><div className="knowledge-head-actions"><button className="white-small" disabled={busy} onClick={() => open()}><Plus size={16} />新建资料</button><button className="black-small" disabled={busy} onClick={() => open(null, true)}><Upload size={16} />上传文件</button></div></header>
+    <header className="material-section-head"><h2 id="personal-materials-title">题目与复习笔记</h2><p>资料仅自己可见，启用后用于你的新模拟面试。</p></header>
+    <div className="personal-material-toolbar">
+      {items.length > 0 || query ? <label className="material-search"><Search size={16} aria-hidden="true" /><input aria-label="搜索我的面试资料" placeholder="搜索名称、岗位或标签" value={query} onChange={(event) => setQuery(event.target.value)} /></label> : <span className="material-count">{loading ? "正在读取资料…" : "0 份资料"}</span>}
+      <div className="material-toolbar-actions"><button className="white-small material-refresh" aria-label="刷新个人资料" title="刷新个人资料" disabled={busy || loading} onClick={() => { setError(""); load(); }}><RefreshCw size={16} /></button><button className="white-small" disabled={busy} onClick={() => open()}><Plus size={16} />新建资料</button>{items.length > 0 && <button className="black-small" disabled={busy} onClick={() => open(null, true)}><Upload size={16} />上传文件</button>}</div>
+    </div>
     {error && <p role="alert" className="knowledge-operation-error">{error}</p>}
     {notice && <p role="status" className="material-notice">{notice}</p>}
     {working && working !== "read" && <p role="status" className="knowledge-operation-status"><LoaderCircle className="spin" size={16} />{working}</p>}
@@ -95,12 +99,11 @@ function PersonalMaterials({ request, onBusyChange }) {
       <label className="knowledge-publish-option"><input type="checkbox" checked={form.aiConsent} disabled={busy} onChange={(event) => setForm((current) => ({ ...current, aiConsent: event.target.checked }))} />我已核对内容，允许提交给模型并用于自己的面试检索</label>
       <div className="knowledge-form-actions"><button type="button" className="white-small" disabled={busy} onClick={() => setEditor(null)}>取消</button><button className="black-small" disabled={busy}>{form.aiConsent ? "保存并建立索引" : "保存资料"}</button></div>
     </form>}
-    <div className="personal-material-toolbar"><input aria-label="搜索我的面试资料" placeholder="搜索资料名称、岗位或标签" value={query} onChange={(event) => setQuery(event.target.value)} /><button className="white-small" disabled={busy || loading} onClick={() => { setError(""); load(); }}><RefreshCw size={16} />刷新</button></div>
     {loading ? <div className="material-skeletons" aria-label="正在读取个人资料">{[1, 2].map((id) => <div className="skeleton" key={id} />)}</div> : visible.length ? <div className="personal-material-list">{visible.map((item) => <article key={item.id}>
       <div className="personal-material-row"><FileText size={19} /><h3>{item.title}</h3><span className="personal-material-state">{stateLabel(item)}</span></div><p>{item.description || item.jobFamily || "个人面试准备资料"}</p><small>{item.characterCount.toLocaleString()} 字 · {item.sourceType === "FILE_IMPORT" ? "文件导入" : "自建"} · 更新于 {new Date(item.updatedAt).toLocaleDateString("zh-CN")}</small>
       {item.aiConsent && (item.indexFailureMessage || item.failureMessage) && <p className="personal-material-failure">{item.indexFailureMessage || item.failureMessage}</p>}
       <div className="personal-material-actions"><button className="white-small" disabled={busy} onClick={() => open(item)}><Pencil size={14} />查看 / 编辑</button>{item.aiConsent && !(item.status === "PROCESSED" && item.vectorStatus === "INDEXED") && <button className="white-small" disabled={busy} onClick={() => retry(item)}>重试索引</button>}<button className="danger-text-button" disabled={busy} onClick={() => setDeleteItem(item)}><Trash2 size={14} />删除</button></div>
       {deleteItem?.id === item.id && <div className="personal-material-delete" role="group" aria-label="确认删除个人资料"><p>删除「{item.title}」及其向量索引？已有面试记录保留，来源将显示为不可用。</p><button className="white-small" disabled={busy} onClick={() => setDeleteItem(null)}>取消删除</button><button className="danger-action" disabled={busy} onClick={() => remove(item)}>确认删除</button></div>}
-    </article>)}</div> : <div className="knowledge-empty"><FolderOpen size={26} /><strong>{query ? "没有找到匹配资料" : "把你的面试准备整理到这里"}</strong><p>{query ? "试试其他关键词。" : "上传文字版文件或新建一份复习提纲。公共资料库可以在上方切换查看。"}</p>{!query && <button className="white-small" disabled={busy} onClick={() => open(null, true)}><Upload size={16} />上传第一份个人资料</button>}</div>}
+    </article>)}</div> : !editor && <div className="material-empty"><span className="material-empty-icon"><FolderOpen size={24} aria-hidden="true" /></span><h3>{query ? "没有找到匹配资料" : "还没有个人资料"}</h3><p>{query ? "换个名称、岗位或技能关键词试试。" : "上传面试题、技术笔记或复习提纲，集中整理你的面试准备。"}</p>{query ? <button className="white-small" onClick={() => setQuery("")}>清空搜索</button> : <><button className="black-small" disabled={busy} onClick={() => open(null, true)}><Upload size={16} />上传第一份资料</button><small>支持 TXT、Markdown、PDF、Word 文字版文件</small></>}</div>}
   </section>;
 }

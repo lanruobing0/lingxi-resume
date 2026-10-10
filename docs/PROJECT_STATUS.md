@@ -1,5 +1,9 @@
 # 项目状态
 
+## 面试资料页整理（2026-10-10）
+
+个人/公共资料页已统一标题和工具栏，收紧内容宽度、空状态与手机布局。桌面/手机浏览器交互、专项回归和构建通过，待独立验收。交接：`docs/tasks/MATERIALS_UI_POLISH.md`。
+
 ## Docker 冷启动修复（2026-10-10）
 
 本项目启动入口已加入 Docker Desktop/Windows 残留 socket 保护，并纳入 Git；现有快捷方式兼容。两轮冷启动与热启动复用、真实 readiness、Qdrant collection 可读、安全测试及构建通过，待独立验收。未重置 Docker 或删除其他项目容器/卷。交接：`docs/tasks/DOCKER_STARTUP_FIX.md`。
