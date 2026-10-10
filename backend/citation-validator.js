@@ -1,3 +1,4 @@
+import { canReadKnowledge, isPublicKnowledge } from "./knowledge-access.js";
 import { validateClaimSupport } from "./claim-support-validator.js";
 
 const knowledgeClaimType = "KNOWLEDGE_CLAIM";
@@ -23,7 +24,7 @@ function validateCitation(store, report, citation) {
   if (!candidate) return { valid: false, reason: reason("CITATION_NOT_IN_RETRIEVAL_RUN", "引用 Chunk 不在本次检索候选中") };
   const chunk = store.knowledgeChunks.find((item) => item.id === chunkId && item.documentId === documentId && item.processingVersion === processingVersion);
   const document = store.knowledgeDocuments.find((item) => item.id === documentId);
-  if (!chunk || !document) return { valid: false, reason: reason("CITATION_LOCAL_SOURCE_MISSING", "本地知识来源不存在") };
+  if (!chunk || !document || !isPublicKnowledge(document)) return { valid: false, reason: reason("CITATION_LOCAL_SOURCE_MISSING", "本地知识来源不存在") };
   if (document.status !== "PROCESSED" || document.vectorStatus !== "INDEXED" || chunk.processingVersion !== document.processingVersion || !document.activeIndexRunId) {
     return { valid: false, reason: reason("CITATION_SOURCE_NOT_CURRENT", "知识来源已撤回或不是当前有效版本") };
   }
@@ -88,8 +89,8 @@ export function validateKnowledgeClaims(store, report, claims) {
   };
 }
 
-export function sourceAvailability(store, citation) {
+export function sourceAvailability(store, citation, userId = null) {
   const chunk = store.knowledgeChunks.find((item) => item.id === citation.chunkId && item.documentId === citation.documentId && item.processingVersion === citation.processingVersion);
   const document = store.knowledgeDocuments.find((item) => item.id === citation.documentId);
-  return Boolean(chunk && document && document.status === "PROCESSED" && document.vectorStatus === "INDEXED" && document.processingVersion === chunk.processingVersion && document.activeIndexRunId);
+  return Boolean(chunk && document && canReadKnowledge(document, userId) && (isPublicKnowledge(document) || document.aiConsent === true) && document.status === "PROCESSED" && document.vectorStatus === "INDEXED" && document.processingVersion === chunk.processingVersion && document.activeIndexRunId);
 }

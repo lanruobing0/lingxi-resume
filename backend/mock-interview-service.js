@@ -96,6 +96,7 @@ export function buildInterviewSources({ aiResume, parseResult, matchReport, matc
       processingVersion: item.processingVersion,
       contentHash: item.contentHash,
       sourceTitle: item.documentTitle,
+      materialUserId: item.materialUserId || null,
     });
   }
   return sources;

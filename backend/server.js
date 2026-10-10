@@ -1,3 +1,4 @@
+import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2336,17 +2337,17 @@ function publicMatchReportSummary(report) {
   };
 }
 
-function publicInterviewSourceRef(store, source) {
+function publicInterviewSourceRef(store, source, userId) {
   return {
     ...source,
-    availability: source.sourceType === "KNOWLEDGE" ? (sourceAvailability(store, source) ? "AVAILABLE" : "UNAVAILABLE") : "AVAILABLE",
+    availability: source.sourceType === "KNOWLEDGE" ? (sourceAvailability(store, source, userId) ? "AVAILABLE" : "UNAVAILABLE") : "AVAILABLE",
   };
 }
 
 function publicInterviewQuestion(store, question) {
   return {
     ...question,
-    sourceRefs: question.sourceRefs.map((source) => publicInterviewSourceRef(store, source)),
+    sourceRefs: question.sourceRefs.map((source) => publicInterviewSourceRef(store, source, question.userId)),
     expectedPoints: question.expectedPoints.map((point) => ({ ...point, sourceRefs: point.sourceRefs.map((source) => publicInterviewSourceRef(store, source)) })),
   };
 }
@@ -2437,7 +2438,7 @@ async function executeInterviewSession(store, user, application, report, options
     let retrieval = null;
     const retrievalRunOffset = store.knowledgeRetrievalRuns.length;
     try {
-      retrieval = await knowledgeRetrievalService().search(store, buildInterviewRetrievalRequest({ aiResume, parseResult: context.parseResult, matchReport: report, match: context.match, ...options }), user.id);
+      retrieval = await knowledgeRetrievalService().search(store, buildInterviewRetrievalRequest({ aiResume, parseResult: context.parseResult, matchReport: report, match: context.match, ...options }), user.id, { includePersonal: true });
       session.retrievalRunIds = [retrieval.run.id];
       session.retrievalStatus = retrieval.degraded || retrieval.rerankerFallback ? "DEGRADED" : "COMPLETED";
       if (retrieval.rerankerFallback && !retrieval.run.degraded) {
@@ -2888,7 +2889,7 @@ async function submitInterviewAnswer(store, user, session, question, answerText,
       if (ungrounded) throw interviewFailure(422, "FEEDBACK_KNOWLEDGE_SOURCE_REQUIRED", "知识题反馈的判断必须引用 RAG knowledge 来源");
     }
     Object.assign(feedback, normalized);
-    feedback.status = session.status === "DEGRADED" || question.sourceRefs.some((source) => source.sourceType === "KNOWLEDGE" && !sourceAvailability(store, source)) ? "DEGRADED" : "COMPLETED";
+    feedback.status = session.status === "DEGRADED" || question.sourceRefs.some((source) => source.sourceType === "KNOWLEDGE" && !sourceAvailability(store, source, session.userId)) ? "DEGRADED" : "COMPLETED";
     feedback.completedAt = now();
     answer.status = "FEEDBACK_COMPLETED";
     await writeStore(store);
@@ -3021,10 +3022,20 @@ async function readiness() {
   } catch (error) { return { ok: false, persistence: { ok: false, driver: startupConfig.driver, failureCode: error.code || "PERSISTENCE_UNAVAILABLE" }, vectorStore: { ok: false, failureCode: "READINESS_UNAVAILABLE" }, qdrant: { ok: false, failureCode: "READINESS_UNAVAILABLE" } }; }
 }
 
+let materialMutationTail = Promise.resolve();
 async function handleApi(req, res) {
+  if (["POST", "PUT", "DELETE"].includes(req.method) && /^\/api\/(?:personal-materials|admin\/knowledge-(?:documents|index-runs))(?:\/|$)/.test(req.url.split("?")[0])) {
+    const previous = materialMutationTail; let release;
+    materialMutationTail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try { return await handleApiRequest(req, res); } finally { release(); }
+  }
+  return handleApiRequest(req, res);
+}
+async function handleApiRequest(req, res) {
   applySecurityHeaders(req, res);
   const url = new URL(req.url, "http://localhost");
-  const pathname = url.pathname;
+  let pathname = url.pathname;
   const method = req.method || "GET";
 
   if (method === "OPTIONS") {
@@ -3052,6 +3063,19 @@ async function handleApi(req, res) {
   }
 
   const store = await readStore();
+  if (pathname === "/api/personal-materials/search" && method === "POST") {
+    const user = requireUser(store, req); const body = await readJson(req);
+    body.query = sanitizePersonalKnowledge(body.query, { ...user, materialIdentities: store.resumes.filter((resume) => resume.userId === user.id).flatMap((resume) => [resume.realName, resume.name, resume.email, resume.phone, resume.website, resume.city]) });
+    return send(res, 200, await knowledgeRetrievalService().search(store, body, user.id, { includePersonal: true }));
+  }
+  // Personal routes share the existing lifecycle, with ownership checked before
+  // any data or provider operation. This mapping never changes the user's role.
+  const personalMaterialRoute = /^\/api\/personal-materials(?:\/(?:extract|[1-9]\d*(?:\/(?:process|index))?))?$/.test(pathname);
+  const materialUser = personalMaterialRoute ? requireUser(store, req) : null;
+  const materialIdentity = materialUser ? { ...materialUser, materialIdentities: store.resumes.filter((resume) => resume.userId === materialUser.id).flatMap((resume) => [resume.realName, resume.name, resume.email, resume.phone, resume.website, resume.city]) } : null;
+  if (personalMaterialRoute) pathname = pathname.replace("/api/personal-materials", "/api/admin/knowledge-documents");
+  const requireMaterialActor = () => personalMaterialRoute ? materialUser : requireAdmin(store, req);
+  const materialVisible = (document) => personalMaterialRoute ? isOwnedKnowledge(document, materialUser.id) : isPublicKnowledge(document);
   const key = routeKey(method, pathname);
 
   if (key === "GET /api/health") {
@@ -4011,23 +4035,29 @@ async function handleApi(req, res) {
 
   if (key === "GET /api/admin/knowledge-retrieval/runs") {
     requireAdmin(store, req);
-    return send(res, 200, { items: [...store.knowledgeRetrievalRuns].sort((a, b) => b.id - a.id) });
+    return send(res, 200, { items: store.knowledgeRetrievalRuns.filter((run) => run.materialScope !== "PERSONAL_AND_PUBLIC").sort((a, b) => b.id - a.id) });
   }
 
   const retrievalRunMatch = pathname.match(/^\/api\/admin\/knowledge-retrieval\/runs\/([^/]+)$/);
   if (method === "GET" && retrievalRunMatch) {
     requireAdmin(store, req);
     const runId = parseOptionalPositiveInteger(retrievalRunMatch[1], "runId");
-    const item = store.knowledgeRetrievalRuns.find((run) => run.id === runId);
+    const item = store.knowledgeRetrievalRuns.find((run) => run.id === runId && run.materialScope !== "PERSONAL_AND_PUBLIC");
     if (!item) return send(res, 404, { message: "检索运行记录不存在" });
     return send(res, 200, { item });
   }
 
   if (key === "POST /api/admin/knowledge-documents/extract") {
-    requireAdmin(store, req);
+    requireMaterialActor();
     try {
       const file = await readKnowledgeUpload(req);
-      return send(res, 200, await extractKnowledgeFile(file));
+      const extracted = await extractKnowledgeFile(file);
+      if (personalMaterialRoute) {
+        const safe = sanitizePersonalKnowledge(extracted.rawText, materialIdentity);
+        if (safe !== extracted.rawText) extracted.warnings.push("已隐藏可识别的个人信息，请核对正文并手动移除其余私人信息。");
+        extracted.rawText = safe; extracted.characterCount = safe.length;
+      }
+      return send(res, 200, extracted);
     } catch (error) {
       return send(res, error.status || 422, { message: error.message, failureCode: error.code || "UPLOAD_PARSE_FAILED" });
     }
@@ -4038,7 +4068,7 @@ async function handleApi(req, res) {
     // Public library exposes only current, indexed documents and a display
     // allowlist. Raw source text and admin/audit/provider metadata stay private.
     const items = store.knowledgeDocuments
-      .filter((document) => document.status === "PROCESSED" && document.vectorStatus === "INDEXED"
+      .filter((document) => isPublicKnowledge(document) && document.status === "PROCESSED" && document.vectorStatus === "INDEXED"
         && document.activeIndexRunId && document.indexedProcessingVersion === document.processingVersion)
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
       .map((document) => ({
@@ -4052,14 +4082,14 @@ async function handleApi(req, res) {
   }
 
   if (key === "GET /api/admin/knowledge-documents") {
-    requireAdmin(store, req);
+    requireMaterialActor();
     const documentType = String(url.searchParams.get("documentType") || "").trim();
     const jobFamily = String(url.searchParams.get("jobFamily") || "").trim();
     const status = String(url.searchParams.get("status") || "").trim();
     if (documentType && !knowledgeDocumentTypes.has(documentType)) throw new HttpError(400, "documentType不合法");
     if (status && !knowledgeStatuses.has(status)) throw new HttpError(400, "status不合法");
     const items = store.knowledgeDocuments
-      .filter((document) => (!documentType || document.documentType === documentType)
+      .filter((document) => materialVisible(document) && (!documentType || document.documentType === documentType)
         && (!jobFamily || document.jobFamily === jobFamily)
         && (!status || document.status === status))
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
@@ -4068,11 +4098,19 @@ async function handleApi(req, res) {
   }
 
   if (key === "POST /api/admin/knowledge-documents") {
-    const user = requireAdmin(store, req);
-    const input = validateKnowledgeDocumentInput(await readJson(req), { isCreate: true });
+    const user = requireMaterialActor();
+    const body = await readJson(req);
+    const input = validateKnowledgeDocumentInput(body, { isCreate: true });
+    if (personalMaterialRoute) {
+      for (const field of ["rawText", "title", "description", "jobFamily", "seniority", "sourceName"]) input[field] = sanitizePersonalKnowledge(input[field], materialIdentity);
+      input.skillTags = input.skillTags.map((tag) => sanitizePersonalKnowledge(tag, materialIdentity)); input.sourceUrl = "";
+    }
     const timestamp = now();
     const document = {
-      id: nextId(store.knowledgeDocuments),
+      id: Math.max(nextId(store.knowledgeDocuments), store.knowledgeNextDocumentId || 1),
+      scope: personalMaterialRoute ? "PRIVATE" : "PUBLIC",
+      userId: personalMaterialRoute ? user.id : null,
+      aiConsent: personalMaterialRoute ? body.aiConsent === true : false,
       ...input,
       rawTextHash: contentHash(input.rawText),
       normalizedText: "",
@@ -4095,27 +4133,29 @@ async function handleApi(req, res) {
       indexFailureCode: "",
       indexFailureMessage: "",
     };
+    store.knowledgeNextDocumentId = document.id + 1;
     store.knowledgeDocuments.push(document);
     await writeStore(store);
     return send(res, 201, { item: knowledgeDocumentSummary(document) });
   }
 
   if (key === "GET /api/admin/vector-index/status") {
-    requireAdmin(store, req);
+    requireMaterialActor();
     return send(res, 200, await vectorIndexService().status());
   }
 
   const knowledgeIndexMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/index$/);
   if (knowledgeIndexMatch && ["POST", "DELETE"].includes(method)) {
-    const user = requireAdmin(store, req);
+    const user = requireMaterialActor();
     const documentId = parseOptionalPositiveInteger(knowledgeIndexMatch[1], "documentId");
-    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId && materialVisible(item));
     if (!document) return send(res, 404, { message: "知识资料不存在" });
     try {
       if (method === "DELETE") {
         const result = await vectorIndexService().deleteDocumentIndex(store, document);
         return send(res, 200, { ok: true, ...result, item: knowledgeDocumentSummary(document) });
       }
+      if (personalMaterialRoute && !document.aiConsent) return send(res, 400, { message: "请先确认允许将已核对的资料提交给向量模型", failureCode: "MATERIAL_AI_CONSENT_REQUIRED" });
       const result = await vectorIndexService().indexDocument(store, document, user.id);
       return send(res, 200, { ...result, item: knowledgeDocumentSummary(document) });
     } catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
@@ -4123,9 +4163,9 @@ async function handleApi(req, res) {
 
   const knowledgeRebuildMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/index\/rebuild$/);
   if (method === "POST" && knowledgeRebuildMatch) {
-    const user = requireAdmin(store, req);
+    const user = requireMaterialActor();
     const documentId = parseOptionalPositiveInteger(knowledgeRebuildMatch[1], "documentId");
-    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId && materialVisible(item));
     if (!document) return send(res, 404, { message: "知识资料不存在" });
     try { const result = await vectorIndexService().indexDocument(store, document, user.id, { force: true }); return send(res, 200, { ...result, item: knowledgeDocumentSummary(document) }); }
     catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
@@ -4133,25 +4173,25 @@ async function handleApi(req, res) {
 
   const knowledgeIndexRunsMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/index-runs$/);
   if (method === "GET" && knowledgeIndexRunsMatch) {
-    requireAdmin(store, req); const documentId = parseOptionalPositiveInteger(knowledgeIndexRunsMatch[1], "documentId");
-    if (!store.knowledgeDocuments.some((item) => item.id === documentId)) return send(res, 404, { message: "知识资料不存在" });
+    requireMaterialActor(); const documentId = parseOptionalPositiveInteger(knowledgeIndexRunsMatch[1], "documentId");
+    if (!store.knowledgeDocuments.some((item) => item.id === documentId && materialVisible(item))) return send(res, 404, { message: "知识资料不存在" });
     return send(res, 200, { items: store.knowledgeIndexRuns.filter((run) => run.documentId === documentId).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))) });
   }
 
   const knowledgeVectorRecordsMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/vector-records$/);
   if (method === "GET" && knowledgeVectorRecordsMatch) {
-    requireAdmin(store, req); const documentId = parseOptionalPositiveInteger(knowledgeVectorRecordsMatch[1], "documentId");
-    if (!store.knowledgeDocuments.some((item) => item.id === documentId)) return send(res, 404, { message: "知识资料不存在" });
+    requireMaterialActor(); const documentId = parseOptionalPositiveInteger(knowledgeVectorRecordsMatch[1], "documentId");
+    if (!store.knowledgeDocuments.some((item) => item.id === documentId && materialVisible(item))) return send(res, 404, { message: "知识资料不存在" });
     return send(res, 200, { items: store.knowledgeVectorRecords.filter((record) => record.documentId === documentId).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) });
   }
 
   const knowledgeIndexRetryMatch = pathname.match(/^\/api\/admin\/knowledge-index-runs\/([^/]+)\/retry$/);
   if (method === "POST" && knowledgeIndexRetryMatch) {
-    const user = requireAdmin(store, req); const runId = parseOptionalPositiveInteger(knowledgeIndexRetryMatch[1], "indexRunId");
+    const user = requireMaterialActor(); const runId = parseOptionalPositiveInteger(knowledgeIndexRetryMatch[1], "indexRunId");
     const failedRun = store.knowledgeIndexRuns.find((run) => run.id === runId);
-    if (!failedRun) return send(res, 404, { message: "索引运行记录不存在" });
+    if (!failedRun || !store.knowledgeDocuments.some((document) => document.id === failedRun.documentId && isPublicKnowledge(document))) return send(res, 404, { message: "索引运行记录不存在" });
     if (failedRun.status !== "FAILED") return send(res, 409, { message: "只有失败的索引运行可以重试", failureCode: "INDEX_RUN_NOT_FAILED" });
-    const document = store.knowledgeDocuments.find((item) => item.id === failedRun.documentId);
+    const document = store.knowledgeDocuments.find((item) => item.id === failedRun.documentId && materialVisible(item));
     if (!document) return send(res, 404, { message: "知识资料不存在" });
     try { const result = await vectorIndexService().indexDocument(store, document, user.id, { force: true }); return send(res, 200, { ...result, item: knowledgeDocumentSummary(document) }); }
     catch (error) { const response = vectorIndexErrorResponse(error); return send(res, response.status, { message: response.message, failureCode: response.failureCode }); }
@@ -4159,13 +4199,19 @@ async function handleApi(req, res) {
 
   const knowledgeDocumentMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)$/);
   if (knowledgeDocumentMatch) {
-    requireAdmin(store, req);
+    requireMaterialActor();
     const documentId = parseOptionalPositiveInteger(knowledgeDocumentMatch[1], "documentId");
-    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId && materialVisible(item));
     if (!document) return send(res, 404, { message: "知识资料不存在" });
     if (method === "GET") return send(res, 200, { item: document });
     if (method === "PUT") {
-      const input = validateKnowledgeDocumentInput(await readJson(req), { current: document });
+      const body = await readJson(req);
+      const input = validateKnowledgeDocumentInput(body, { current: document });
+      if (personalMaterialRoute) {
+        for (const field of ["rawText", "title", "description", "jobFamily", "seniority", "sourceName"]) input[field] = sanitizePersonalKnowledge(input[field], materialIdentity);
+        input.skillTags = input.skillTags.map((tag) => sanitizePersonalKnowledge(tag, materialIdentity)); input.sourceUrl = "";
+        document.aiConsent = body.aiConsent === true;
+      }
       const rawTextChanged = input.rawText !== document.rawText;
       Object.assign(document, input, { updatedAt: now() });
       if (rawTextChanged) {
@@ -4193,9 +4239,9 @@ async function handleApi(req, res) {
 
   const knowledgeProcessMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/process$/);
   if (method === "POST" && knowledgeProcessMatch) {
-    requireAdmin(store, req);
+    requireMaterialActor();
     const documentId = parseOptionalPositiveInteger(knowledgeProcessMatch[1], "documentId");
-    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId && materialVisible(item));
     if (!document) return send(res, 404, { message: "知识资料不存在" });
     const inputHash = contentHash(document.rawText);
     const existing = store.knowledgeProcessingRecords.find((record) => record.documentId === documentId
@@ -4237,8 +4283,9 @@ async function handleApi(req, res) {
       if (!normalizedText) throw new HttpError(400, "清洗后内容为空，无法处理", "EMPTY_NORMALIZED_TEXT");
       const generated = createKnowledgeChunks(document, normalizedText, processingVersion);
       if (!generated.length) throw new HttpError(400, "未生成有效切片", "NO_VALID_CHUNKS");
-      let nextChunkId = nextId(store.knowledgeChunks);
+      let nextChunkId = Math.max(nextId(store.knowledgeChunks), store.knowledgeNextChunkId || 1);
       const chunks = generated.map((chunk) => ({ ...chunk, id: nextChunkId++ }));
+      store.knowledgeNextChunkId = nextChunkId;
       record.status = "PROCESSED";
       record.chunkCount = chunks.length;
       record.completedAt = now();
@@ -4277,9 +4324,9 @@ async function handleApi(req, res) {
 
   const knowledgeChunksMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/chunks$/);
   if (method === "GET" && knowledgeChunksMatch) {
-    requireAdmin(store, req);
+    requireMaterialActor();
     const documentId = parseOptionalPositiveInteger(knowledgeChunksMatch[1], "documentId");
-    const document = store.knowledgeDocuments.find((item) => item.id === documentId);
+    const document = store.knowledgeDocuments.find((item) => item.id === documentId && materialVisible(item));
     if (!document) return send(res, 404, { message: "知识资料不存在" });
     const items = store.knowledgeChunks.filter((item) => item.documentId === documentId).sort((a, b) => a.chunkIndex - b.chunkIndex);
     return send(res, 200, { items, document: knowledgeDocumentSummary(document) });
@@ -4287,9 +4334,9 @@ async function handleApi(req, res) {
 
   const knowledgeRecordsMatch = pathname.match(/^\/api\/admin\/knowledge-documents\/([^/]+)\/processing-records$/);
   if (method === "GET" && knowledgeRecordsMatch) {
-    requireAdmin(store, req);
+    requireMaterialActor();
     const documentId = parseOptionalPositiveInteger(knowledgeRecordsMatch[1], "documentId");
-    if (!store.knowledgeDocuments.some((item) => item.id === documentId)) return send(res, 404, { message: "知识资料不存在" });
+    if (!store.knowledgeDocuments.some((item) => item.id === documentId && materialVisible(item))) return send(res, 404, { message: "知识资料不存在" });
     const items = store.knowledgeProcessingRecords.filter((item) => item.documentId === documentId)
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
     return send(res, 200, { items });
@@ -4300,7 +4347,7 @@ async function handleApi(req, res) {
     requireAdmin(store, req);
     const chunkId = parseOptionalPositiveInteger(knowledgeChunkMatch[1], "chunkId");
     const item = store.knowledgeChunks.find((chunk) => chunk.id === chunkId);
-    if (!item) return send(res, 404, { message: "知识切片不存在" });
+    if (!item || !store.knowledgeDocuments.some((document) => document.id === item.documentId && isPublicKnowledge(document))) return send(res, 404, { message: "知识切片不存在" });
     return send(res, 200, { item });
   }
 

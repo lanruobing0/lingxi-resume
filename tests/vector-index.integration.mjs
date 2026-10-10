@@ -13,7 +13,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const tokenHash = (token) => createHash("sha256").update(token).digest("base64url");
 
 export async function startMockServices() {
-  const state = { collections: new Map(), points: new Map(), embeddingCalls: 0, upserts: 0, deletes: 0, failEmbedding: false, failEmbeddingAfter: null, failUpsert: false, failUpsertAt: null, failDelete: false, invalid: null, received: [] };
+  const state = { collections: new Map(), points: new Map(), embeddingCalls: 0, upserts: 0, deletes: 0, failEmbedding: false, failEmbeddingAfter: null, failUpsert: false, failUpsertAt: null, failDelete: false, invalid: null, received: [], searchFilters: [] };
   const embedding = createServer(async (req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/embeddings") return res.writeHead(404).end();
     let body = ""; for await (const part of req) body += part;
@@ -25,6 +25,13 @@ export async function startMockServices() {
   const qdrant = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost"); let body = ""; for await (const part of req) body += part; const json = body ? JSON.parse(body) : null;
     if (url.pathname === "/healthz") return res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+    const searchMatch = url.pathname.match(/^\/collections\/([^/]+)\/points\/search$/);
+    if (searchMatch && req.method === "POST") {
+      state.searchFilters.push(json.filter);
+      const points = [...(state.points.get(decodeURIComponent(searchMatch[1])) || new Map()).values()];
+      const result = points.filter((point) => state.ignoreSearchFilters || (json.filter?.must || []).every(({key,match}) => match.any ? match.any.some((value) => Array.isArray(point.payload[key]) ? point.payload[key].includes(value) : point.payload[key] === value) : point.payload[key] === match.value)).slice(0, json.limit).map((point) => ({...point, score:0.9}));
+      return res.writeHead(200, {"Content-Type":"application/json"}).end(JSON.stringify({result}));
+    }
     const match = url.pathname.match(/^\/collections\/([^/]+)(?:\/(points)(?:\/delete)?)?$/); if (!match) return res.writeHead(404).end();
     const [, encodedName, suffix] = match; const name = decodeURIComponent(encodedName);
     if (!suffix && req.method === "GET") { const collection = state.collections.get(name); if (!collection) return res.writeHead(404, { "Content-Type": "application/json" }).end("{}"); return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ result: { config: { params: { vectors: { size: collection.dimension, distance: collection.distance } } } } })); }

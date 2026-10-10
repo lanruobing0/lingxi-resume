@@ -484,3 +484,15 @@ INSERT INTO system_notice (title, content) VALUES
 -- production MySQL environment. It adds the persistence snapshot, audited
 -- entity projections for RetrievalRun/MatchReport/Suggestion/ResumeVersion/
 -- Interview/Agent entities, and the bounded async rag_job model.
+
+-- Personal interview materials production reference (2026-10-10).
+-- Runtime persists these fields in the existing store snapshot; this is not an
+-- automatically executed migration of a normalized knowledge_document table.
+-- ALTER TABLE knowledge_document
+--   ADD COLUMN scope VARCHAR(16) NOT NULL DEFAULT 'PUBLIC',
+--   ADD COLUMN user_id BIGINT NULL,
+--   ADD COLUMN ai_consent BOOLEAN NOT NULL DEFAULT FALSE,
+--   ADD INDEX idx_knowledge_document_scope_owner (scope, user_id, status);
+-- PRIVATE requires a non-null owned user_id; legacy omitted scope is PUBLIC.
+-- Store snapshot also carries knowledgeNextDocumentId/knowledgeNextChunkId
+-- so deleted sources cannot be assigned again to a later unrelated upload.

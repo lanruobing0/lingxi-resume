@@ -6,16 +6,19 @@ export async function vectorRetrieve(store, normalizedQuery, filters, limit, sco
   const runtime = getVectorRuntimeStatus(env);
   if (!runtime.embeddingConfig) throw Object.assign(new Error("Embedding provider is not configured"), { code: "EMBEDDING_NOT_CONFIGURED", status: 503 });
   if (!runtime.vectorConfig) throw Object.assign(new Error(runtime.driver === "qdrant" ? "Qdrant is not configured" : "Vector store is not configured"), { code: runtime.driver === "qdrant" ? "QDRANT_NOT_CONFIGURED" : "VECTOR_STORE_NOT_CONFIGURED", status: 503 });
+  const allowed = currentKnowledge(store, filters);
+  const documentIds = [...new Set(allowed.map(({ document }) => document.id))];
+  if (!documentIds.length) return [];
   const vectorStore = createVectorClient(runtime);
   let points;
   if (runtime.driver === "upstash") points = await vectorStore.searchData(runtime.collectionName, normalizedQuery, { limit: Math.max(limit * 5, 50), scoreThreshold });
   else {
     const embedded = await new OpenAICompatibleEmbeddingProvider(runtime.embeddingConfig).embedTexts([normalizedQuery]); const vector = embedded.vectors?.[0];
     if (!Array.isArray(vector) || vector.length !== runtime.profile.dimension || !vector.every(Number.isFinite)) throw Object.assign(new Error("Embedding response is invalid"), { code: "EMBEDDING_INVALID_RESPONSE", status: 502 });
-    const filter = { must: [{ key: "embeddingProfileId", match: { value: runtime.profile.profileId } }, ...payloadFilters(filters)] };
+    const filter = { must: [{ key: "embeddingProfileId", match: { value: runtime.profile.profileId } }, { key: "documentId", match: { any: documentIds } }, ...payloadFilters(filters)] };
     points = await vectorStore.searchPoints(runtime.collectionName, vector, { limit, scoreThreshold, filter });
   }
-  const valid = new Map(currentKnowledge(store, filters).map(({ chunk, document }) => [chunk.id, { chunk, document }]));
+  const valid = new Map(allowed.map(({ chunk, document }) => [chunk.id, { chunk, document }]));
   const records = new Map(store.knowledgeVectorRecords.filter((record) => record.status === "ACTIVE").map((record) => [record.pointId, record]));
   const output = [];
   for (const point of points) { const record = records.get(String(point.id)); const local = valid.get(Number(point.payload?.chunkId)); if (!record || !local || record.chunkId !== local.chunk.id || record.documentId !== local.document.id || record.processingVersion !== local.document.processingVersion || record.indexRunId !== local.document.activeIndexRunId || record.embeddingProfileId !== runtime.profile.profileId || (point.payload?.documentId !== undefined && Number(point.payload.documentId) !== Number(record.documentId)) || Number(point.payload?.indexRunId) !== Number(local.document.activeIndexRunId)) continue; output.push({ ...local, vectorScore: Number(point.score), pointId: String(point.id) }); }

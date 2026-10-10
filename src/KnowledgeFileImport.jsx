@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FileText, LoaderCircle, Upload } from "lucide-react";
 
-export function KnowledgeFileImport({ request, disabled, onImported, onReadingChange }) {
+export function KnowledgeFileImport({ request, disabled, onImported, onReadingChange, endpoint = "/api/admin/knowledge-documents/extract", personal = false }) {
   const [reading, setReading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -16,7 +16,7 @@ export function KnowledgeFileImport({ request, disabled, onImported, onReadingCh
     const controller = new AbortController(); requestRef.current = controller;
     setReading(true); onReadingChange(true);
     try {
-      const data = await request("/api/admin/knowledge-documents/extract", {
+      const data = await request(endpoint, {
         method: "POST", body: file, signal: controller.signal,
         headers: { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(file.name) },
       });
@@ -33,7 +33,7 @@ export function KnowledgeFileImport({ request, disabled, onImported, onReadingCh
       <strong>{reading ? "正在提取文件文字…" : "选择文件或拖放到这里"}</strong>
       <span>PDF、DOCX、TXT、Markdown · 最大 6 MB</span>
       <small>不支持扫描图片或加密文件。仅导入正文，不保留原始文件。</small>
-      <input type="file" aria-label="上传公共面试资料文件" accept=".pdf,.docx,.txt,.md" disabled={disabled || reading} onChange={(event) => { readFile(event.target.files?.[0]); event.target.value = ""; }} />
+      <input type="file" aria-label={personal ? "上传个人面试资料文件" : "上传公共面试资料文件"} accept=".pdf,.docx,.txt,.md" disabled={disabled || reading} onChange={(event) => { readFile(event.target.files?.[0]); event.target.value = ""; }} />
     </label>
     {error && <p className="knowledge-upload-error" role="alert">{error}</p>}
     {result && <div className="knowledge-upload-result" role="status"><FileText size={17} /><div><strong>{result.fileName}</strong><span>已提取 {result.characterCount.toLocaleString()} 字，请核对下方正文后保存。</span>{result.warnings.map((warning) => <small key={warning}>{warning}</small>)}</div></div>}

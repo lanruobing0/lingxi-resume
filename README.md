@@ -99,3 +99,11 @@ git diff --check
 首份原创资料：`docs/materials/通用项目复盘与技术面试表达指南.md`。管理员可直接上传此文件，岗位族建议「通用面试准备」。
 
 新增接口：管理员 `POST /api/admin/knowledge-documents/extract`（application/octet-stream，X-File-Name 为 encodeURIComponent 文件名）；登录用户 `GET /api/interview-materials`（只读安全元数据）。提取不会自动保存文档。专项验证：`corepack pnpm test:materials`；隔离浏览器夹具：`node tests/materials-browser.fixture.mjs`，使用独立临时数据与 mock providers，不代表真实 Qdrant 验证。
+
+## 个人面试资料
+
+面试资料页面的「我的资料」支持个人文件上传与文本新建、查看/编辑、搜索和确认删除。保存默认仅写入资料库，不提交给向量模型；核对正文并勾选允许提交模型后，沿用当前 Embedding/向量配置建立索引。索引完成后仅参与本人的新模拟面试，与公共库共同检索，不用于岗位报告或 Agent 分析。资料提供知识依据，不能证明个人经历。
+
+个人资料服务端绑定当前 userId 和 PRIVATE，公共管理员也不能通过公共管理接口读取；修改正文后原检索停用，失败可重试。取消允许使用后不再召回；实际删除会清理向量。旧面试的历史内容保留并标记来源不可用。自动隐私处理只能识别部分模式，提交前仍需人工移除个人/第三方信息。
+
+个人接口：GET/POST /api/personal-materials，GET/PUT/DELETE /api/personal-materials/:id，POST /extract、/:id/process、/:id/index；POST /api/personal-materials/search 查询本人已启用资料与公共库，归属参数不由客户端决定。专项：corepack pnpm test:personal-materials。

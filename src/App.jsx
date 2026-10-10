@@ -52,7 +52,7 @@ import { usePresence } from "./hooks/usePresence";
 import { shouldRefreshCaptcha } from "./captchaState";
 import { InterviewLibrary } from "./InterviewLibrary";
 import { KnowledgeFileImport } from "./KnowledgeFileImport";
-import { PublicMaterialLibrary } from "./PublicMaterialLibrary";
+import { InterviewMaterials } from "./InterviewMaterials";
 import { jobWorkspaceTabs, readJobWorkspaceRoute, jobWorkspaceHash, collectJobGroupEvidence } from "./jobWorkspaceState";
 
 const appNav = [
@@ -890,7 +890,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           {active === "resume-edit" && currentUser && activeResumeId && <ResumeEditor key={`${currentUser.id}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
           {active === "providers" && currentUser && <ProviderSettings notify={notify} />}
-          {active === "materials" && currentUser && (currentUser.role === "ADMIN" ? <KnowledgeBaseManager notify={notify} onChanged={() => {}} /> : <PublicMaterialLibrary request={apiRequest} go={go} />)}
+          {active === "materials" && currentUser && <InterviewMaterials request={apiRequest} go={go} adminPanel={currentUser.role === "ADMIN" ? <KnowledgeBaseManager notify={notify} onChanged={() => {}} /> : null} />}
           {active === "history" && currentUser && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && currentUser && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}

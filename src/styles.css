@@ -6005,3 +6005,36 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
   .interview-record > span:first-child { flex-basis: 100%; }
   .interview-record > b { margin-left: auto; }
 }
+
+/* Personal interview materials share the existing studio controls. */
+.material-tabs { display:flex; gap:6px; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-bottom:24px; padding-bottom:8px; }
+.material-tabs button { border:0; background:transparent; color:var(--muted); padding:10px 16px; border-radius:6px; cursor:pointer; font:inherit; }
+.material-tabs button[aria-selected="true"] { background:var(--blue-soft); color:var(--blue); font-weight:600; }
+.material-tabs button:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+.personal-materials { min-width:0; }
+.personal-material-form { margin:22px 0; padding:22px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+.personal-material-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:18px 0; }
+.personal-material-fields label,.personal-material-wide { display:flex; flex-direction:column; gap:8px; min-width:0; font-weight:600; }
+.personal-material-fields input,.personal-material-fields select,.personal-material-wide textarea,.personal-material-toolbar input { width:100%; min-width:0; padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); font:inherit; font-weight:400; }
+.personal-material-wide { margin-bottom:16px; }
+.personal-material-wide textarea { resize:vertical; line-height:1.7; }
+.personal-material-privacy { color:var(--muted); font-size:13px; line-height:1.7; max-width:75ch; }
+.personal-material-toolbar { display:flex; gap:12px; margin:24px 0 16px; }
+.personal-material-toolbar input { max-width:600px; }
+.personal-material-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.personal-material-list>article { border:1px solid var(--line); border-radius:8px; padding:20px; min-width:0; display:flex; flex-direction:column; gap:12px; }
+.personal-material-row { display:flex; align-items:flex-start; flex-wrap:wrap; gap:9px; }
+.personal-material-row svg { flex-shrink:0; margin-top:3px; }
+.personal-material-row h3 { flex:1; min-width:0; margin:0; font-size:16px; overflow-wrap:anywhere; }
+.personal-material-state { flex-basis:100%; font-size:12px; color:var(--muted); }
+.personal-material-list p { margin:0; line-height:1.65; overflow-wrap:anywhere; }
+.personal-material-list small { color:var(--muted); }
+.personal-material-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; padding-top:8px; }
+.personal-material-failure { color:var(--red); font-size:13px; }
+.personal-material-delete { border-top:1px solid var(--line); padding-top:14px; display:flex; flex-wrap:wrap; gap:10px; }
+.personal-material-delete p { flex-basis:100%; }
+.material-notice { color:var(--ink); padding:12px 0; font-size:14px; }
+@media(max-width:700px) { .personal-material-fields,.personal-material-list { grid-template-columns:1fr; } .personal-material-form { padding:16px; } .material-tabs button { padding:9px 11px; } }
+
+.personal-material-toolbar > button { flex-shrink:0; white-space:nowrap; }
+.personal-material-toolbar input::placeholder { color:#696761; opacity:1; }

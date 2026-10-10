@@ -1,8 +1,9 @@
+import { isPublicKnowledge } from "./knowledge-access.js";
 import { documentMatchesFilters, queryTokens } from "./knowledge-query.js";
 
 const includes = (text, token) => String(text || "").toLocaleLowerCase("en-US").includes(token);
 export function currentKnowledge(store, filters) {
-  const documents = store.knowledgeDocuments.filter((document) => document.status === "PROCESSED" && document.vectorStatus === "INDEXED" && documentMatchesFilters(document, filters));
+  const documents = store.knowledgeDocuments.filter((document) => (isPublicKnowledge(document) || filters.personalUserId && document.scope === "PRIVATE" && document.userId === filters.personalUserId && document.aiConsent === true) && document.status === "PROCESSED" && document.vectorStatus === "INDEXED" && documentMatchesFilters(document, filters));
   const byId = new Map(documents.map((document) => [document.id, document]));
   return store.knowledgeChunks.filter((chunk) => { const document = byId.get(chunk.documentId); return document && chunk.processingVersion === document.processingVersion; }).map((chunk) => ({ chunk, document: byId.get(chunk.documentId) }));
 }

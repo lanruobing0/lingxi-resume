@@ -22,3 +22,11 @@
 ## 验收与后续
 
 实现完成待 Claude 独立验收；保留既有未跟踪 artifacts 和启动/停止快捷方式。停止当前阶段，不做个人用户上传、不推送、不部署。
+
+## 真实导入完成（2026-10-10）
+
+用户指定阿里百炼 text-embedding-v4，已在被 Git 忽略的本地环境配置中设为 1024 维、batch 10。真实 Provider 公开短文本探针返回 1024 维。Docker Desktop 因两处残留 AF_UNIX socket 不能清理而启动失败；退出故障进程后将 Docker/run 与 docker-secrets-engine 运行目录重命名保留备份（未删除镜像/容器/卷/VHDX），同时重建运行目录后引擎恢复。此恢复不保证后续重启不会复现。Qdrant compose 原容器启动 healthy，现有 collection 保留。
+
+用户另行授权创建独立管理员账号；本地新增 lingxi_admin（ADMIN），随机密码仅交付给用户，数据库仅存 scrypt hash，未写入文档/源码。通过真实登录/验证码 UI 上传首份 MD、核对正文与元数据、保存处理并索引成功：KnowledgeDocument #1，9 chunks，IndexRun #1 COMPLETED，model text-embedding-v4，1024 维，collection lingxi_knowledge_ep_9c2254295139af4b_1024_v1。Qdrant exact count=9。
+
+真实 VECTOR 查询“技术决策中如何比较方案约束和取舍”完成，无降级，返回 9 条；首条对应“技术决策：比较方案与约束”，score 0.707。已重启本地后端加载 .env.local，前端5174 → API8911代理正常。未修改个人简历/答案，未触发生成报告或面试。本次仅运行数据和基础服务配置，无业务源码变更；未重复全量 build/test。此前待独立验收的功能状态不变，个人上传未开始。

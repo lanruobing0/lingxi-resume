@@ -18,7 +18,7 @@ const store = {
   resumes: [], resumeHistories: [], jobDescriptions: [], jobApplications: [], mockInterviews: [], interviewAnswers: [], systemNotices: [], knowledgeDocuments: [],
 };
 await writeFile(path.join(dataDir, "store.json"), JSON.stringify(store));
-const env = { ...process.env, STORAGE_DRIVER: "json", API_PORT: "8911", PORT: "8911", LINGXI_DATA_DIR: dataDir,
+const env = { ...process.env, STORAGE_DRIVER: "json", API_PORT: "8921", PORT: "8921", LINGXI_DATA_DIR: dataDir,
   EMBEDDING_BASE_URL: `http://127.0.0.1:${mocks.embeddingPort}/v1`, EMBEDDING_API_KEY: "fixture-only", EMBEDDING_MODEL: "mock-embed", EMBEDDING_DIMENSION: "4", EMBEDDING_MAX_RETRIES: "0", QDRANT_URL: `http://127.0.0.1:${mocks.qdrantPort}`, QDRANT_API_KEY: "fixture-only" };
 const backend = spawn(process.execPath, ["backend/server.js"], { cwd: root, env, stdio: "ignore", windowsHide: true });
 const proxy = createServer(async (req, res) => {
@@ -33,12 +33,12 @@ const proxy = createServer(async (req, res) => {
     return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ documents: stored.knowledgeDocuments.map(({ id, title, status, vectorStatus }) => ({ id, title, status, vectorStatus })), embeddingCalls: mocks.state.embeddingCalls, points: [...mocks.state.points.values()].reduce((count, points) => count + points.size, 0) }));
   }
   const role = String(req.headers.cookie || "").includes("fixture_role=user") ? "user" : "admin";
-  const forwarded = httpRequest({ hostname: "127.0.0.1", port: 8911, path: req.url, method: req.method, headers: { ...req.headers, cookie: `lingxi_session=${tokens[role]}` } }, (response) => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
+  const forwarded = httpRequest({ hostname: "127.0.0.1", port: 8921, path: req.url, method: req.method, headers: { ...req.headers, cookie: `lingxi_session=${tokens[role]}` } }, (response) => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
   forwarded.on("error", () => { if (!res.headersSent) res.writeHead(503, { "Content-Type": "application/json" }); res.end('{"message":"Fixture backend unavailable"}'); });
   req.pipe(forwarded);
 });
-await new Promise((resolve) => proxy.listen(8912, "127.0.0.1", resolve));
-const vite = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5175", "--strictPort"], { cwd: root, env: { ...process.env, VITE_API_PROXY_TARGET: "http://127.0.0.1:8912" }, stdio: "ignore", windowsHide: true });
+await new Promise((resolve) => proxy.listen(8922, "127.0.0.1", resolve));
+const vite = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5175", "--strictPort"], { cwd: root, env: { ...process.env, VITE_API_PROXY_TARGET: "http://127.0.0.1:8922" }, stdio: "ignore", windowsHide: true });
 console.log("Materials browser fixture: http://127.0.0.1:5175/#materials (admin by default); switch role via /api/fixture/user or /api/fixture/admin. Isolated mock providers.");
 let closing = false;
 async function cleanup() {

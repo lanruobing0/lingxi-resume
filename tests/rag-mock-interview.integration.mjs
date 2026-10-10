@@ -170,6 +170,12 @@ async function main() {
     knowledgeRetrievalRuns: [], interviewSessions: [], interviewSessionQuestions: [], interviewAnswers: [], answerFeedbacks: [], mockInterviews: [],
     aiSettingsByUser: { "1": { aiConfig: { provider: "OpenAI" }, aiProviderConfigs: { OpenAI: { baseUrl: `http://127.0.0.1:${providerPort}/v1`, modelId: "mock-stage8", apiKey: "provider-SECRET", enabled: true } } } },
   };
+  const personalMode = process.argv.includes("--personal-materials");
+  if (personalMode) {
+    Object.assign(store.knowledgeDocuments[0], { scope: "PRIVATE", userId: 1, aiConsent: true });
+    store.knowledgeDocuments.push({ ...store.knowledgeDocuments[0], id: 2, userId: 2, title: "OTHER-USER-MATERIAL-SECRET", activeIndexRunId: 12 });
+    store.knowledgeChunks.push({ ...store.knowledgeChunks[0], id: 2, documentId: 2, content: knowledgeText + " OTHER-USER-MATERIAL-SECRET" });
+  }
   await writeFile(path.join(dir, "store.json"), JSON.stringify(store));
   let backend; let backendOutput = "";
   const start = () => { backend = spawn(process.execPath, ["backend/server.js"], { cwd: root, env: { ...process.env, API_PORT: String(apiPort), LINGXI_DATA_DIR: dir, OPENAI_API_KEY: "", OPENAI_BASE_URL: "", OPENAI_MODEL: "", AI_PROVIDER_TIMEOUT_MS: "100" }, stdio: ["ignore", "pipe", "pipe"] }); backend.stdout.on("data", (part) => { backendOutput += part; }); backend.stderr.on("data", (part) => { backendOutput += part; }); };
@@ -188,6 +194,10 @@ async function main() {
     const knowledgeQuestion = created.data.item.questions.find((item) => item.category === "KNOWLEDGE");
     assert.equal(knowledgeQuestion.sourceRefs[0].retrievalRunId, created.data.item.retrievalRunIds[0]);
     assert.equal(knowledgeQuestion.sourceRefs[0].availability, "AVAILABLE");
+    if (personalMode) {
+      assert.equal(knowledgeQuestion.sourceRefs[0].materialUserId, 1);
+      assert.equal(state.bodies.some((body) => body.includes("OTHER-USER-MATERIAL-SECRET")), false);
+    }
     assert.equal((await call(token, `/api/interview-sessions/${created.data.item.id}/questions`, undefined, 200)).data.items.length, 4);
     assert.equal((await call(otherToken, `/api/interview-sessions/${created.data.item.id}`, undefined, 404)).status, 404);
     assert.equal((await call(otherToken, `/api/interview-sessions/${created.data.item.id}/questions`, undefined, 404)).status, 404);
