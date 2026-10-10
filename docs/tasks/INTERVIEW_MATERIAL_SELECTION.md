@@ -23,3 +23,9 @@
 - 截图在未跟踪 `artifacts/materials-selection/`。browser fixture 可用 `node tests/rag-mock-interview.integration.mjs --browser` 启动，专用停止端点 `/api/fixture/stop` 仅清理该临时环境。
 
 保存本地提交后停止，等待 Claude 独立验收，不推送或部署。
+
+## 分组摘要折叠展示（用户追加，2026-10-10）
+
+公共库改为默认收起的单列分组卡片：箭头、标题、数量和实际资料摘要常显；点击标题/箭头展开本组全部资料，各条摘要直接显示并保留勾选，去掉二次“查看摘要”折叠。分组概览去重后截取最多 240 字，不生成虚构摘要。沿用浅色产品样式。
+
+`node --check backend/server.js` 和 `corepack pnpm build` 通过。隔离真实 API fixture 浏览器验证默认收起摘要可见、点击展开、勾选计数、Enter 收起后选择保留；1440×900 和 390×900 检查，手机 scrollWidth=375/innerWidth=390。仅展示改动，不修改检索或历史数据链。截图 `artifacts/materials-selection/overview-expanded.jpg`。本地保存待独立验收。
