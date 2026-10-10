@@ -1,5 +1,10 @@
 # 项目状态
 
+## 公共面试资料上传（2026-10-10）
+
+用户批准先实现管理员公共资料上传与用户公共资料库，个人资料留待后续。首份资料方向为通用面试准备。已复用既有知识处理/索引/检索链，支持 TXT/MD/PDF/DOCX 提取、核对正文、保存草稿或处理并索引；仅 ADMIN 可写，用户只见当前已索引资料的安全摘要。实现和隔离测试完成，等待 Claude 独立验收。交接：`docs/tasks/PUBLIC_INTERVIEW_MATERIALS.md`。本机未配置 Embedding/Qdrant，未写入真实向量库或个人运行数据。
+
+
 最后核实：2026-08-09（Stage 10 已通过最终验收；真实 MySQL Integration 已验证；Lingxi Resume Agentic RAG 项目正式完成）。
 
 ## 当前技术栈与数据层

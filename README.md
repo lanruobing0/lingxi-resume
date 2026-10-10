@@ -18,6 +18,8 @@
 
 ## 本地启动
 
+需要 Node.js 22.13 或更高版本（PDF 文字提取依赖要求）。
+
 ```bash
 corepack pnpm install
 corepack pnpm dev:api
@@ -87,3 +89,13 @@ git diff --check
 ```
 
 `test:mysql` 只接受真实 MySQL 环境变量；缺少配置时明确以 exit 2 跳过，不会 mock MySQL。两项 Qdrant smoke 必须严格串行运行。`test:rag-eval` 输出固定 golden cases 的 Retrieval Recall@K/MRR、grounded claim、suggestion safety、interview grounding 与 Agent safety 汇总；安全指标必须为 100%。
+
+## 公共面试资料
+
+侧栏「面试资料」：管理员可以上传 TXT、Markdown、文字版 PDF、DOCX（最大 6 MB），核对提取正文并填写来源、岗位族和标签；普通用户可按分类浏览、搜索已发布资料。扫描或加密 PDF 不支持，原始二进制文件不保留。提取在有时间、内存和并发限制的 worker 中执行，DOCX 外部文件访问关闭。
+
+上传后可取消「保存后生成切片并建立索引」先存草稿；发布复用原有处理与向量索引接口。只有成功处理、具有当前有效索引的资料会公开显示，失败可重试。先配置 Embedding 与 Qdrant，再建立索引；上传保存并不代表真实向量库已写入。资料会进入既有检索范围，是否被召回取决于查询与检索结果。个人用户上传尚未实现。
+
+首份原创资料：`docs/materials/通用项目复盘与技术面试表达指南.md`。管理员可直接上传此文件，岗位族建议「通用面试准备」。
+
+新增接口：管理员 `POST /api/admin/knowledge-documents/extract`（application/octet-stream，X-File-Name 为 encodeURIComponent 文件名）；登录用户 `GET /api/interview-materials`（只读安全元数据）。提取不会自动保存文档。专项验证：`corepack pnpm test:materials`；隔离浏览器夹具：`node tests/materials-browser.fixture.mjs`，使用独立临时数据与 mock providers，不代表真实 Qdrant 验证。

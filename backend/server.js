@@ -5,6 +5,7 @@ import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSa
 import { promisify } from "node:util";
 import { createPersistence, storageConfig } from "./persistence.js";
 import { InProcessJobQueue, publicJob } from "./job-queue.js";
+import { extractKnowledgeFile, readKnowledgeUpload } from "./knowledge-file-import.js";
 import { KnowledgeVectorIndexError, KnowledgeVectorIndexService } from "./knowledge-vector-index.js";
 import { KnowledgeRetrievalService } from "./knowledge-retrieval-service.js";
 import { validateKnowledgeClaims, sourceAvailability } from "./citation-validator.js";
@@ -795,7 +796,7 @@ const knowledgeDocumentTypes = new Set([
   "RESUME_COMMON_ISSUE",
   "RESUME_WRITING_GUIDELINE",
 ]);
-const knowledgeSourceTypes = new Set(["TEXT_ENTRY", "INTERNAL", "EXTERNAL"]);
+const knowledgeSourceTypes = new Set(["TEXT_ENTRY", "INTERNAL", "EXTERNAL", "FILE_IMPORT"]);
 const knowledgeStatuses = new Set(["DRAFT", "PROCESSING", "PROCESSED", "FAILED"]);
 const knowledgeProcessingStrategy = "heading-paragraph-sentence-v1";
 const knowledgeTargetLength = 760;
@@ -1067,7 +1068,7 @@ function nextKnowledgeProcessingVersion(store, documentId) {
 
 function knowledgeDocumentSummary(document) {
   const { rawText, normalizedText, ...summary } = document;
-  return summary;
+  return { ...summary, characterCount: (rawText || "").length };
 }
 
 class HttpError extends Error {
@@ -4020,6 +4021,34 @@ async function handleApi(req, res) {
     const item = store.knowledgeRetrievalRuns.find((run) => run.id === runId);
     if (!item) return send(res, 404, { message: "检索运行记录不存在" });
     return send(res, 200, { item });
+  }
+
+  if (key === "POST /api/admin/knowledge-documents/extract") {
+    requireAdmin(store, req);
+    try {
+      const file = await readKnowledgeUpload(req);
+      return send(res, 200, await extractKnowledgeFile(file));
+    } catch (error) {
+      return send(res, error.status || 422, { message: error.message, failureCode: error.code || "UPLOAD_PARSE_FAILED" });
+    }
+  }
+
+  if (key === "GET /api/interview-materials") {
+    requireUser(store, req);
+    // Public library exposes only current, indexed documents and a display
+    // allowlist. Raw source text and admin/audit/provider metadata stay private.
+    const items = store.knowledgeDocuments
+      .filter((document) => document.status === "PROCESSED" && document.vectorStatus === "INDEXED"
+        && document.activeIndexRunId && document.indexedProcessingVersion === document.processingVersion)
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .map((document) => ({
+        id: document.id, title: document.title, description: document.description,
+        documentType: document.documentType, jobFamily: document.jobFamily,
+        seniority: document.seniority, skillTags: document.skillTags,
+        characterCount: (document.rawText || "").length, updatedAt: document.updatedAt,
+        sourceType: document.sourceType, sourceName: document.sourceName,
+      }));
+    return send(res, 200, { items });
   }
 
   if (key === "GET /api/admin/knowledge-documents") {

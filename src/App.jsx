@@ -51,6 +51,8 @@ import { agentActionLabel, agentApiRequest, agentFailureMessage, agentResultType
 import { usePresence } from "./hooks/usePresence";
 import { shouldRefreshCaptcha } from "./captchaState";
 import { InterviewLibrary } from "./InterviewLibrary";
+import { KnowledgeFileImport } from "./KnowledgeFileImport";
+import { PublicMaterialLibrary } from "./PublicMaterialLibrary";
 import { jobWorkspaceTabs, readJobWorkspaceRoute, jobWorkspaceHash, collectJobGroupEvidence } from "./jobWorkspaceState";
 
 const appNav = [
@@ -59,6 +61,7 @@ const appNav = [
   { id: "templates", label: "简历模板", icon: LayoutTemplate },
   { id: "providers", label: "AI 服务商", icon: Bot },
   { id: "interview", label: "模拟面试", icon: MessageSquareText },
+  { id: "materials", label: "面试资料", icon: FolderOpen },
   { id: "history", label: "历史记录", icon: Save },
   { id: "admin", label: "后台管理", icon: Settings },
   { id: "settings", label: "通用设置", icon: Settings },
@@ -806,7 +809,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
     auth: { label: "用户登录注册" },
     "resume-edit": { label: "编辑简历" },
   }[active] || { label: "我的简历" };
-  const requiresLogin = ["resume", "resume-edit", "jobs", "providers", "interview", "history", "settings"].includes(active);
+  const requiresLogin = ["resume", "resume-edit", "jobs", "providers", "interview", "materials", "history", "settings"].includes(active);
 
   const openNavigationItem = (id) => {
     if (id === "admin" && currentUser?.role !== "ADMIN") {
@@ -887,6 +890,7 @@ function AppStudio({ active, go, notify, currentUser, onLogin, onLogout, onUserU
           {active === "resume-edit" && currentUser && activeResumeId && <ResumeEditor key={`${currentUser.id}-${activeResumeId}`} resumeId={activeResumeId} go={go} notify={notify} appliedTemplate={appliedTemplate} />}
           {active === "templates" && <TemplateGallery go={go} notify={notify} appliedTemplate={appliedTemplate} onApplyTemplate={onApplyTemplate} />}
           {active === "providers" && currentUser && <ProviderSettings notify={notify} />}
+          {active === "materials" && currentUser && (currentUser.role === "ADMIN" ? <KnowledgeBaseManager notify={notify} onChanged={() => {}} /> : <PublicMaterialLibrary request={apiRequest} go={go} />)}
           {active === "history" && currentUser && <HistoryPage notify={notify} resumeId={activeResumeId} />}
           {active === "admin" && currentUser?.role === "ADMIN" && <AdminPanel notify={notify} />}
           {active === "settings" && currentUser && <GeneralSettings notify={notify} currentUser={currentUser} onUserUpdated={onUserUpdated} />}
@@ -4193,7 +4197,7 @@ const knowledgeDocumentTypeOptions = [
 ];
 
 const emptyKnowledgeDocumentForm = () => ({
-  title: "", description: "", sourceType: "TEXT_ENTRY", documentType: "ROLE_SKILL_DESCRIPTION", jobFamily: "", seniority: "", skillTags: "", language: "zh-CN", sourceName: "", sourceUrl: "", rawText: "",
+  title: "", description: "", sourceType: "TEXT_ENTRY", documentType: "INTERVIEW_QUESTION", jobFamily: "", seniority: "", skillTags: "", language: "zh-CN", sourceName: "", sourceUrl: "", rawText: "",
 });
 
 function KnowledgeBaseManager({ notify, onChanged }) {
@@ -4212,6 +4216,11 @@ function KnowledgeBaseManager({ notify, onChanged }) {
   const [expandedChunkId, setExpandedChunkId] = useState(null);
   const [working, setWorking] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState(null);
+
+  const [uploadMode, setUploadMode] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [publishOnSave, setPublishOnSave] = useState(true);
+  const [operationError, setOperationError] = useState("");
 
   const loadDocuments = useCallback(async () => {
     try {
@@ -4257,42 +4266,59 @@ function KnowledgeBaseManager({ notify, onChanged }) {
     apiRequest("/api/admin/vector-index/status").then(setVectorStatus).catch(() => setVectorStatus(null));
   }, []);
 
-  const openCreate = () => {
+  const openCreate = (fromFile = false) => {
     setEditingId(null);
     setForm(emptyKnowledgeDocumentForm());
+    setUploadMode(fromFile);
+    setOperationError("");
+    setPublishOnSave(true);
     setFormOpen(true);
   };
 
   const openEdit = () => {
-    if (!selected) return;
+    if (!selected || working || extracting) return;
     setEditingId(selected.id);
+    setUploadMode(false);
+    setOperationError("");
+    setPublishOnSave(false);
     setForm({ ...selected, skillTags: (selected.skillTags || []).join(", ") });
     setFormOpen(true);
   };
 
   const submitForm = async (event) => {
     event.preventDefault();
+    if (working || extracting) return;
+    let savedId = null;
     try {
       setWorking("save");
+      setOperationError("");
       const payload = { ...form, skillTags: form.skillTags.split(",").map((item) => item.trim()).filter(Boolean) };
       const response = await apiRequest(editingId ? `/api/admin/knowledge-documents/${editingId}` : "/api/admin/knowledge-documents", {
         method: editingId ? "PUT" : "POST",
         body: JSON.stringify(payload),
       });
+      savedId = response.item.id;
       setFormOpen(false);
-      notify(editingId ? "知识资料已更新" : "知识资料已创建，等待处理");
+      if (publishOnSave) {
+        setWorking("publish-process");
+        await apiRequest(`/api/admin/knowledge-documents/${savedId}/process`, { method: "POST" });
+        setWorking("publish-index");
+        await apiRequest(`/api/admin/knowledge-documents/${savedId}/index`, { method: "POST" });
+        notify("公共资料已建立索引，可用于面试检索");
+      } else notify(editingId ? "知识资料已更新" : "公共资料已保存为草稿");
       await loadDocuments();
       await loadDetail(response.item.id);
       onChanged();
     } catch (error) {
-      notify(`保存知识资料失败: ${error.message}`);
+      setOperationError(savedId ? `资料已保存，后续处理未完成：${error.message}。可在详情中重新处理或建立索引。` : `保存失败：${error.message}`);
+      if (savedId) { await loadDocuments(); await loadDetail(savedId); onChanged(); }
     } finally {
       setWorking("");
     }
   };
 
   const processDocument = async () => {
-    if (!selected) return;
+    if (!selected || working || extracting) return;
     try {
       setWorking("process");
       const response = await apiRequest(`/api/admin/knowledge-documents/${selected.id}/process`, { method: "POST" });
@@ -4310,7 +4336,7 @@ function KnowledgeBaseManager({ notify, onChanged }) {
   };
 
   const deleteDocument = async () => {
-    if (!deleteCandidate) return;
+    if (!deleteCandidate || working || extracting) return;
     try {
       setWorking("delete");
       await apiRequest(`/api/admin/knowledge-documents/${deleteCandidate.id}`, { method: "DELETE" });
@@ -4333,11 +4359,12 @@ function KnowledgeBaseManager({ notify, onChanged }) {
   };
 
   const manageIndex = async (action) => {
-    if (!selected) return;
+    if (!selected || working || extracting) return;
     const path = action === "delete" ? `/api/admin/knowledge-documents/${selected.id}/index` : `/api/admin/knowledge-documents/${selected.id}/index${action === "rebuild" ? "/rebuild" : ""}`;
     try {
       setWorking(`index-${action}`);
       const response = await apiRequest(path, { method: action === "delete" ? "DELETE" : "POST" });
+      setOperationError("");
       notify(action === "delete" ? "向量索引已删除" : response.idempotent ? "当前索引未变化，已复用现有索引" : "向量索引已建立");
       await Promise.all([loadDocuments(), loadDetail(selected.id)]);
     } catch (error) { notify(`向量索引操作失败: ${error.message}`); }
@@ -4348,20 +4375,24 @@ function KnowledgeBaseManager({ notify, onChanged }) {
     <section className="knowledge-manager" aria-labelledby="knowledge-manager-title">
       <div className="knowledge-manager-head">
         <div>
-          <span className="section-kicker">知识库管理</span>
-          <h2 id="knowledge-manager-title">岗位资料与切片</h2>
-          <p>仅管理员可维护。文本会在服务端清洗、识别章节并按语义边界切片；不会调用 AI 改写资料。</p>
+          <span className="section-kicker">管理员维护 · 公共资料库</span>
+          <h2 id="knowledge-manager-title">面试资料</h2>
+          <p>上传或录入岗位与面试资料，建立索引后供所有用户检索。请勿上传个人简历、联系方式或其他私人信息。</p>
         </div>
-        <button type="button" className="black-small" onClick={openCreate}><Plus size={16} />新建资料</button>
+        <div className="knowledge-head-actions"><button type="button" className="white-small" disabled={Boolean(working) || extracting} onClick={() => openCreate(false)}><Plus size={16} />新建资料</button><button type="button" className="black-small" disabled={Boolean(working) || extracting} onClick={() => openCreate(true)}><Upload size={16} />上传文件</button></div>
       </div>
+
+      {operationError && <div className="knowledge-operation-message" role="alert">{operationError}</div>}
+      {working.startsWith("publish-") && <div className="knowledge-operation-message" role="status"><LoaderCircle size={18} className="spin" />{working === "publish-process" ? "资料已保存，正在生成切片…" : "切片已生成，正在建立向量索引…"}</div>}
 
       {formOpen && (
         <form className="knowledge-form" onSubmit={submitForm}>
-          <div className="knowledge-form-head"><h3>{editingId ? "编辑知识资料" : "新建知识资料"}</h3><button type="button" className="plain-icon" aria-label="关闭资料表单" onClick={() => setFormOpen(false)}><X size={18} /></button></div>
+          <div className="knowledge-form-head"><h3>{editingId ? "编辑公共资料" : uploadMode ? "上传公共资料" : "新建公共资料"}</h3><button type="button" className="plain-icon" disabled={Boolean(working) || extracting} aria-label="关闭资料表单" onClick={() => setFormOpen(false)}><X size={18} /></button></div>
+          {uploadMode && <KnowledgeFileImport request={apiRequest} disabled={Boolean(working)} onReadingChange={setExtracting} onImported={(data) => setForm((current) => ({ ...current, rawText: data.rawText, sourceType: "FILE_IMPORT", sourceName: data.fileName, title: current.title || data.fileName.replace(/\.[^.]+$/, "").slice(0, 160) }))} />}
           <div className="knowledge-form-grid">
             <label>标题<input required maxLength={160} value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} /></label>
             <label>资料类型<select value={form.documentType} onChange={(event) => setForm((current) => ({ ...current, documentType: event.target.value }))}>{knowledgeDocumentTypeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label>来源类型<select value={form.sourceType} onChange={(event) => setForm((current) => ({ ...current, sourceType: event.target.value }))}><option value="TEXT_ENTRY">文本录入</option><option value="INTERNAL">内部资料</option><option value="EXTERNAL">外部资料</option></select></label>
+            <label>来源类型<select value={form.sourceType} onChange={(event) => setForm((current) => ({ ...current, sourceType: event.target.value }))}><option value="TEXT_ENTRY">文本录入</option><option value="INTERNAL">内部资料</option><option value="EXTERNAL">外部资料</option><option value="FILE_IMPORT">文件导入</option></select></label>
             <label>岗位族<input maxLength={100} placeholder="例如：研发 / 产品 / 运营" value={form.jobFamily} onChange={(event) => setForm((current) => ({ ...current, jobFamily: event.target.value }))} /></label>
             <label>职级<input maxLength={80} placeholder="例如：初级 / 中级 / 资深" value={form.seniority} onChange={(event) => setForm((current) => ({ ...current, seniority: event.target.value }))} /></label>
             <label>语言<input maxLength={32} value={form.language} onChange={(event) => setForm((current) => ({ ...current, language: event.target.value }))} /></label>
@@ -4371,7 +4402,9 @@ function KnowledgeBaseManager({ notify, onChanged }) {
             <label className="knowledge-form-span">简介<textarea maxLength={2000} rows={3} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
             <label className="knowledge-form-span">原始内容<textarea required maxLength={300000} rows={12} placeholder="粘贴可追溯的岗位资料。支持 Markdown 和常见中文标题。" value={form.rawText} onChange={(event) => setForm((current) => ({ ...current, rawText: event.target.value }))} /></label>
           </div>
-          <div className="knowledge-form-actions"><button type="button" className="white-small" disabled={working === "save"} onClick={() => setFormOpen(false)}>取消</button><button className="black-small" disabled={working === "save"}>{working === "save" ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{editingId ? "保存修改" : "创建资料"}</button></div>
+          <label className="knowledge-publish-option"><input type="checkbox" checked={publishOnSave} onChange={(event) => setPublishOnSave(event.target.checked)} />保存后生成切片并建立索引</label>
+          <p className="knowledge-publish-note">成功建立索引后，资料会出现在用户的公共资料库中；未配置 Embedding 或向量库不可用时，可取消勾选先保存草稿。</p>
+          <div className="knowledge-form-actions"><button type="button" className="white-small" disabled={Boolean(working) || extracting} onClick={() => setFormOpen(false)}>取消</button><button className="black-small" disabled={Boolean(working) || extracting}>{working === "save" ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{publishOnSave ? "保存并建立索引" : editingId ? "保存修改" : "保存草稿"}</button></div>
         </form>
       )}
 
@@ -4395,20 +4428,21 @@ function KnowledgeBaseManager({ notify, onChanged }) {
       <div className="knowledge-workspace">
         <div className="knowledge-list" aria-label="知识资料列表">
           {loading ? <div className="knowledge-loading"><LoaderCircle className="spin" size={18} />正在读取知识资料</div> : documents.length ? documents.map((document) => (
-            <button type="button" key={document.id} className={`knowledge-list-item ${selected?.id === document.id ? "active" : ""}`} onClick={() => loadDetail(document.id)}>
+            <button type="button" key={document.id} className={`knowledge-list-item ${selected?.id === document.id ? "active" : ""}`} disabled={Boolean(working) || extracting} onClick={() => loadDetail(document.id)}>
               <span className={`knowledge-status ${document.status.toLowerCase()}`}>{knowledgeStatusLabel(document.status)}</span>
               <strong>{document.title}</strong>
               <small>{knowledgeDocumentTypeLabel(document.documentType)} · {document.jobFamily || "未标注岗位族"}</small>
-              <span>{document.chunkCount || 0} 个切片 · v{document.processingVersion || 0}</span>
+              <span>{(document.characterCount || 0).toLocaleString()} 字 · {document.sourceType === "FILE_IMPORT" ? "文件导入" : "文本录入"}</span>
+              <span>{vectorStatusLabel(document.vectorStatus)} · 更新于 {formatResumeDate(document.updatedAt)}</span>
             </button>
-          )) : <div className="knowledge-empty"><FolderOpen size={22} /><strong>还没有知识资料</strong><p>先录入一份可追溯的岗位或面试资料，再在此处处理为可查看的切片。</p><button type="button" className="white-small" onClick={openCreate}><Plus size={16} />录入资料</button></div>}
+          )) : <div className="knowledge-empty"><FolderOpen size={22} /><strong>还没有公共面试资料</strong><p>上传一份文字版文件，核对内容后建立索引，即可用于真实面试检索。</p><button type="button" className="white-small" disabled={Boolean(working) || extracting} onClick={() => openCreate(true)}><Upload size={16} />上传第一份资料</button></div>}
         </div>
         <div className="knowledge-detail">
           {!selected ? <div className="knowledge-empty"><FileText size={24} /><strong>选择一份资料查看详情</strong><p>这里将展示服务端生成的章节路径、切片内容和不可覆写的处理历史。</p></div> : (
             <>
               <div className="knowledge-detail-head">
                 <div><span className={`knowledge-status ${selected.status.toLowerCase()}`}>{knowledgeStatusLabel(selected.status)}</span><h3>{selected.title}</h3><p>{selected.description || "暂无资料说明"}</p></div>
-                <div className="knowledge-detail-actions"><button type="button" className="white-small" disabled={working === "process"} onClick={processDocument}>{working === "process" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}处理文档</button><button type="button" className="white-small" disabled={selected.status !== "PROCESSED" || !vectorStatus?.embedding?.configured || !vectorStatus?.qdrant?.healthy || working.startsWith("index-")} onClick={() => manageIndex("create")}>建立索引</button><button type="button" className="white-small" disabled={selected.status !== "PROCESSED" || !vectorStatus?.embedding?.configured || !vectorStatus?.qdrant?.healthy || working.startsWith("index-")} onClick={() => manageIndex("rebuild")}>重新索引</button>{selected.vectorStatus && selected.vectorStatus !== "NOT_INDEXED" && <button type="button" className="danger-text-button" disabled={working.startsWith("index-")} onClick={() => manageIndex("delete")}>删除索引</button>}<button type="button" className="white-small" onClick={openEdit}>编辑</button><button type="button" className="danger-text-button" onClick={() => setDeleteCandidate(selected)}><Trash2 size={16} />删除</button></div>
+                <div className="knowledge-detail-actions"><button type="button" className="white-small" disabled={Boolean(working) || extracting} onClick={processDocument}>{working === "process" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}处理文档</button><button type="button" className="white-small" disabled={selected.status !== "PROCESSED" || !vectorStatus?.embedding?.configured || !vectorStatus?.qdrant?.healthy || Boolean(working) || extracting} onClick={() => manageIndex("create")}>建立索引</button><button type="button" className="white-small" disabled={selected.status !== "PROCESSED" || !vectorStatus?.embedding?.configured || !vectorStatus?.qdrant?.healthy || Boolean(working) || extracting} onClick={() => manageIndex("rebuild")}>重新索引</button>{selected.vectorStatus && selected.vectorStatus !== "NOT_INDEXED" && <button type="button" className="danger-text-button" disabled={Boolean(working) || extracting} onClick={() => manageIndex("delete")}>删除索引</button>}<button type="button" className="white-small" disabled={Boolean(working) || extracting} onClick={openEdit}>编辑</button><button type="button" className="danger-text-button" disabled={Boolean(working) || extracting} onClick={() => setDeleteCandidate(selected)}><Trash2 size={16} />删除</button></div>
               </div>
               <div className="knowledge-meta"><span>来源：{selected.sourceName || "未填写"}</span><span>语言：{selected.language}</span><span>标签：{selected.skillTags?.join("、") || "未填写"}</span><span>原文哈希：{selected.rawTextHash?.slice(0, 12)}…</span></div>
               <section className="knowledge-detail-section vector-index-detail"><header><h4>向量索引</h4><span className={`knowledge-status ${(selected.vectorStatus || "NOT_INDEXED").toLowerCase()}`}>{vectorStatusLabel(selected.vectorStatus)}</span></header><div className="vector-index-facts"><span>索引版本：{selected.indexedProcessingVersion ? `v${selected.indexedProcessingVersion}` : "—"}</span><span>有效记录：{selected.indexedChunkCount || 0}</span><span>模型：{vectorStatus?.embedding?.model || "未配置"}</span><span>Collection：{selected.vectorCollection || "—"}</span><span>最后索引：{selected.indexedAt ? formatResumeDate(selected.indexedAt) : "—"}</span></div>{selected.vectorStatus === "STALE" && <p className="vector-index-note">文档切片已更新，旧向量不再代表当前版本；请重新建立索引。</p>}{selected.indexFailureMessage && <p className="vector-index-note error">{selected.indexFailureCode}: {selected.indexFailureMessage}</p>}</section>

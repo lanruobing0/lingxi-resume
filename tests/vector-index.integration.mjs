@@ -12,7 +12,7 @@ const close = (server) => new Promise((resolve) => server.close(resolve));
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const tokenHash = (token) => createHash("sha256").update(token).digest("base64url");
 
-async function startMockServices() {
+export async function startMockServices() {
   const state = { collections: new Map(), points: new Map(), embeddingCalls: 0, upserts: 0, deletes: 0, failEmbedding: false, failEmbeddingAfter: null, failUpsert: false, failUpsertAt: null, failDelete: false, invalid: null, received: [] };
   const embedding = createServer(async (req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/embeddings") return res.writeHead(404).end();
@@ -49,9 +49,28 @@ async function main() {
   try {
     start(); for (let i = 0; i < 50; i += 1) { try { if ((await request("/api/health")).status === 200) break; } catch {} await wait(40); }
     assert.equal((await request("/api/admin/vector-index/status", { token: userToken })).status, 403); assert.equal((await request("/api/admin/vector-index/status", { token: "missing" })).status, 401);
-    const document = await ok("/api/admin/knowledge-documents", { method: "POST", body: JSON.stringify({ title: "Java 能力标准", description: "测试", sourceType: "TEXT_ENTRY", documentType: "ROLE_SKILL_DESCRIPTION", jobFamily: "研发", seniority: "中级", skillTags: ["Java"], language: "zh-CN", sourceName: "测试", sourceUrl: "", rawText: "# 核心能力\n\nJava、Spring Boot、MySQL 的服务开发与稳定性治理实践。" }) });
+    const uploadBytes = Buffer.from("# 核心能力\n\nJava、Spring Boot、MySQL 的服务开发与稳定性治理实践。");
+    const uploadOptions = { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent("Java面试.md") }, body: uploadBytes };
+    assert.equal((await request("/api/admin/knowledge-documents/extract", { ...uploadOptions, token: userToken })).status, 403);
+    assert.equal((await request("/api/admin/knowledge-documents/extract", { ...uploadOptions, token: "missing" })).status, 401);
+    const extracted = await ok("/api/admin/knowledge-documents/extract", uploadOptions);
+    assert.equal(extracted.rawText, uploadBytes.toString("utf8"));
+    assert.equal((await request("/api/admin/knowledge-documents/extract", { ...uploadOptions, headers: { ...uploadOptions.headers, "X-File-Name": "malware.exe" } })).status, 415);
+    assert.equal((await request("/api/admin/knowledge-documents/extract", { ...uploadOptions, body: Buffer.alloc(0) })).status, 400);
+    assert.equal((await request("/api/admin/knowledge-documents/extract", { ...uploadOptions, body: Buffer.alloc(6 * 1024 * 1024 + 1) })).status, 413);
+    assert.equal((await request("/api/interview-materials", { token: "missing" })).status, 401);
+    const document = await ok("/api/admin/knowledge-documents", { method: "POST", body: JSON.stringify({ title: "Java 能力标准", description: "测试", sourceType: "FILE_IMPORT", documentType: "ROLE_SKILL_DESCRIPTION", jobFamily: "研发", seniority: "中级", skillTags: ["Java"], language: "zh-CN", sourceName: extracted.fileName, sourceUrl: "", rawText: extracted.rawText }) });
+    assert.equal(document.item.characterCount, extracted.characterCount);
+    assert.deepEqual((await ok("/api/interview-materials", { token: userToken })).items, []);
     await ok(`/api/admin/knowledge-documents/${document.item.id}/process`, { method: "POST" });
+    assert.deepEqual((await ok("/api/interview-materials", { token: userToken })).items, []);
     const indexed = await ok(`/api/admin/knowledge-documents/${document.item.id}/index`, { method: "POST" }); assert.equal(indexed.idempotent, false); assert.ok(mocks.state.collections.size === 1); assert.equal(indexed.item.vectorStatus, "INDEXED");
+    const publicItems = (await ok("/api/interview-materials", { token: userToken })).items;
+    assert.equal(publicItems.length, 1); assert.equal(publicItems[0].id, document.item.id);
+    assert.equal(publicItems[0].sourceType, "FILE_IMPORT");
+    for (const field of ["rawText", "normalizedText", "createdBy", "vectorCollection", "activeIndexRunId", "rawTextHash", "indexFailureMessage"]) assert.equal(publicItems[0][field], undefined);
+    const retrieved = await ok("/api/admin/knowledge-retrieval/search", { method: "POST", body: JSON.stringify({ query: "Java", mode: "KEYWORD", topK: 5 }) });
+    assert.ok(retrieved.results.some((item) => item.documentId === document.item.id), "imported file must participate in existing retrieval");
     const points = [...mocks.state.points.values()][0]; assert.ok(points.size); for (const point of points.values()) { assert.ok(point.payload.embeddingInputHash); assert.equal(JSON.stringify(point.payload).includes("rawText"), false); assert.equal(JSON.stringify(point.payload).includes("secret"), false); }
     const makeProcessed = async (suffix) => { const created = await ok("/api/admin/knowledge-documents", { method: "POST", body: JSON.stringify({ title: `校验资料${suffix}`, description: "测试", sourceType: "TEXT_ENTRY", documentType: "ROLE_SKILL_DESCRIPTION", jobFamily: "研发", seniority: "中级", skillTags: ["Java"], language: "zh-CN", sourceName: "测试", sourceUrl: "", rawText: `# 校验资料${suffix}\n\nJava 服务开发、系统设计、稳定性治理和性能分析。` }) }); await ok(`/api/admin/knowledge-documents/${created.item.id}/process`, { method: "POST" }); return created.item; };
     for (const invalid of ["count", "dimension", "empty", "number"]) { const invalidDocument = await makeProcessed(invalid); mocks.state.invalid = invalid; const response = await request(`/api/admin/knowledge-documents/${invalidDocument.id}/index`, { method: "POST" }); assert.equal(response.status, 502); assert.ok(["EMBEDDING_COUNT_MISMATCH", "EMBEDDING_DIMENSION_MISMATCH", "EMBEDDING_EMPTY_VECTOR", "EMBEDDING_INVALID_NUMBER"].includes(response.data.failureCode)); } mocks.state.invalid = null;
@@ -69,4 +88,4 @@ async function main() {
     console.log("Vector-index integration passed: permissions, provider/Qdrant lifecycle, idempotency, stale switching, deletion, privacy, and restart persistence.");
   } finally { await stop(); await mocks.close(); await rm(dataDir, { recursive: true, force: true }); }
 }
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.dirname, "vector-index.integration.mjs")) main().catch((error) => { console.error(error); process.exitCode = 1; });
