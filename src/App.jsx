@@ -49,6 +49,7 @@ import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, sugg
 import { feedbackTextItems, interviewApiRequest, interviewCategoryLabel, interviewDifficultyLabel, interviewFailureMessage, interviewStatusLabel, nextInterviewQuestionIndex, safeKnowledgeSources } from "./interviewUiState";
 import { agentActionLabel, agentApiRequest, agentFailureMessage, agentResultTypes, agentStatusLabel, safeAgentStepSummary, safeRetrievalSources } from "./agentUiState";
 import { usePresence } from "./hooks/usePresence";
+import { useResumeAutosave } from "./useResumeAutosave";
 import { shouldRefreshCaptcha } from "./captchaState";
 import { InterviewLibrary } from "./InterviewLibrary";
 import { KnowledgeFileImport } from "./KnowledgeFileImport";
@@ -1399,13 +1400,14 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
     个人主页: resume.website,
   });
   const [profileFields, setProfileFields] = useState([]);
-  const [saveState, setSaveState] = useState("idle");
+  const [editorReady, setEditorReady] = useState(false);
+  const [editorLoadError, setEditorLoadError] = useState("");
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
   const [previewRefreshing, setPreviewRefreshing] = useState(false);
-  const saveFeedbackTimerRef = useRef(null);
   const previewFeedbackTimerRef = useRef(null);
 
   useEffect(() => () => {
-    window.clearTimeout(saveFeedbackTimerRef.current);
     window.clearTimeout(previewFeedbackTimerRef.current);
   }, []);
 
@@ -1453,53 +1455,37 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
           }
           if (Array.isArray(item.moduleOrder)) setModuleOrder(item.moduleOrder);
         }
+        setEditorReady(true);
       })
-      .catch((error) => notify(`读取个人简历失败: ${error.message}`));
+      .catch((error) => { if (!disposed) { setEditorLoadError(error.message); notifyRef.current(`读取个人简历失败: ${error.message}`); } });
     return () => { disposed = true; };
-  }, [notify, resumeId]);
+  }, [resumeId]);
 
-  const saveResume = async (historySummary = "自动保存简历修改", changes = {}) => {
-    setSaveState("saving");
-    try {
-      const nextPhotoDataUrl = Object.hasOwn(changes, "photoDataUrl") ? changes.photoDataUrl : photoDataUrl;
-      const nextSelfEvaluation = Object.hasOwn(changes, "selfEvaluation") ? changes.selfEvaluation : selfEvaluation;
-      await apiRequest(`/api/resumes/${resumeId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          realName: form.姓名,
-          title: `${form.当前职位}简历`,
-          email: form.邮箱,
-          phone: form.电话,
-          city: form.城市,
-          website: form.个人主页,
-          currentPosition: form.当前职位,
-          themeColor,
-          templateName: templateTone,
-          templateLayout: layout,
-          targetPosition,
-          targetPositionId: jobDirections.find((item) => item.name === targetPosition)?.id || 1,
-          photoDataUrl: nextPhotoDataUrl,
-          selfEvaluation: nextSelfEvaluation,
-          sectionContent,
-          sectionDetails,
-          profileFields,
-          visibleSections: [...visibleSections],
-          customSections: customSections.map(({ label }) => ({ label })),
-          moduleOrder,
-          summary: historySummary,
-        }),
-      });
-      setSaveState("saved");
-      window.clearTimeout(saveFeedbackTimerRef.current);
-      saveFeedbackTimerRef.current = window.setTimeout(() => setSaveState("idle"), 1600);
-      notify("简历已保存到历史版本");
-      return true;
-    } catch (error) {
-      setSaveState("idle");
-      notify(`保存失败: ${error.message}`);
-      return false;
-    }
-  };
+  const { state: saveState, saveNow } = useResumeAutosave({
+    resumeId, ready: editorReady, request: apiRequest, notify,
+    payload: {
+      realName: form.姓名,
+      title: `${form.当前职位}简历`,
+      email: form.邮箱,
+      phone: form.电话,
+      city: form.城市,
+      website: form.个人主页,
+      currentPosition: form.当前职位,
+      themeColor,
+      templateName: templateTone,
+      templateLayout: layout,
+      targetPosition,
+      targetPositionId: jobDirections.find((item) => item.name === targetPosition)?.id || 1,
+      photoDataUrl,
+      selfEvaluation,
+      sectionContent,
+      sectionDetails,
+      profileFields,
+      visibleSections: [...visibleSections],
+      customSections: customSections.map(({ label }) => ({ label })),
+      moduleOrder,
+    },
+  });
 
   const triggerPreviewRefresh = () => {
     setPreviewRefreshing(true);
@@ -1507,42 +1493,20 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
     previewFeedbackTimerRef.current = window.setTimeout(() => setPreviewRefreshing(false), 240);
   };
 
-  const changeLayout = async (nextLayout) => {
+  const changeLayout = (nextLayout) => {
     if (nextLayout === layout) return;
     layoutTouchedRef.current = true;
     setLayout(nextLayout);
     triggerPreviewRefresh();
     notify(`预览布局已切换为 ${nextLayout}`);
-    try {
-      await apiRequest(`/api/resumes/${resumeId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          templateLayout: nextLayout,
-          summary: `切换简历布局为${nextLayout}`,
-        }),
-      });
-    } catch (error) {
-      notify(`布局保存失败: ${error.message}`);
-    }
   };
 
-  const changeThemeColor = async (nextColor) => {
+  const changeThemeColor = (nextColor) => {
     if (nextColor === themeColor) return;
     themeColorTouchedRef.current = true;
     setThemeColor(nextColor);
     triggerPreviewRefresh();
     notify("主题色已应用到简历预览");
-    try {
-      await apiRequest(`/api/resumes/${resumeId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          themeColor: nextColor,
-          summary: "切换简历主题色",
-        }),
-      });
-    } catch (error) {
-      notify(`主题色保存失败: ${error.message}`);
-    }
   };
 
   const allSections = moduleOrder
@@ -1679,7 +1643,6 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
       const imageDataUrl = await readImageAsDataUrl(file);
       setPhotoDataUrl(imageDataUrl);
       writeWorkspaceValue("lingxi-resume-photo", imageDataUrl);
-      await saveResume("更新简历证件照", { photoDataUrl: imageDataUrl });
     } catch (error) {
       notify(`证件照上传失败: ${error.message}`);
     }
@@ -1688,8 +1651,9 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
   const removeProfilePhoto = async () => {
     setPhotoDataUrl("");
     window.localStorage.removeItem(workspaceStorageKey("lingxi-resume-photo"));
-    await saveResume("移除简历证件照", { photoDataUrl: "" });
   };
+
+  if (!editorReady) return editorLoadError ? <div role="alert">读取简历失败：{editorLoadError}<button className="white-small" onClick={() => window.location.reload()}>重新加载</button></div> : <ResultSkeleton lines={5} />;
 
   return (
     <div className="resume-editor-shell">
@@ -1754,9 +1718,9 @@ function ResumeEditor({ go, notify, appliedTemplate, resumeId }) {
             <strong>{activeSection}</strong>
             <div className="form-heading-actions">
               {activeSection === "基本信息" && <button type="button" className="link-button" onClick={addProfileField}><Plus size={14} />添加信息</button>}
-              <button className={`link-button ${saveState === "saved" ? "is-saved" : ""}`} disabled={saveState === "saving"} onClick={() => saveResume()}>
+              <button className={`link-button ${saveState === "saved" ? "is-saved" : ""}`} disabled={saveState === "saving" || saveState === "saved"} onClick={() => saveNow()}>
                 {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : <Save size={14} />}
-                {saveState === "saving" ? "正在保存" : saveState === "saved" ? "已保存" : "自动保存"}
+                <span aria-live="polite">{saveState === "saving" ? "正在保存" : saveState === "saved" ? "已自动保存" : saveState === "error" ? "保存失败，重试" : "等待自动保存"}</span>
               </button>
             </div>
           </div>
