@@ -35,3 +35,9 @@
 - 浏览器隔离 API 验证取消不删除、未选中删除保持当前项、删空清空详情，desktop/mobile 无页面溢出，无浏览器异常；个人真实历史未被测试删除。
 
 补充完成后停止等待 Claude 独立验收，不提交或部署。
+
+## 独立面试记录首页删除（2026-10-10）
+
+用户截图要求在独立模拟面试列表添加删除。InterviewLibrary 每行的继续/反馈入口与删除是两个相邻按钮，无嵌套 button。复用 App 的 ConfirmDialog，说明题目/回答/反馈删除不可恢复；取消不删除，提交时阻止重复删除，失败保留列表并提示真实原因，成功移除并重新加载列表。PENDING/RUNNING 按钮禁用，既有后端 HISTORY_BUSY/ownership/级联与墓碑保留。没有修改真实个人历史或后端删除逻辑。
+
+后端语法、`corepack pnpm build` 通过。隔离真实 Node API fixture + mock 生成一份 NONE 面试，实际 UI 验证列表删除入口、取消保留、确认后删空、刷新后仍为空；1440/390 布局检查，手机 scrollWidth=390/innerWidth=390。截图 `artifacts/materials-selection/library-delete.jpg`。前端正式 Vite 自动加载改动。按现行 DECISIONS 保存本地提交，待独立验收，不推送或部署。

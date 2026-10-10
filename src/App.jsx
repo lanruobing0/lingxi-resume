@@ -3070,7 +3070,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
   };
 
   if (isInterviewPage && !workspaceRoute.jobId) {
-    return <InterviewLibrary request={apiRequest} formatDate={formatResumeDate} />;
+    return <InterviewLibrary request={apiRequest} formatDate={formatResumeDate} ConfirmationDialog={ConfirmDialog} />;
   }
   if (isInterviewPage && loading) return <section className="job-page"><ResultSkeleton lines={4} /></section>;
   if (isInterviewPage && workspaceLoadError) return <section className="job-page"><p role="alert">{workspaceLoadError}</p><button className="white-small" onClick={() => { window.location.hash = "#interview"; }}>返回面试记录</button></section>;

@@ -5673,8 +5673,8 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 .workspace-history-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .interview-session-history .workspace-history-row { flex: 0 0 min(340px, 100%); }
 .workspace-history-row .history-select { flex: 1; min-width: 0; }
-.workspace-history-row .history-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 8px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; }
-.workspace-history-row .history-delete:hover:not(:disabled) { color: #b42318; background: #fff1f0; }
+.workspace-history-row .history-delete,.interview-record-row .history-delete { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 8px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; }
+.workspace-history-row .history-delete:hover:not(:disabled),.interview-record-row .history-delete:hover:not(:disabled) { color: #b42318; background: #fff1f0; }
 .workspace-history-row button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .workspace-history-row button:disabled { opacity: .5; cursor: not-allowed; }
 .interview-status { display: inline-flex; align-items: center; width: fit-content; min-height: 23px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-style: normal; font-weight: 750; white-space: nowrap; }
@@ -5996,7 +5996,8 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
   .job-match-compact .job-match-dimensions article > div { flex-wrap: wrap; }
 }
 .interview-record-list { display: flex; flex-direction: column; border-top: 1px solid #e5e5e5; }
-.interview-record { display: flex; align-items: center; gap: 24px; padding: 20px 4px; border: 0; border-bottom: 1px solid #e5e5e5; background: transparent; text-align: left; color: #222; }
+.interview-record-row { display:flex; align-items:center; gap:16px; border-bottom:1px solid var(--line); min-width:0; }
+.interview-record { flex:1; min-width:0; display: flex; align-items: center; gap: 24px; padding: 20px 4px; border: 0; background: transparent; text-align: left; color: #222; }
 .interview-record:hover { background: #f7f7f7; }
 .interview-record:focus-visible { outline: 2px solid #4775ff; outline-offset: 2px; }
 .interview-record > span:first-child { flex: 1; min-width: 0; }

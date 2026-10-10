@@ -4,6 +4,8 @@
 
 ## 文档职责
 
+- 最新追加：独立面试记录列表删除，交接 `docs/tasks/WORKSPACE_HISTORY_DELETE.md`，待独立验收。
+
 - 当前任务：`docs/tasks/INTERVIEW_MATERIAL_SELECTION.md`，每次面试资料确认、检索范围限制和历史快照，完成待独立验收。
 
 - 最新界面调整：`docs/tasks/MATERIALS_UI_POLISH.md`，面试资料页布局收紧，待独立验收。
