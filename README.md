@@ -38,6 +38,8 @@ MySQL 运行时会使用迁移后的 `lingxi_store_snapshot` 和受审计的实�
 
 AI 使用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 和 `AI_PROVIDER_TIMEOUT_MS`。Embedding 使用 `EMBEDDING_*`，Qdrant 使用 `QDRANT_URL`、`QDRANT_API_KEY` 与 `QDRANT_*`。所有 secret 仅可放在环境变量或本地运行时配置中。
 
+Windows 若拒绝绑定 Qdrant 的 6333（如系统保留端口段覆盖它），在 `.env.local` 同时配置 `QDRANT_HTTP_PORT=16333` 和 `QDRANT_URL=http://127.0.0.1:16333`。项目启动器会将该端口传给 Compose 并检查相同端口；容器内仍用 6333，现有 `.qdrant-data` 保留。直接执行 Compose 时也须传入相同的 `QDRANT_HTTP_PORT` 环境变量（Compose 不自动读取 `.env.local`）。
+
 Vercel 部署建议连接 Upstash Redis 与 Upstash Vector，并设置：
 
 ```text

@@ -63,13 +63,21 @@ function config() {
   env.API_PORT = String(apiPort);
   env.VITE_API_PROXY_TARGET = `http://127.0.0.1:${apiPort}`;
   const vectorDriver = String(env.VECTOR_STORE_DRIVER || 'qdrant').toLowerCase();
-  if (vectorDriver !== 'upstash' && !env.QDRANT_URL) env.QDRANT_URL = 'http://127.0.0.1:6333';
+  const qdrantPort = Number(env.QDRANT_HTTP_PORT || 6333);
+  if (!Number.isInteger(qdrantPort) || qdrantPort < 1 || qdrantPort > 65535 || [apiPort, 5173].includes(qdrantPort)) throw new Error('QDRANT_HTTP_PORT 配置无效或与前后端冲突。');
+  env.QDRANT_HTTP_PORT = String(qdrantPort);
+  if (vectorDriver !== 'upstash' && !env.QDRANT_URL) env.QDRANT_URL = `http://127.0.0.1:${qdrantPort}`;
   let localQdrant = false;
   if (vectorDriver !== 'upstash') {
-    try { const u = new URL(env.QDRANT_URL); localQdrant = ['127.0.0.1', 'localhost'].includes(u.hostname) && u.port === '6333'; }
+    try {
+      const u = new URL(env.QDRANT_URL);
+      const loopback = ['127.0.0.1', 'localhost'].includes(u.hostname);
+      if (loopback && env.QDRANT_HTTP_PORT !== '6333' && Number(u.port) !== qdrantPort) throw new Error('本地 QDRANT_URL 端口必须与 QDRANT_HTTP_PORT 一致。');
+      localQdrant = loopback && u.protocol === 'http:' && Number(u.port) === qdrantPort;
+    }
     catch { throw new Error('QDRANT_URL 配置不是有效 URL。'); }
   }
-  return { env, apiPort, vectorDriver, localQdrant };
+  return { env, apiPort, vectorDriver, localQdrant, qdrantPort };
 }
 function fetchLocal(port, route) {
   return new Promise(resolve => {
@@ -97,10 +105,10 @@ function portFree(port) {
     server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
   });
 }
-function run(command, args, timeout = 8000) {
+function run(command, args, timeout = 8000, env = process.env) {
   return new Promise(resolve => {
     const log = fs.openSync(path.join(RUNTIME, 'docker.log'), 'a');
-    const child = spawn(command, args, { cwd: ROOT, windowsHide: true, stdio: ['ignore', log, log] });
+    const child = spawn(command, args, { cwd: ROOT, env, windowsHide: true, stdio: ['ignore', log, log] });
     fs.closeSync(log);
     const timer = setTimeout(() => { child.kill(); resolve(false); }, timeout);
     child.on('error', () => { clearTimeout(timer); resolve(false); });
@@ -109,7 +117,7 @@ function run(command, args, timeout = 8000) {
 }
 async function ensureQdrant(settings) {
   if (!settings.localQdrant) { say('向量服务使用现有远程配置，跳过本地 Docker。'); return; }
-  if ((await fetchLocal(6333, '/healthz'))?.status === 200) { say('本地 Qdrant 已运行。'); return; }
+  if ((await fetchLocal(settings.qdrantPort, '/healthz'))?.status === 200) { say(`本地 Qdrant 已运行（${settings.qdrantPort}）。`); return; }
   const docker = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Docker/Docker/resources/bin/docker.exe');
   const desktop = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Docker/Docker/Docker Desktop.exe');
   if (!fs.existsSync(docker)) { say('提示：没有找到 Docker，继续启动网页；本地向量服务未启动。'); return; }
@@ -127,8 +135,8 @@ async function ensureQdrant(settings) {
   }
   if (!ready) { say('提示：Docker 未就绪，继续启动网页；本地向量服务未启动。'); return; }
   say('正在启动 Qdrant（首次可能需要下载镜像）…');
-  const ok = await run(docker, ['compose', '-f', path.join(ROOT, 'docker-compose.qdrant.yml'), 'up', '-d'], 180000);
-  if (ok) for (let i = 0; i < 60; i++) { if ((await fetchLocal(6333, '/healthz'))?.status === 200) { say('Qdrant 已就绪。'); return; } await sleep(1000); }
+  const ok = await run(docker, ['compose', '-f', path.join(ROOT, 'docker-compose.qdrant.yml'), 'up', '-d'], 180000, settings.env);
+  if (ok) for (let i = 0; i < 60; i++) { if ((await fetchLocal(settings.qdrantPort, '/healthz'))?.status === 200) { say(`Qdrant 已就绪（${settings.qdrantPort}）。`); return; } await sleep(1000); }
   say('提示：Qdrant 未通过就绪检查，网页仍可打开；向量检索暂不可用。');
 }
 async function startService(kind, entry, args, port, env, records) {
@@ -159,7 +167,7 @@ function stopRecord(record) {
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'node_modules/vite/bin/vite.js'))) throw new Error('项目或依赖缺失，请先在项目目录安装依赖。');
   const settings = config();
-  if (process.argv.includes('--check')) { say(JSON.stringify({ project: ROOT, apiPort: settings.apiPort, vectorDriver: settings.vectorDriver, localQdrant: settings.localQdrant, node: process.version })); return; }
+  if (process.argv.includes('--check')) { say(JSON.stringify({ project: ROOT, apiPort: settings.apiPort, vectorDriver: settings.vectorDriver, localQdrant: settings.localQdrant, qdrantPort: settings.qdrantPort, node: process.version })); return; }
   lock();
   const prior = readState();
   const records = prior.root === ROOT ? prior.processes.filter(sameProcess) : [];
