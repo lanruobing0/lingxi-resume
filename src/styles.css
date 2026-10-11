@@ -291,10 +291,15 @@ textarea:focus-visible {
   margin-top: 26px;
 }
 
+.hero-workbench-enter {
+  width: min(920px, 100%);
+  min-width: 0;
+}
+
 .flux-hero-stage {
   position: relative;
   width: min(920px, 100%);
-  margin-top: 38px;
+  margin: 38px auto 0;
   isolation: isolate;
 }
 
@@ -374,7 +379,7 @@ textarea:focus-visible {
 
 .flux-workbench-grid {
   display: grid;
-  grid-template-columns: 156px minmax(360px, 1fr) 250px;
+  grid-template-columns: 156px minmax(0, 1fr) 250px;
   gap: 12px;
   min-height: 360px;
   padding: 12px;
@@ -4948,6 +4953,24 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 
   .landing-hero h1 {
     font-size: 42px;
+  }
+
+  .flux-workbench-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .flux-sidebar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flux-window-bar {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-block: 12px;
+    gap: 8px 16px;
+  }
+
+  .flux-window-bar em {
+    grid-column: 1 / -1;
   }
 
   .landing-hero p,
