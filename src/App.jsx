@@ -1257,7 +1257,7 @@ function CreateResumeDialog({ open, onClose, onCreateBlank, onCreateFromTemplate
   );
 }
 
-function ConfirmDialog({ open, title, description, confirmLabel, isWorking, onClose, onConfirm }) {
+function ConfirmDialog({ open, title, description, error, confirmLabel, isWorking, onClose, onConfirm }) {
   const { isMounted, isLeaving } = usePresence(open);
   if (!isMounted) return null;
   return (
@@ -1266,6 +1266,7 @@ function ConfirmDialog({ open, title, description, confirmLabel, isWorking, onCl
         <span className="section-kicker">确认操作</span>
         <h2 id="confirm-dialog-title">{title}</h2>
         <p>{description}</p>
+        {error && <p className="job-error" role="alert">{error}</p>}
         <div className="confirm-dialog-actions">
           <button type="button" className="white-small" disabled={isWorking} onClick={onClose}>取消</button>
           <button type="button" className="danger-action" disabled={isWorking} onClick={onConfirm}>{isWorking ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}{isWorking ? "正在删除" : confirmLabel}</button>
@@ -2254,6 +2255,9 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
   const [suggestionSuccess, setSuggestionSuccess] = useState("");
   const [historyDeleteCandidate, setHistoryDeleteCandidate] = useState(null);
   const [historyDeleting, setHistoryDeleting] = useState(false);
+  const [analysisDeleteCandidate, setAnalysisDeleteCandidate] = useState(null);
+  const [analysisDeleting, setAnalysisDeleting] = useState(false);
+  const [analysisDeleteError, setAnalysisDeleteError] = useState("");
   const [resumeVersionHistory, setResumeVersionHistory] = useState([]);
   const [selectedVersionSnapshot, setSelectedVersionSnapshot] = useState(null);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
@@ -2757,6 +2761,39 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
     }
   }, [workspaceRoute.sessionId, loading, interviewLoading]);
 
+  const deleteAnalysisHistory = async () => {
+    if (!analysisDeleteCandidate || analysisDeleting) return;
+    const { kind, item } = analysisDeleteCandidate;
+    setAnalysisDeleting(true); setAnalysisDeleteError("");
+    try {
+      await apiRequest(`/api/${kind === "report" ? "match-reports" : "job-applications"}/${item.id}`, { method: "DELETE" });
+      setAnalysisDeleteCandidate(null);
+      if (kind === "application") {
+        const remaining = applications.filter(candidate => candidate.id !== item.id);
+        setApplications(remaining);
+        if (String(selectedApplicationId) === String(item.id)) {
+          const nextId = String(remaining.at(-1)?.id || "");
+          window.history.replaceState(null, "", jobWorkspaceHash({ tab: workspaceTab, jobId: detail.item.id, applicationId: nextId }));
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
+          await selectApplication(nextId);
+        }
+      } else {
+        const remaining = reports.filter(candidate => candidate.id !== item.id);
+        setReports(remaining);
+        if (selectedReport?.id === item.id) {
+          setSelectedReport(null); setReportFailure(null); setSuggestionRuns([]); setSelectedSuggestionRun(null);
+          setSuggestionSuccess(""); setSuggestionError(null); setSelectedVersionSnapshot(null); setResumeVersionHistory([]);
+          window.history.replaceState(null, "", jobWorkspaceHash({ tab: workspaceTab, jobId: detail.item.id, applicationId: selectedApplicationId }));
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
+          if (remaining[0]?.id) await openGroundedReport(remaining[0].id);
+        }
+        await Promise.all([loadAgentRuns(selectedApplicationId), loadInterviewSessions(selectedApplicationId)]);
+      }
+      notify("历史记录已删除");
+    } catch (error) { setAnalysisDeleteError(`删除失败：${error.message}`); }
+    finally { setAnalysisDeleting(false); }
+  };
+
   const saveJob = async () => {
     if (!form.rawText.trim()) {
       notify("请粘贴完整岗位 JD 原文");
@@ -3100,7 +3137,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           {!resumes.length && <button className="link-button" onClick={() => go?.("resume")}>先创建简历</button>}
           {selectedResumeId && !resumeVersions.length && <p className="job-error">该简历暂无可选版本，请先保存简历后再创建任务。</p>}
           {selectedResumeId && resumeVersions.length > 0 && !resumeVersions.some((version) => version.isAnalysisReady) && <p className="job-error">现有历史版本缺少完整快照。请到“我的简历”打开这份简历并保存一次，生成可用于分析的新版本。</p>}
-          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <button className={String(item.id) === String(selectedApplicationId) ? "active" : ""} key={item.id} onClick={() => { selectApplication(String(item.id)); navigateWorkspace(workspaceTab, job.id, String(item.id)); }}>简历 #{item.resumeId} · v{item.resumeVersion} · {item.status}{item.resumeVersionId ? "" : " · 旧任务不可匹配"}</button>)}</div>}
+          {applications.length > 0 && <div className="job-application-list">{applications.map((item) => <div className="analysis-history-row" key={item.id}><button className={String(item.id) === String(selectedApplicationId) ? "active" : ""} disabled={analysisDeleting} onClick={() => { selectApplication(String(item.id)); navigateWorkspace(workspaceTab, job.id, String(item.id)); }}>任务 #{item.id} · 简历 #{item.resumeId} · v{item.resumeVersion}{item.resumeVersionId ? "" : " · 旧任务不可匹配"}</button><button className="analysis-history-delete" aria-label={`删除分析任务 #${item.id}`} disabled={analysisDeleting || working || reportWorking || suggestionWorking || agentWorking || interviewWorking} onClick={() => { setAnalysisDeleteError(""); setAnalysisDeleteCandidate({ kind: "application", item }); }}><Trash2 size={14} />删除</button></div>)}</div>}
         </section>
         <nav className="job-workspace-tabs" aria-label="岗位工作台视图">{jobWorkspaceTabs.filter(([id]) => id !== "interview").map(([id, label]) => <button key={id} type="button" aria-current={workspaceTab === id ? "page" : undefined} className={workspaceTab === id ? "active" : ""} onClick={() => navigateWorkspace(id)}>{label}</button>)}</nav>
         </div>
@@ -3142,7 +3179,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           {!reportWorking && (selectedReport?.status === "COMPLETED" || selectedReport?.status === "DEGRADED") && <GroundedMatchReport report={selectedReport} match={selectedMatch} />}
           {!reportWorking && !selectedReport && !reportFailure && !reports.length && <div className="job-empty"><strong>尚未生成 AI 岗位匹配报告</strong><p>选择明确的求职分析任务与基础匹配报告后，再生成基于本地可验证引用的报告。</p></div>}
           {["COMPLETED", "DEGRADED"].includes(selectedReport?.status) && <div className="interview-report-action"><span>用这份报告准备岗位面试</span><button className="black-small" onClick={() => { window.location.hash = jobWorkspaceHash({ tab: "interview", jobId: job.id, applicationId: selectedApplicationId, reportId: selectedReport.id }); }}>针对这个岗位练习</button></div>}
-          {reports.length > 0 && <GroundedReportHistory reports={reports} selectedReportId={selectedReport?.id} onSelect={openGroundedReport} />}
+          {reports.length > 0 && <GroundedReportHistory reports={reports} selectedReportId={selectedReport?.id} onSelect={openGroundedReport} deleting={analysisDeleting || reportWorking || suggestionWorking || agentWorking || interviewWorking} onDelete={(item) => { setAnalysisDeleteError(""); setAnalysisDeleteCandidate({ kind: "report", item }); }} />}
         </section>
         </>}
         {!isInterviewPage && workspaceTab === "suggestions" && <ResumeSuggestionWorkspace
@@ -3201,6 +3238,8 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           onRefresh={() => selectedApplicationId && loadInterviewSessions(selectedApplicationId)}
         />
         </div>
+        {analysisDeleteError && <p className="job-error" role="alert">{analysisDeleteError}</p>}
+        <ConfirmDialog open={Boolean(analysisDeleteCandidate)} error={analysisDeleteError} title={analysisDeleteCandidate?.kind === "report" ? "删除报告版本" : "删除分析任务"} description={analysisDeleteCandidate?.kind === "report" ? `删除报告 v${analysisDeleteCandidate?.item.reportVersion}？这份报告及关联的简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。已接受的简历修改、简历版本和基础匹配会保留。` : `删除分析任务 #${analysisDeleteCandidate?.item.id}？该任务下的基础匹配、报告版本、简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。岗位 JD、简历和已保存的简历版本会保留。`} confirmLabel="删除记录" isWorking={analysisDeleting} onClose={() => !analysisDeleting && setAnalysisDeleteCandidate(null)} onConfirm={deleteAnalysisHistory} />
         <ConfirmDialog
           open={Boolean(historyDeleteCandidate)}
           title={historyDeleteCandidate?.kind === "agent" ? "删除 Agent 分析" : historyDeleteCandidate?.kind === "suggestion" ? "删除建议生成记录" : "删除历史面试"}
@@ -3262,8 +3301,8 @@ function GroundedReportFailure({ failure, onRetry, canRetry }) {
   return <div className="grounded-report-failure" role="alert"><div><strong>报告未能完整生成</strong><p>{message}</p><small>错误代码：{code}</small></div>{canRetry && <button className="white-small" onClick={onRetry}><RefreshCw size={15} />重新生成</button>}</div>;
 }
 
-function GroundedReportHistory({ reports, selectedReportId, onSelect }) {
-  return <div className="grounded-report-history"><strong>报告历史版本</strong><div>{reports.map((report) => <button key={report.id} className={selectedReportId === report.id ? "active" : ""} onClick={() => onSelect(report.id)}><span><b>v{report.reportVersion}</b><em className={`report-status status-${String(report.status || "").toLowerCase()}`}>{reportStatusLabel(report.status)}</em></span><small>{formatResumeDate(report.createdAt)} · {report.model || "未记录模型"} · 证据覆盖 {formatEvidenceCoverage(report.evidenceCoverage)}</small></button>)}</div></div>;
+function GroundedReportHistory({ reports, selectedReportId, onSelect, onDelete, deleting }) {
+  return <div className="grounded-report-history"><strong>报告历史版本</strong><div>{reports.map((report) => <div className="analysis-history-row" key={report.id}><button className={selectedReportId === report.id ? "active" : ""} disabled={deleting} onClick={() => onSelect(report.id)}><span><b>v{report.reportVersion}</b><em className={`report-status status-${String(report.status || "").toLowerCase()}`}>{reportStatusLabel(report.status)}</em></span><small>{formatResumeDate(report.createdAt)} · {report.model || "未记录模型"} · 证据覆盖 {formatEvidenceCoverage(report.evidenceCoverage)}</small></button><button className="analysis-history-delete" aria-label={`删除报告版本 v${report.reportVersion}`} disabled={deleting || ["PENDING", "RUNNING"].includes(report.status)} onClick={() => onDelete(report)}><Trash2 size={14} />删除</button></div>)}</div></div>;
 }
 
 function formatEvidenceCoverage(coverage) {

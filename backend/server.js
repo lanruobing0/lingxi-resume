@@ -1,3 +1,4 @@
+import { deleteWorkspaceAnalysis } from "./workspace-history-delete.js";
 import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
 import { materialReady, interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
 import { recoverInterruptedInterviews } from "./interview-recovery.js";
@@ -629,13 +630,13 @@ function getOwnedJobDescription(store, user, requestedId) {
 function getOwnedJobApplication(store, user, requestedId) {
   const applicationId = Number(requestedId);
   if (!Number.isInteger(applicationId) || applicationId < 1) return null;
-  return store.jobApplications.find((item) => item.id === applicationId && item.userId === user.id) || null;
+  return store.jobApplications.find((item) => item.id === applicationId && item.userId === user.id && !item.deletedAt) || null;
 }
 
 function getOwnedResumeJobMatch(store, user, requestedId) {
   const matchId = Number(requestedId);
   if (!Number.isInteger(matchId) || matchId < 1) return null;
-  return store.resumeJobMatches.find((item) => item.id === matchId && item.userId === user.id) || null;
+  return store.resumeJobMatches.find((item) => item.id === matchId && item.userId === user.id && !item.deletedAt) || null;
 }
 
 function getResumeSnapshotForApplication(store, application) {
@@ -3033,19 +3034,19 @@ jobQueue.register("GROUNDED_MATCH_REPORT", async ({ job, store, setProgress }) =
   await setProgress(20); await executeGroundedMatchReport(store, user, application, match, job.payload.options); await setProgress(95);
 });
 jobQueue.register("RESUME_SUGGESTIONS", async ({ job, store, setProgress }) => {
-  const user = store.users.find((item) => item.id === job.userId); const report = store.matchReports.find((item) => item.id === job.resourceId && item.userId === job.userId);
+  const user = store.users.find((item) => item.id === job.userId); const report = store.matchReports.find((item) => item.id === job.resourceId && item.userId === job.userId && !item.deletedAt);
   if (!user || !report) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
   await setProgress(20); await executeResumeSuggestionRun(store, user, report); await setProgress(95);
 });
 jobQueue.register("MOCK_INTERVIEW_GENERATION", async ({ job, store, setProgress }) => {
   const user = store.users.find((item) => item.id === job.userId); if (!user) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
-  const application = getOwnedJobApplication(store, user, job.resourceId); const report = store.matchReports.find((item) => item.id === job.payload.matchReportId && item.userId === job.userId);
+  const application = getOwnedJobApplication(store, user, job.resourceId); const report = store.matchReports.find((item) => item.id === job.payload.matchReportId && item.userId === job.userId && !item.deletedAt);
   if (!application || !report) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
   await setProgress(20); await executeInterviewSession(store, user, application, report, job.payload.options); await setProgress(95);
 });
 jobQueue.register("AGENT_RUN", async ({ job, store, setProgress }) => {
   const user = store.users.find((item) => item.id === job.userId); if (!user) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
-  const application = getOwnedJobApplication(store, user, job.resourceId); const report = store.matchReports.find((item) => item.id === job.payload.matchReportId && item.userId === job.userId);
+  const application = getOwnedJobApplication(store, user, job.resourceId); const report = store.matchReports.find((item) => item.id === job.payload.matchReportId && item.userId === job.userId && !item.deletedAt);
   if (!application || !report) throw Object.assign(new Error("Job input is no longer available"), { code: "JOB_RESOURCE_NOT_FOUND", status: 404 });
   await setProgress(20); await executeAgentRun(store, user, application, report, job.payload.options); await setProgress(95);
 });
@@ -3395,7 +3396,7 @@ async function handleApiRequest(req, res) {
 
   if (key === "GET /api/job-applications") {
     const user = requireUser(store, req);
-    const items = store.jobApplications.filter((item) => item.userId === user.id).map((item) => ({
+    const items = store.jobApplications.filter((item) => item.userId === user.id && !item.deletedAt).map((item) => ({
       ...item,
       resume: store.resumes.find((resume) => resume.id === item.resumeId && resume.userId === user.id) || null,
       jobDescription: store.jobDescriptions.find((jobDescription) => jobDescription.id === item.jobDescriptionId && jobDescription.userId === user.id) || null,
@@ -3437,6 +3438,16 @@ async function handleApiRequest(req, res) {
     return send(res, 201, { item: application });
   }
 
+  const applicationDetailMatch = pathname.match(/^\/api\/job-applications\/(\d+)$/);
+  if (applicationDetailMatch && method === "DELETE") {
+    const user = requireUser(store, req);
+    const item = getOwnedJobApplication(store, user, applicationDetailMatch[1]);
+    if (!item) return send(res, 404, { message: "求职分析任务不存在" });
+    if (!deleteWorkspaceAnalysis(store, user.id, { applicationId: item.id }, suggestionDecisionLocks)) return send(res, 409, { message: "关联任务正在处理，请完成后再删除", failureCode: "HISTORY_BUSY" });
+    await writeStore(store);
+    return send(res, 200, { deletedId: item.id });
+  }
+
   const applicationMatchesMatch = pathname.match(/^\/api\/job-applications\/(\d+)\/matches$/);
   if (applicationMatchesMatch && method === "GET") {
     const user = requireUser(store, req);
@@ -3463,7 +3474,7 @@ async function handleApiRequest(req, res) {
     const application = getOwnedJobApplication(store, user, applicationReportsMatch[1]);
     if (!application) return send(res, 404, { message: "求职分析任务不存在" });
     const items = store.matchReports
-      .filter((report) => report.userId === user.id && report.jobApplicationId === application.id)
+      .filter((report) => report.userId === user.id && report.jobApplicationId === application.id && !report.deletedAt)
       .sort((left, right) => (right.reportVersion - left.reportVersion) || String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
       .map(publicMatchReportSummary);
     return send(res, 200, { items });
@@ -3519,7 +3530,7 @@ async function handleApiRequest(req, res) {
     const searchMode = String(body.searchMode || "HYBRID").toUpperCase();
     if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "AGENT_INPUT_INVALID" });
     if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "AGENT_INPUT_INVALID" });
-    const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
+    const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id && !item.deletedAt);
     if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "AGENT_REPORT_NOT_FOUND" });
     if (body.async === true) {
       const job = await jobQueue.enqueue(store, { type: "AGENT_RUN", userId: user.id, resourceId: application.id, payload: { matchReportId, options: { objective, maxSteps, searchMode, useReranker: body.useReranker === true } } });
@@ -3585,7 +3596,7 @@ async function handleApiRequest(req, res) {
     const searchMode = String(body.searchMode || "HYBRID").toUpperCase();
     if (!["KEYWORD", "VECTOR", "HYBRID"].includes(searchMode)) return send(res, 400, { message: "searchMode 不合法", failureCode: "INTERVIEW_INPUT_INVALID" });
     if (body.useReranker !== undefined && typeof body.useReranker !== "boolean") return send(res, 400, { message: "useReranker 必须为布尔值", failureCode: "INTERVIEW_INPUT_INVALID" });
-    const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id);
+    const report = store.matchReports.find((item) => item.id === matchReportId && item.userId === user.id && !item.deletedAt);
     if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "INTERVIEW_REPORT_NOT_FOUND" });
     let materialSelection;
     try { materialSelection = resolveMaterialSelection(store, user.id, body.materialSelection); }
@@ -3704,7 +3715,7 @@ async function handleApiRequest(req, res) {
   if (reportSuggestionsMatch && method === "GET") {
     const user = requireUser(store, req);
     const reportId = Number(reportSuggestionsMatch[1]);
-    const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id) : null;
+    const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id && !item.deletedAt) : null;
     if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "SUGGESTION_REPORT_NOT_FOUND" });
     const items = store.suggestionRuns.filter((item) => item.userId === user.id && item.matchReportId === report.id && !item.deletedAt).sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || ""))).map((item) => publicSuggestionRun(store, item));
     return send(res, 200, { items });
@@ -3713,7 +3724,7 @@ async function handleApiRequest(req, res) {
   if (reportSuggestionsMatch && method === "POST") {
     const user = requireUser(store, req);
     const reportId = Number(reportSuggestionsMatch[1]);
-    const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id) : null;
+    const report = Number.isInteger(reportId) ? store.matchReports.find((item) => item.id === reportId && item.userId === user.id && !item.deletedAt) : null;
     const body = await readJson(req);
     if (body.async === true) {
       if (!report) return send(res, 404, { message: "岗位匹配报告不存在", failureCode: "SUGGESTION_REPORT_NOT_FOUND" });
@@ -3776,10 +3787,18 @@ async function handleApiRequest(req, res) {
   }
 
   const matchReportDetail = pathname.match(/^\/api\/match-reports\/(\d+)$/);
+  if (matchReportDetail && method === "DELETE") {
+    const user = requireUser(store, req);
+    const item = store.matchReports.find(report => report.id === Number(matchReportDetail[1]) && report.userId === user.id && !report.deletedAt);
+    if (!item) return send(res, 404, { message: "岗位匹配报告不存在" });
+    if (!deleteWorkspaceAnalysis(store, user.id, { reportId: item.id }, suggestionDecisionLocks)) return send(res, 409, { message: "报告或关联任务正在处理，请完成后再删除", failureCode: "HISTORY_BUSY" });
+    await writeStore(store);
+    return send(res, 200, { deletedId: item.id });
+  }
   if (matchReportDetail && method === "GET") {
     const user = requireUser(store, req);
     const reportId = Number(matchReportDetail[1]);
-    const item = Number.isInteger(reportId) && reportId > 0 ? store.matchReports.find((report) => report.id === reportId && report.userId === user.id) : null;
+    const item = Number.isInteger(reportId) && reportId > 0 ? store.matchReports.find((report) => report.id === reportId && report.userId === user.id && !report.deletedAt) : null;
     if (!item) return send(res, 404, { message: "岗位匹配报告不存在" });
     return send(res, 200, { item: publicMatchReport(store, item) });
   }

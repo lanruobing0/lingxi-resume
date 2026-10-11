@@ -1,5 +1,9 @@
 # 项目上下文索引
 
+- 最新任务：`docs/tasks/ANALYSIS_HISTORY_DELETE.md`，报告版本与分析任务删除，完成待独立验收。
+- 最新运行修复：`docs/tasks/QDRANT_PORT_RECOVERY.md`，Windows 保留端口导致 Qdrant 无法启动，已切换 16333 并恢复就绪。
+
+
 项目：灵犀简历（技术项目名称：基于 Agentic RAG 的 AI 简历优化与岗位智能匹配平台）。
 
 ## 文档职责
