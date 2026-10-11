@@ -17,4 +17,9 @@ for (const text of [traceability, disclaimer]) {
 }
 assert.equal(validateClaimSupport({ claimText: disclaimer.replace("不代表", "代表"), localQuotes: [disclaimer] }).supported, false);
 assert.equal(validateClaimSupport({ claimText: traceability.replace("用户或资料范围", "所有用户无需"), localQuotes: [traceability] }).supported, false);
+const contextState = "将当前目标、约束、确认过的事实与来源保留为结构化状态；对冗长工具结果提取必要字段；按需检索历史信息。";
+assert.equal(validateClaimSupport({ claimText: `回答要点：${contextState}`, localQuotes: [contextState] }).supported, true);
+for (const text of [`回答要点：${contextState}系统已提升效率50%。`, `回答要点：${contextState}候选人已掌握上下文管理。`, "回答要点：", "回答要点：所有历史信息无需检索。", `${contextState}回答要点：系统已实现可靠记忆。`]) {
+  assert.equal(validateClaimSupport({ claimText: text, localQuotes: [contextState] }).supported, false);
+}
 console.log("Technical claims passed: source introduction, resource ownership and user metrics accepted; job-seeker attribution and changed ownership rejected.");

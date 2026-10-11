@@ -1,4 +1,4 @@
-export const claimSupportVersion = "claim-support-v6";
+export const claimSupportVersion = "claim-support-v7";
 export const minimumSemanticCoverage = 0.55;
 export const minimumCitationClauseCoverage = 0.2;
 
@@ -120,6 +120,9 @@ function hasCrossCitationInference(claimText, quotes, resultMetrics) {
 
 export function validateClaimSupport({ claimText, citations, localQuotes }) {
   const quotes = unique((localQuotes || citations?.map((citation) => citation.quote) || []).map((quote) => String(quote || "").trim()));
+  // A presentation label is not a factual addition. Only strip the anchored,
+  // fixed label; the complete following text must still pass every check.
+  claimText = String(claimText || "").replace(/^\s*回答要点[：:]\s*/, "");
   // Ignore only an attributed source introduction, never the factual claim after it.
   const titles = ["知识资料", "面试资料", ...(citations || []).map(citation => citation.sourceTitle).filter(Boolean)];
   for (const title of titles) {
@@ -130,7 +133,7 @@ export function validateClaimSupport({ claimText, citations, localQuotes }) {
   }
   const resultMetrics = metrics(claimText, quotes);
   const claim = String(claimText || "");
-  if (!quotes.length) return failure("INSUFFICIENT_SEMANTIC_OVERLAP", resultMetrics);
+  if (!quotes.length || !claim.trim()) return failure("INSUFFICIENT_SEMANTIC_OVERLAP", resultMetrics);
   // These are technical scope controls or explicit non-attribution statements.
   // Mask only the complete phrase when supported verbatim by a local quote;
   // any applicant assertion elsewhere in the claim still triggers the guard.
