@@ -122,7 +122,7 @@ textarea:focus-visible {
 
 .landing {
   position: relative;
-  overflow-x: hidden;
+  overflow-x: clip;
   min-height: 100dvh;
   background:
     radial-gradient(ellipse at 50% 2%, rgb(232 240 255 / 0.78), transparent 44%),
@@ -312,17 +312,17 @@ textarea:focus-visible {
 }
 
 .flux-layer.layer-one {
-  transform: rotate(2.2deg) translate(18px, 20px);
+  transform: translateY(12px);
   background: rgb(255 220 167 / 0.7);
 }
 
 .flux-layer.layer-two {
-  transform: rotate(-1.6deg) translate(-18px, 12px);
+  transform: translateY(24px);
   background: rgb(211 222 255 / 0.82);
 }
 
 .flux-layer.layer-three {
-  transform: rotate(0.8deg) translate(0, 34px);
+  transform: translateY(36px);
   background: rgb(218 242 229 / 0.78);
 }
 
@@ -4708,9 +4708,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
     box-shadow: 0 16px 24px rgb(24 32 50 / 0.11);
   }
 
-  .flux-hero-stage:hover .flux-layer.layer-one { transform: rotate(2.2deg) translate(20px, 22px); }
-  .flux-hero-stage:hover .flux-layer.layer-two { transform: rotate(-1.6deg) translate(-20px, 14px); }
-  .flux-hero-stage:hover .flux-layer.layer-three { transform: rotate(0.8deg) translate(0, 36px); }
+  .flux-hero-stage:hover .flux-layer.layer-one { transform: translateY(12px); }
+  .flux-hero-stage:hover .flux-layer.layer-two { transform: translateY(24px); }
+  .flux-hero-stage:hover .flux-layer.layer-three { transform: translateY(36px); }
 }
 
 .flux-workbench-card { transition: transform var(--motion-normal) var(--ease-standard), box-shadow var(--motion-normal) var(--ease-standard); }
