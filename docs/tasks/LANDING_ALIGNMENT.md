@@ -14,3 +14,5 @@
 用户指出仍歪且右侧长灰条。真实 DOM 查明 landing 的 overflow-x:hidden 隐式令 overflow-y:auto，内容高度比自身大 14px，创建无意义的内层纵向滚动条。改 overflow-x:clip，保留文档正常滚动；彩色底板移除旋转与横向偏移，统一垂直叠放（含 hover）。
 
 实际 reload 后于 2549x1403 验证 hero/stage 中心均 1267，内层 auto/scroll 溢出容器为零，document.scrollingElement 为 HTML。390x900 复验无内层滚动，scrollWidth/clientWidth 均 375。截图 desktop-fixed-scroll.png 已在动画结束后保存；viewport 已恢复。build、后端语法和 diff 检查通过。旧验证漏掉内层滚动问题，本次补齐；待独立验收。
+
+用户明确要求保留之前视觉样式后，已恢复原三层彩色底板 rotate/translate 及 hover 值，仅保留居中和横向 clip 修复。桌面实测 hero/stage 中心均约 712.3333，旋转矩阵已恢复且 nestedScroll 为零；截图 original-layers-restored.png。构建/语法/diff 通过，viewport 已恢复，待独立验收。
