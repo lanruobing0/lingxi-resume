@@ -1,4 +1,5 @@
 import { deleteWorkspaceAnalysis } from "./workspace-history-delete.js";
+import { loadRuntimeEnv } from "./runtime-env.js";
 import { isPublicKnowledge, isOwnedKnowledge, sanitizePersonalKnowledge } from "./knowledge-access.js";
 import { materialReady, interviewMaterialOptions, resolveMaterialSelection, verifyMaterialSelection } from "./interview-material-selection.js";
 import { recoverInterruptedInterviews } from "./interview-recovery.js";
@@ -48,6 +49,7 @@ import {
 } from "./agentic-rag-service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+loadRuntimeEnv(path.resolve(__dirname, ".."));
 const dataDir = process.env.LINGXI_DATA_DIR ? path.resolve(process.env.LINGXI_DATA_DIR) : path.join(__dirname, "data");
 const port = Number(process.env.PORT || process.env.API_PORT || 8876);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw Object.assign(new Error("PORT must be a valid TCP port"), { code: "PORT_INVALID" });
@@ -1786,7 +1788,7 @@ function resolveMatchReportContext(store, user, application, match) {
 
 async function generateAiGroundedReport(store, userId, context, match, candidates, report) {
   const prompt = buildGroundedReportPrompt({ aiResume: buildAiResumeContext(context.resumeSnapshot), jobDescription: context.jobDescription, parseResult: context.parseResult, match, candidates, baseEvidence: [...allowedBaseEvidence(match)] });
-  const request = { schemaName: "grounded_match_report", schema: groundedReportSchema, system: prompt.system, user: prompt.user, strictJson: true, maxOutputTokens: 8192, requestTimeoutMs: 60000 };
+  const request = { schemaName: "grounded_match_report", schema: prompt.schema, system: prompt.system, user: prompt.user, strictJson: true, maxOutputTokens: 8192, requestTimeoutMs: 60000 };
   const normalize = (ai) => {
     if (!ai.ok) {
       const code = mappedAiFailureCode(ai, { notConfigured: "REPORT_PROVIDER_NOT_CONFIGURED", invalidResponse: "REPORT_INVALID_RESPONSE", unavailable: "REPORT_PROVIDER_UNAVAILABLE" });
@@ -1801,8 +1803,8 @@ async function generateAiGroundedReport(store, userId, context, match, candidate
     const generated = normalize(ai);
     usableFirstReport = generated;
     const checked = validateKnowledgeClaims(store, report, generated.claims);
-    if (!checked.droppedClaimCount) return generated;
-    correctionReason = checked.validationFailures.map(item => `${item.claimId}: ${item.code}`).join("; ");
+    if (!checked.droppedClaimCount && (checked.validKnowledgeClaimCount || !candidates.some(group => group.candidates?.length))) return generated;
+    correctionReason = checked.droppedClaimCount ? checked.validationFailures.map(item => `${item.claimId}: ${item.code}`).join("; ") : "No knowledge claim was provided. Reassess the supplied candidates for relevance to the JD and include a short continuous verbatim supported knowledge claim when relevant. If none is relevant, omit knowledge rather than inventing support.";
   } catch (error) {
     // Only correct a parsed report's structural/evidence failure, never retry an outage or truncation.
     if (!ai.ok || error.code !== "REPORT_INVALID_RESPONSE") throw error;
@@ -1836,7 +1838,7 @@ async function executeGroundedMatchReport(store, user, application, match, optio
     const traces = [];
     for (const plan of buildReportRetrievalPlans(match, context.parseResult, options)) {
       const result = await knowledgeRetrievalService().search(store, plan.request, user.id);
-      traces.push({ dimensionKey: plan.dimensionKey, retrievalRunId: result.run.id, query: result.normalizedQuery, queryHash: result.queryHash, degraded: result.degraded, rerankerFallback: result.rerankerFallback, candidates: result.results });
+      traces.push({ dimensionKey: plan.dimensionKey, retrievalRunId: result.run.id, query: result.normalizedQuery, queryHash: result.queryHash, degraded: result.degraded, degradedReason: result.degradedReason, rerankerFallback: result.rerankerFallback, candidates: result.results });
       report.retrievalRunIds = traces.map((trace) => trace.retrievalRunId);
     }
     report.retrievalRunIds = traces.map((trace) => trace.retrievalRunId);
@@ -1849,6 +1851,7 @@ async function executeGroundedMatchReport(store, user, application, match, optio
     const knowledgeClaimCount = generated.claims.filter((item) => item.claimType === "KNOWLEDGE_CLAIM").length;
     const candidateCount = traces.reduce((sum, trace) => sum + trace.candidates.length, 0);
     const retrievalDegraded = traces.some((trace) => trace.degraded || trace.rerankerFallback);
+    report.retrievalFailureCodes = [...new Set(traces.filter(trace => trace.degraded || trace.rerankerFallback).map(trace => trace.degradedReason || "RERANKER_UNAVAILABLE"))];
     const noKnowledgeEvidence = validated.validKnowledgeClaimCount === 0;
     report.status = retrievalDegraded || validated.droppedClaimCount || noKnowledgeEvidence ? "DEGRADED" : "COMPLETED";
     report.content = { ...generated, claims };
@@ -2345,7 +2348,8 @@ function publicMatchReport(store, report) {
       }),
     })),
   } : null;
-  return { ...report, content };
+  const retrievalFailureCodes = report.retrievalFailureCodes || [...new Set((store.knowledgeRetrievalRuns || []).filter(run => report.retrievalRunIds?.includes(run.id) && run.degraded).map(run => run.failureCode).filter(Boolean))];
+  return { ...report, retrievalFailureCodes, content };
 }
 
 function publicMatchReportSummary(report) {
@@ -3057,8 +3061,9 @@ async function readiness() {
     const persistenceStatus = await persistence.health();
     const vector = new KnowledgeRetrievalService({ env: process.env, persist: async () => {} });
     const vectorStatus = await vector.status();
+    const embeddingReady = Boolean(vectorStatus.embedding?.configured);
     const vectorReady = vectorStatus.vectorStore?.configured && vectorStatus.vectorStore?.healthy;
-    return { ok: Boolean(persistenceStatus.ok && vectorReady), persistence: { ok: persistenceStatus.ok, driver: startupConfig.driver }, vectorStore: { ok: vectorReady, driver: vectorStatus.vectorStore?.driver || null, failureCode: vectorStatus.vectorStore?.failureCode || null }, qdrant: { ok: vectorStatus.qdrant?.healthy || false, failureCode: vectorStatus.qdrant?.failureCode || null } };
+    return { ok: Boolean(persistenceStatus.ok && vectorReady && embeddingReady), persistence: { ok: persistenceStatus.ok, driver: startupConfig.driver }, embedding: { configured: embeddingReady, failureCode: embeddingReady ? null : "EMBEDDING_NOT_CONFIGURED" }, vectorStore: { ok: vectorReady, driver: vectorStatus.vectorStore?.driver || null, failureCode: vectorStatus.vectorStore?.failureCode || null }, qdrant: { ok: vectorStatus.qdrant?.healthy || false, failureCode: vectorStatus.qdrant?.failureCode || null } };
   } catch (error) { return { ok: false, persistence: { ok: false, driver: startupConfig.driver, failureCode: error.code || "PERSISTENCE_UNAVAILABLE" }, vectorStore: { ok: false, failureCode: "READINESS_UNAVAILABLE" }, qdrant: { ok: false, failureCode: "READINESS_UNAVAILABLE" } }; }
 }
 

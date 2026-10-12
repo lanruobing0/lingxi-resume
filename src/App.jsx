@@ -3635,6 +3635,14 @@ function ResumeVersionHistoryPanel({ versions, loading, error, selectedVersion, 
 
 export { AgentRunWorkspace, AgentStepTimeline, AgentFinalResult, ResumeSuggestionWorkspace, SuggestionDiff, ResumeVersionHistoryPanel };
 
+function reportRetrievalDegradationMessage(report) {
+  const codes = report.retrievalFailureCodes || [];
+  if (codes.includes("EMBEDDING_NOT_CONFIGURED")) return "生成时后端未加载向量模型配置，已回退为关键词检索。恢复服务配置后重新生成；无需重新上传知识资料。";
+  if (codes.includes("EMBEDDING_PROVIDER_UNAVAILABLE")) return "生成时向量模型服务不可用，已回退为关键词检索。请恢复服务后重新生成。";
+  if (codes.some(code => /QDRANT|VECTOR_STORE/.test(code))) return "生成时向量数据库不可用，已回退为关键词检索。请恢复向量数据库后重新生成。";
+  return "生成时部分检索或重排序不可用，报告保留已验证内容。请恢复对应服务后重新生成。";
+}
+
 function GroundedMatchReport({ report, match }) {
   const [citation, setCitation] = useState(null);
   const content = report.content;
@@ -3647,7 +3655,7 @@ function GroundedMatchReport({ report, match }) {
       <div><span className={`report-status status-${report.status.toLowerCase()}`}>{reportStatusLabel(report.status)}</span><strong>{Number.isFinite(Number(match?.totalScore)) ? `${match.totalScore} 分` : "--"}</strong><small>基础匹配分</small></div>
       <dl><div><dt>简历版本</dt><dd>v{report.resumeVersion}</dd></div><div><dt>报告版本</dt><dd>v{report.reportVersion}</dd></div><div><dt>岗位 / JD</dt><dd>已锁定</dd></div><div><dt>生成时间</dt><dd>{formatResumeDate(report.completedAt || report.createdAt)}</dd></div><div><dt>证据覆盖</dt><dd>{formatEvidenceCoverage(report.evidenceCoverage)}</dd></div></dl>
     </div>
-    {report.status === "DEGRADED" && <div className="grounded-report-degraded" role="status"><strong>{report.failureCode === "REPORT_NO_KNOWLEDGE_EVIDENCE" ? "本次报告没有可用的知识引用" : report.failureCode === "REPORT_RETRIEVAL_DEGRADED" ? "部分知识检索未完成" : "部分知识引用未通过校验"}</strong><p>{report.failureCode === "REPORT_NO_KNOWLEDGE_EVIDENCE" ? "本次检索没有形成可验证的知识引用，报告保留简历与岗位的已验证分析。" : report.failureCode === "REPORT_RETRIEVAL_DEGRADED" ? "生成这份报告时部分检索不可用，报告仅保留已验证内容。知识库更新后，需重新生成报告。" : "未通过引用校验的知识主张已移除，报告仅保留通过验证的内容。"}</p></div>}
+    {report.status === "DEGRADED" && <div className="grounded-report-degraded" role="status"><strong>{report.failureCode === "REPORT_NO_KNOWLEDGE_EVIDENCE" ? "本次报告没有可用的知识引用" : report.failureCode === "REPORT_RETRIEVAL_DEGRADED" ? "部分知识检索未完成" : "部分知识引用未通过校验"}</strong><p>{report.failureCode === "REPORT_NO_KNOWLEDGE_EVIDENCE" ? "本次检索没有形成可验证的知识引用，报告保留简历与岗位的已验证分析。" : report.failureCode === "REPORT_RETRIEVAL_DEGRADED" ? reportRetrievalDegradationMessage(report) : "未通过引用校验的知识主张已移除，报告仅保留通过验证的内容。"}</p></div>}
     <section className="grounded-summary"><h4>综合结论</h4><p>{content.executiveSummary}</p></section>
     <section className="grounded-dimensions"><h4>六维分析</h4><div>{(content.dimensionReports || []).map((dimension) => {
       const base = baseDimensions.find((item) => item.key === dimension.key);

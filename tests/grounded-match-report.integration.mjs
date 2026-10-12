@@ -72,6 +72,8 @@ function supportScenario(name, claimText, quotes, expectedCode = "", expectedMet
 }
 
 function runClaimSupportAttackTests() {
+  supportScenario("verbatim advice preserves modality", "建议展示项目成果，说明如何提升性能。", ["建议展示项目成果，说明如何提升性能。"], "");
+  supportScenario("verbatim attribution still forbidden", "候选人应该展示自己完成的项目成果。", ["候选人应该展示自己完成的项目成果。"], "UNSUPPORTED_USER_ATTRIBUTION");
   const highOverlapAttributionCases = [
     ["candidate person", "候选人显著提高了系统性能"], ["candidate", "候选者显著提高了系统性能"], ["this candidate", "该候选者显著提高了系统性能"],
     ["resume holder", "简历持有人拥有丰富经验"], ["resume author", "简历作者拥有丰富经验"],
@@ -128,7 +130,7 @@ async function main() {
     }
     if (state.mode === "timeout") { await wait(250); return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: JSON.stringify(reportPayload("valid")) })); }
     if (state.mode === "invalidJson") return res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ output_text: "not-json" }));
-    const request = JSON.parse(body); const prompt = request.input?.[1]?.content?.[0]?.text || request.messages?.[1]?.content || ""; const match = prompt.match(/"retrievalRunId":(\d+)/); const output = reportPayload(state.mode, Number(match?.[1] || 1));
+    const request = JSON.parse(body); const prompt = request.input?.[1]?.content?.[0]?.text || request.messages?.[1]?.content || ""; const match = prompt.match(/"retrievalRunId":(\d+)/); const output = reportPayload(state.mode === "missingKnowledgeOnce" ? prompt.includes("Validation correction") ? "valid" : "noKnowledge" : state.mode, Number(match?.[1] || 1));
     if (state.mode === "correctableBase" && !prompt.includes("Validation correction") || state.mode === "forgedBase") output.claims[0].baseEvidence = ["伪造的个人经验"];
     if (state.mode === "whitespaceBase") output.claims[0].baseEvidence = ["Java\n匹配事实"];
     if (state.mode === "correctableCitation" && !prompt.includes("Validation correction")) output.claims[1].citations[0].retrievalRunId = 999999;
@@ -203,6 +205,9 @@ async function main() {
     assert.ok(result.data.item.reportVersion > 1, "new generation must create a new report version rather than overwrite history");
     assert.equal((await call(token, `/api/match-reports/${reportId}`, undefined, 200)).data.item.content.executiveSummary, "Java 岗位匹配报告。", "failed reports must not overwrite previous successful body");
     state.mode = "noKnowledge"; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201); assert.equal(result.data.item.status, "DEGRADED"); assert.equal(result.data.item.evidenceCoverage.validKnowledgeClaimCount, 0);
+    const omissionRequests = state.providerBodies.length;
+    state.mode = "missingKnowledgeOnce"; result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);
+    assert.equal(result.data.item.status, "COMPLETED"); assert.equal(state.providerBodies.length - omissionRequests, 2);
     let correctionRequests = state.providerBodies.length;
     state.mode = "correctableBase";
     result = await call(token, "/api/job-applications/1/reports", { matchId: 1 }, 201);

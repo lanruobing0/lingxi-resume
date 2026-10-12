@@ -1,4 +1,4 @@
-export const claimSupportVersion = "claim-support-v7";
+export const claimSupportVersion = "claim-support-v8";
 export const minimumSemanticCoverage = 0.55;
 export const minimumCitationClauseCoverage = 0.2;
 
@@ -144,8 +144,12 @@ export function validateClaimSupport({ claimText, citations, localQuotes }) {
   const quoteText = quotes.join("\n");
   if (hasCrossCitationInference(claim, quotes, resultMetrics)) return failure("UNSUPPORTED_CROSS_CITATION_INFERENCE", resultMetrics);
   if (hasUnsupportedTail(claim, quotes, resultMetrics)) return failure("UNSUPPORTED_CLAIM_EXTENSION", resultMetrics);
-  if (negativeLanguage.test(quoteText) !== negativeLanguage.test(claim)) return failure("POLARITY_MISMATCH", resultMetrics);
-  if (adviceLanguage.test(quoteText) && factEscalation.test(claim)) return failure("POLARITY_MISMATCH", resultMetrics);
+  // After source, attribution, entity and extension checks, an entire verbatim
+  // quote preserves its own modality. Words such as 展示成果/提升 inside advice
+  // are not evidence that the advice was changed into an accomplished fact.
+  const completeVerbatimQuote = quotes.some(quote => normalize(quote) === normalize(claim));
+  if (!completeVerbatimQuote && negativeLanguage.test(quoteText) !== negativeLanguage.test(claim)) return failure("POLARITY_MISMATCH", resultMetrics);
+  if (!completeVerbatimQuote && adviceLanguage.test(quoteText) && factEscalation.test(claim)) return failure("POLARITY_MISMATCH", resultMetrics);
   if (!resultMetrics.parallelSupported && resultMetrics.semanticCoverage < minimumSemanticCoverage) return failure("INSUFFICIENT_SEMANTIC_OVERLAP", resultMetrics);
   return { supported: true, claimSupportVersion, supportStatus: "SUPPORTED", supportFailureCode: "", supportMetrics: resultMetrics };
 }

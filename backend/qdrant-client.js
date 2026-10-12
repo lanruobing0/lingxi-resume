@@ -26,7 +26,7 @@ export class QdrantClient {
     if (String(vectorConfig.distance || "").toLowerCase() !== "cosine") throw new QdrantError("COLLECTION_DISTANCE_MISMATCH", "Qdrant collection distance must be Cosine", 409);
   }
   async upsertPoints(name, points) { await this.#request(`/collections/${encodeURIComponent(name)}/points?wait=true`, { method: "PUT", body: { points } }); }
-  async retrievePoints(name, ids) { const response = await this.#request(`/collections/${encodeURIComponent(name)}/points`, { method: "POST", body: { ids, with_payload: false, with_vector: false } }); return response.body?.result || []; }
+  async retrievePoints(name, ids, { withVectors = false } = {}) { const response = await this.#request(`/collections/${encodeURIComponent(name)}/points`, { method: "POST", body: { ids, with_payload: false, with_vector: withVectors } }); return response.body?.result || []; }
   async searchPoints(name, vector, { limit = 10, scoreThreshold = 0, filter } = {}) { const response = await this.#request(`/collections/${encodeURIComponent(name)}/points/search`, { method: "POST", body: { vector, limit, score_threshold: scoreThreshold, filter, with_payload: true, with_vector: false } }); return response.body?.result || []; }
   async deletePoints(name, ids) { if (ids.length) await this.#request(`/collections/${encodeURIComponent(name)}/points/delete?wait=true`, { method: "POST", body: { points: ids } }); }
   async #request(path, { method = "GET", body, allow404 = false } = {}) {

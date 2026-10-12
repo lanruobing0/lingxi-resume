@@ -18,6 +18,7 @@ function validateVectors(vectors, expectedCount, dimension) {
     if (!Array.isArray(vector) || vector.length === 0) throw new KnowledgeVectorIndexError("EMBEDDING_EMPTY_VECTOR", "Embedding provider returned an empty vector", 502);
     if (vector.length !== dimension) throw new KnowledgeVectorIndexError("EMBEDDING_DIMENSION_MISMATCH", "Embedding vector dimension does not match configuration", 502);
     if (!vector.every((value) => typeof value === "number" && Number.isFinite(value))) throw new KnowledgeVectorIndexError("EMBEDDING_INVALID_NUMBER", "Embedding vector contains an invalid number", 502);
+    if (!vector.some(value => value !== 0)) throw new KnowledgeVectorIndexError("EMBEDDING_ZERO_VECTOR", "Embedding vector has no non-zero values", 502);
   });
 }
 
@@ -87,8 +88,9 @@ export class KnowledgeVectorIndexService {
         if (runtime.driver === "upstash") await vectorStore.upsertData(runtime.collectionName, batch);
         else await vectorStore.upsertPoints(runtime.collectionName, batch);
       }
-      const found = await vectorStore.retrievePoints(runtime.collectionName, newPoints.map((point) => point.id));
+      const found = await vectorStore.retrievePoints(runtime.collectionName, newPoints.map((point) => point.id), { withVectors: runtime.driver === "qdrant" });
       if (found.length !== newPoints.length) throw new KnowledgeVectorIndexError("VECTOR_WRITE_VERIFICATION_FAILED", "Vector store did not confirm every written point", 502);
+      if (runtime.driver === "qdrant") validateVectors(found.map(point => point.vector), newPoints.length, runtime.profile.dimension);
       run.upsertedCount = newPoints.length; run.status = "SWITCHING";
       const oldRecords = store.knowledgeVectorRecords.filter((record) => record.documentId === document.id
         && record.pointId

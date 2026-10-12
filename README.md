@@ -28,6 +28,8 @@ corepack pnpm dev
 
 前端为 `http://127.0.0.1:5173/`，API 默认为 `http://127.0.0.1:8876/`，Vite 的 `/api` 代理默认指向同一端口。复制 `.env.example` 为 `.env` 后按需设置环境变量；`.env` 不应提交。
 
+后端直接启动也会按 `.env` → `.env.local` 加载配置，显式进程环境变量优先。指定 `LINGXI_DATA_DIR` 的隔离环境默认不读取本地凭据；需要读取时显式设置 `LINGXI_LOAD_LOCAL_ENV=true`，设置为 `false` 可禁用文件加载。
+
 ## 配置
 
 `STORAGE_DRIVER=json` 是默认值，使用 `LINGXI_DATA_DIR` 可指定本地测试/开发数据目录。`STORAGE_DRIVER=mysql` 时必须设置：
