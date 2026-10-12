@@ -4385,7 +4385,7 @@ textarea {
   font-weight: 750;
 }
 
-.danger-text-button:hover { background: #fff1ef; }
+.danger-text-button:hover:not(:disabled) { background: #fff1ef; }
 
 .knowledge-meta {
   margin: 18px 0;
@@ -6126,3 +6126,27 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 .interview-material-history summary { cursor:pointer; font-weight:600; }
 .interview-material-history p,.interview-material-history li { color:var(--muted); line-height:1.7; overflow-wrap:anywhere; }
 @media(max-width:700px) { .interview-material-picker { padding:16px; } .interview-material-options { grid-template-columns:1fr; gap:0; } .interview-material-modes { flex-direction:column; } }
+
+/* Shared delete actions: quiet at rest, danger feedback on interaction. */
+:is(.resume-library-card-actions button.danger, .experience-entry-actions button.danger,
+  .analysis-history-row > button.analysis-history-delete, .resume-version-row .version-delete,
+  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete,
+  button.danger-text-button, button.danger-action, button.module-remove, .custom-profile-field button) {
+  color: var(--muted);
+  background: transparent;
+}
+:is(.resume-library-card-actions button.danger, .experience-entry-actions button.danger,
+  .analysis-history-row > button.analysis-history-delete, .resume-version-row .version-delete,
+  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete,
+  button.danger-text-button, button.danger-action, button.module-remove, .custom-profile-field button):is(:hover, :focus-visible):not(:disabled) {
+  color: #b42318;
+  background: #fff1f0;
+  transform: none;
+}
+:is(.resume-library-card-actions button.danger, .experience-entry-actions button.danger,
+  .analysis-history-row > button.analysis-history-delete, .resume-version-row .version-delete,
+  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete,
+  button.danger-text-button, button.danger-action, button.module-remove, .custom-profile-field button):disabled {
+  color: var(--muted);
+  background: transparent;
+}
