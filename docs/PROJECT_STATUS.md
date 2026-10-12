@@ -1,5 +1,7 @@
 # 项目状态
 
+简历版本历史已增加确认删除与 owned DELETE；删除后列表/详情和新任务不可选择，当前简历及已有分析的不可变快照保留。全量测试、构建与隔离桌面/手机核对通过，正式后端已加载。交接 `docs/tasks/RESUME_VERSION_DELETE.md`，待 Claude 独立验收。
+
 报告历史版本和岗位分析任务已增加确认删除、owned DELETE、关联清理/墓碑与忙碌保护；删当前项后切换，已接受简历修改保留。全量测试、构建和隔离桌面/手机验证通过，正式后端加载，未删除正式数据。交接 `docs/tasks/ANALYSIS_HISTORY_DELETE.md`，待独立验收。
 
 Qdrant 6333 被 Windows 保留端口段占用，已统一配置 16333、恢复容器及 /ready 200；详细验证与限制见 `docs/tasks/QDRANT_PORT_RECOVERY.md`，待独立验收。

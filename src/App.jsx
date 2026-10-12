@@ -2262,6 +2262,9 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
   const [selectedVersionSnapshot, setSelectedVersionSnapshot] = useState(null);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
   const [versionHistoryError, setVersionHistoryError] = useState(null);
+  const [versionDeleteCandidate, setVersionDeleteCandidate] = useState(null);
+  const [versionDeleting, setVersionDeleting] = useState(false);
+  const [versionDeleteError, setVersionDeleteError] = useState("");
   const [agentRuns, setAgentRuns] = useState([]);
   const [selectedAgentRun, setSelectedAgentRun] = useState(null);
   const [agentSteps, setAgentSteps] = useState([]);
@@ -2341,6 +2344,29 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
       setVersionHistoryError(`读取版本内容失败：${error.message}`);
     }
   }, []);
+
+  const deleteResumeVersion = async () => {
+    if (!versionDeleteCandidate || versionDeleting) return;
+    const item = versionDeleteCandidate;
+    setVersionDeleting(true); setVersionDeleteError("");
+    try {
+      await apiRequest(`/api/resumes/${item.resumeId}/versions/${item.id}`, { method: "DELETE" });
+      const remaining = resumeVersionHistory.filter(version => version.id !== item.id);
+      setResumeVersionHistory(remaining);
+      if (selectedVersionSnapshot?.id === item.id) {
+        setSelectedVersionSnapshot(null);
+        if (remaining[0]) await openResumeVersionSnapshot(item.resumeId, remaining[0].id);
+      }
+      if (String(selectedResumeId) === String(item.resumeId)) {
+        const selectable = resumeVersions.filter(version => version.id !== item.id);
+        setResumeVersions(selectable);
+        if (String(selectedResumeVersionId) === String(item.id)) setSelectedResumeVersionId(firstAnalysisReadyVersionId(selectable));
+      }
+      setVersionDeleteCandidate(null);
+      notify("简历版本历史已删除");
+    } catch (error) { setVersionDeleteError(`删除失败：${error.message}`); }
+    finally { setVersionDeleting(false); }
+  };
 
   const openSuggestionRun = useCallback(async (runId) => {
     if (!runId) return;
@@ -3187,7 +3213,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           runs={suggestionRuns}
           selectedRun={selectedSuggestionRun}
           loading={suggestionLoading}
-          working={suggestionWorking || historyDeleting}
+          working={suggestionWorking || historyDeleting || versionDeleting}
           error={suggestionError}
           success={suggestionSuccess}
           versions={resumeVersionHistory}
@@ -3200,6 +3226,8 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           onDecision={decideSuggestion}
           onRefresh={() => selectedReport?.id && loadSuggestionRuns(selectedReport.id)}
           onSelectVersion={openResumeVersionSnapshot}
+          versionDeleting={versionDeleting || suggestionWorking || versionHistoryLoading}
+          onDeleteVersion={(item) => { setVersionDeleteError(""); setVersionDeleteCandidate(item); }}
         />
         }
         {!isInterviewPage && workspaceTab === "agent" && <AgentRunWorkspace
@@ -3239,6 +3267,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
         />
         </div>
         {analysisDeleteError && <p className="job-error" role="alert">{analysisDeleteError}</p>}
+        <ConfirmDialog open={Boolean(versionDeleteCandidate)} title="删除简历版本历史" description={`删除 v${versionDeleteCandidate?.resumeVersion || versionDeleteCandidate?.version} 的历史记录？删除后无法从历史列表查看或用于新分析任务。当前简历内容不变，已有报告和面试引用的快照会保留。`} error={versionDeleteError} confirmLabel="删除版本" isWorking={versionDeleting} onClose={() => !versionDeleting && setVersionDeleteCandidate(null)} onConfirm={deleteResumeVersion} />
         <ConfirmDialog open={Boolean(analysisDeleteCandidate)} error={analysisDeleteError} title={analysisDeleteCandidate?.kind === "report" ? "删除报告版本" : "删除分析任务"} description={analysisDeleteCandidate?.kind === "report" ? `删除报告 v${analysisDeleteCandidate?.item.reportVersion}？这份报告及关联的简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。已接受的简历修改、简历版本和基础匹配会保留。` : `删除分析任务 #${analysisDeleteCandidate?.item.id}？该任务下的基础匹配、报告版本、简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。岗位 JD、简历和已保存的简历版本会保留。`} confirmLabel="删除记录" isWorking={analysisDeleting} onClose={() => !analysisDeleting && setAnalysisDeleteCandidate(null)} onConfirm={deleteAnalysisHistory} />
         <ConfirmDialog
           open={Boolean(historyDeleteCandidate)}
@@ -3310,7 +3339,7 @@ function formatEvidenceCoverage(coverage) {
   return `${Math.round(Number(coverage.ratio) * 100)}%`;
 }
 
-function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, onGenerate, onSelectRun, onDeleteRun, onDecision, onRefresh, onSelectVersion }) {
+function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, versionDeleting, onDeleteVersion, onGenerate, onSelectRun, onDeleteRun, onDecision, onRefresh, onSelectVersion }) {
   const [diffSuggestionId, setDiffSuggestionId] = useState(null);
   const canGenerate = ["COMPLETED", "DEGRADED"].includes(report?.status);
 
@@ -3364,7 +3393,7 @@ function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working
         })}</div>
       </div>}
 
-      <ResumeVersionHistoryPanel versions={versions} loading={versionLoading} error={versionError} selectedVersion={selectedVersion} onSelect={onSelectVersion} />
+      <ResumeVersionHistoryPanel versions={versions} loading={versionLoading} error={versionError} selectedVersion={selectedVersion} onSelect={onSelectVersion} deleting={versionDeleting} onDelete={onDeleteVersion} />
     </section>
   );
 }
@@ -3581,8 +3610,8 @@ function AgentFinalResult({ result }) {
   return <section className="agent-final-result" aria-labelledby="agent-final-title"><div><h4 id="agent-final-title">最终计划与建议</h4><p>四类内容保持事实边界，不会写回简历或自动执行。</p></div><div className="agent-result-grid">{Object.entries(agentResultTypes).map(([type, meta]) => <section className={`agent-result-card result-${type.toLowerCase()}`} key={type}><header><strong>{meta.label}</strong><span>{meta.note}</span></header>{(result?.[type] || []).length ? <ul>{result[type].map((item, index) => <li key={`${type}-${index}`}><p>{item.text}</p><small>已绑定 {item.sourceRefs?.length || 0} 条后端验证来源</small></li>)}</ul> : <p className="agent-result-empty">本类暂无通过校验的内容。</p>}</section>)}</div></section>;
 }
 
-function ResumeVersionHistoryPanel({ versions, loading, error, selectedVersion, onSelect }) {
-  return <section className="resume-version-history" aria-labelledby="resume-version-history-title"><div><h4 id="resume-version-history-title">简历版本历史（只读）</h4><p>查看由接受建议生成的版本及原始快照；此处不能回写或覆盖内容。</p></div>{loading && <ResultSkeleton lines={2} />}{error && <p className="job-error">{error}</p>}{!loading && !error && !versions.length && <p className="grounded-empty-claims">暂无可读取的版本历史。</p>}{!loading && versions.length > 0 && <div className="resume-version-list">{versions.map((version) => <button key={version.id} className={selectedVersion?.id === version.id ? "active" : ""} onClick={() => onSelect(version.resumeId, version.id)}><span><b>v{version.resumeVersion || version.version}</b><small>{formatResumeDate(version.createdAt)}</small></span><em>{versionSourceLabel(version)}</em></button>)}</div>}{selectedVersion?.snapshot && <div className="resume-version-snapshot"><div><strong>v{selectedVersion.resumeVersion || selectedVersion.version} 内容快照</strong><small>{selectedVersion.summary || "历史版本"}</small></div><pre>{JSON.stringify(selectedVersion.snapshot, null, 2)}</pre></div>}</section>;
+function ResumeVersionHistoryPanel({ versions, loading, error, selectedVersion, onSelect, deleting = false, onDelete }) {
+  return <section className="resume-version-history" aria-labelledby="resume-version-history-title"><div><h4 id="resume-version-history-title">简历版本历史</h4><p>版本内容只读，可查看或删除历史记录；删除不会改变当前简历。</p></div>{loading && <ResultSkeleton lines={2} />}{error && <p className="job-error">{error}</p>}{!loading && !error && !versions.length && <p className="grounded-empty-claims">暂无可读取的版本历史。</p>}{!loading && versions.length > 0 && <div className="resume-version-list">{versions.map((version) => <div className="resume-version-row" key={version.id}><button className={`version-select ${selectedVersion?.id === version.id ? "active" : ""}`} disabled={deleting} aria-pressed={selectedVersion?.id === version.id} onClick={() => onSelect(version.resumeId, version.id)}><span><b>v{version.resumeVersion || version.version}</b><small>{formatResumeDate(version.createdAt)}</small></span><em>{versionSourceLabel(version)}</em></button>{onDelete && <button className="version-delete" aria-label={`删除简历版本 v${version.resumeVersion || version.version}`} disabled={deleting} onClick={() => onDelete(version)}><Trash2 size={14} />删除</button>}</div>)}</div>}{selectedVersion?.snapshot && <div className="resume-version-snapshot"><div><strong>v{selectedVersion.resumeVersion || selectedVersion.version} 内容快照</strong><small>{selectedVersion.summary || "历史版本"}</small></div><pre>{JSON.stringify(selectedVersion.snapshot, null, 2)}</pre></div>}</section>;
 }
 
 export { AgentRunWorkspace, AgentStepTimeline, AgentFinalResult, ResumeSuggestionWorkspace, SuggestionDiff, ResumeVersionHistoryPanel };

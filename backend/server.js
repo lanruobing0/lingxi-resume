@@ -3413,7 +3413,7 @@ async function handleApiRequest(req, res) {
     if (!jobDescription) return send(res, 404, { message: "岗位 JD 不存在" });
     const resumeVersionId = parseOptionalPositiveInteger(body.resumeVersionId, "resumeVersionId");
     if (!resumeVersionId) return send(res, 400, { message: "请选择明确的简历版本后再创建求职分析任务" });
-    const resumeHistory = store.resumeHistories.find((item) => item.id === resumeVersionId && item.resumeId === resume.id && item.snapshot);
+    const resumeHistory = store.resumeHistories.find((item) => item.id === resumeVersionId && item.resumeId === resume.id && !item.deletedAt && item.snapshot);
     if (!isAnalysisReadyResumeHistory(resumeHistory)) {
       return send(res, 409, { message: "所选简历版本快照不完整或内容哈希不一致" });
     }
@@ -3897,7 +3897,7 @@ async function handleApiRequest(req, res) {
     const user = requireUser(store, req);
     const resume = getOwnedResume(store, user, historyMatch[1]);
     if (!resume) return send(res, 404, { message: "简历不存在" });
-    return send(res, 200, { items: store.resumeHistories.filter((item) => item.resumeId === resume.id) });
+    return send(res, 200, { items: store.resumeHistories.filter((item) => item.resumeId === resume.id && !item.deletedAt) });
   }
 
   const versionsMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/versions$/);
@@ -3906,7 +3906,7 @@ async function handleApiRequest(req, res) {
     const resume = getOwnedResume(store, user, versionsMatch[1]);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     const items = store.resumeHistories
-      .filter((item) => item.resumeId === resume.id)
+      .filter((item) => item.resumeId === resume.id && !item.deletedAt)
       .map(({ snapshot, ...item }) => {
         const sourceSuggestion = store.resumeSuggestions.find((suggestion) => suggestion.userId === user.id && suggestion.appliedResumeVersionId === item.id && suggestion.status === "ACCEPTED");
         return {
@@ -3920,13 +3920,20 @@ async function handleApiRequest(req, res) {
   }
 
   const versionMatch = pathname.match(/^\/api\/resumes\/([^/]+)\/versions\/(\d+)$/);
-  if (method === "GET" && versionMatch) {
+  if (["GET", "DELETE"].includes(method) && versionMatch) {
     const user = requireUser(store, req);
     const resume = getOwnedResume(store, user, versionMatch[1]);
     if (!resume) return send(res, 404, { message: "简历不存在" });
     const versionId = Number(versionMatch[2]);
-    const item = store.resumeHistories.find((history) => history.id === versionId && history.resumeId === resume.id);
+    const item = store.resumeHistories.find((history) => history.id === versionId && history.resumeId === resume.id && !history.deletedAt);
     if (!item) return send(res, 404, { message: "简历版本不存在" });
+    if (method === "DELETE") {
+      // Existing analyses retain their immutable input and provenance. New tasks
+      // and history endpoints cannot select this deleted version.
+      item.deletedAt = now();
+      await writeStore(store);
+      return send(res, 200, { message: "简历版本历史已删除" });
+    }
     return send(res, 200, { item });
   }
 

@@ -1,5 +1,7 @@
 # 项目上下文索引
 
+- 最新任务：`docs/tasks/RESUME_VERSION_DELETE.md`，简历版本历史确认删除，完成待独立验收。
+
 - 最新任务：`docs/tasks/ANALYSIS_HISTORY_DELETE.md`，报告版本与分析任务删除，完成待独立验收。
 - 最新运行修复：`docs/tasks/QDRANT_PORT_RECOVERY.md`，Windows 保留端口导致 Qdrant 无法启动，已切换 16333 并恢复就绪。
 

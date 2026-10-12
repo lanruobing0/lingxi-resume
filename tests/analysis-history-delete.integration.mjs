@@ -18,7 +18,7 @@ const fixture = () => ({
   interviewSessions: [{ id: 1, userId: 1, jobApplicationId: 1, matchReportId: 1, status: 'COMPLETED' }],
   interviewSessionQuestions: [{ id: 1, userId: 1, sessionId: 1 }], interviewAnswers: [{ id: 1, userId: 1, sessionId: 1 }], answerFeedbacks: [{ id: 1, userId: 1, sessionId: 1, status: 'COMPLETED' }],
   agentRuns: [{ id: 1, userId: 1, jobApplicationId: 1, matchReportId: 1, status: 'COMPLETED' }], agentSteps: [{ id: 1, userId: 1, agentRunId: 1, status: 'COMPLETED' }],
-  resumes: [{ id: 1, userId: 1, title: 'preserved' }], resumeHistories: [{ id: 1, resumeId: 1, resumeVersion: 1 }], jobDescriptions: [{ id: 1, userId: 1 }], knowledgeRetrievalRuns: [{ id: 1 }], jobs: [],
+  resumes: [{ id: 1, userId: 1, title: 'preserved', version: 2 }, { id: 2, userId: 2 }], resumeHistories: [{ id: 1, resumeId: 1, resumeVersion: 1, snapshot: { selfEvaluation: 'locked original' }, contentHash: 'original-hash' }, { id: 2, resumeId: 1, resumeVersion: 2 }, { id: 3, resumeId: 2, resumeVersion: 1 }], jobDescriptions: [{ id: 1, userId: 1 }], knowledgeRetrievalRuns: [{ id: 1 }], jobs: [],
 });
 for (const job of [
   { type: 'GROUNDED_MATCH_REPORT', resourceId: 1 },
@@ -49,6 +49,23 @@ try {
   let ready = false;
   for (let i = 0; i < 80; i++) { try { await request('/health'); ready = true; break; } catch { await new Promise(resolve => setTimeout(resolve, 50)); } }
   assert.ok(ready, output);
+  await request('/api/resumes/2/versions/3', 'DELETE', 404);
+  await request('/api/resumes/1/versions/3', 'DELETE', 404);
+  await request('/api/resumes/1/versions/1', 'DELETE');
+  await request('/api/resumes/1/versions/1', 'GET', 404);
+  await request('/api/resumes/1/versions/1', 'DELETE', 404);
+  assert.deepEqual((await request('/api/resumes/1/versions')).items.map(item => item.id), [2]);
+  assert.deepEqual((await request('/api/resumes/1/history')).items.map(item => item.id), [2]);
+  let versionStore = JSON.parse(await readFile(file, 'utf8'));
+  assert.ok(versionStore.resumeHistories[0].deletedAt);
+  assert.equal(versionStore.resumeHistories[0].snapshot.selfEvaluation, 'locked original');
+  assert.equal(versionStore.resumeHistories[0].contentHash, 'original-hash');
+  assert.equal(versionStore.resumes[0].version, 2);
+  const newTask = await fetch(`http://127.0.0.1:${port}/api/job-applications`, { method: 'POST', headers: { Cookie: 'lingxi_session=history-test-token', 'Content-Type': 'application/json' }, body: JSON.stringify({ resumeId: 1, resumeVersionId: 1, jobDescriptionId: 1 }) });
+  assert.equal(newTask.status, 409, 'deleted history cannot bind a new task');
+  await request('/api/resumes/1/versions/2', 'DELETE');
+  assert.deepEqual((await request('/api/resumes/1/versions')).items, []);
+  await request('/api/resumes/1', 'GET');
   await request('/api/match-reports/2', 'DELETE', 404);
   await request('/api/job-applications/2', 'DELETE', 404);
   await request('/api/match-reports/1', 'DELETE');
@@ -73,7 +90,7 @@ try {
   assert.deepEqual((await request('/api/job-applications')).items.map(item => item.id), [3]);
   saved = JSON.parse(await readFile(file, 'utf8'));
   assert.ok(saved.jobApplications.find(item => item.id === 1).deletedAt);
-  assert.equal(saved.resumes[0].title, 'preserved'); assert.equal(saved.resumeHistories.length, 1); assert.equal(saved.jobDescriptions.length, 1); assert.equal(saved.knowledgeRetrievalRuns.length, 1);
+  assert.equal(saved.resumes[0].title, 'preserved'); assert.equal(saved.resumeHistories.length, 3); assert.equal(saved.jobDescriptions.length, 1); assert.equal(saved.knowledgeRetrievalRuns.length, 1);
   console.log('Analysis history deletion passed: ownership, cascade, current lists, tombstones, accepted provenance and busy guards.');
 } finally {
   backend.kill(); await new Promise(resolve => backend.once('exit', resolve)); await rm(dir, { recursive: true, force: true });
