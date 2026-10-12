@@ -12,7 +12,7 @@ const fixture = () => ({
   sessions: [{ id: 1, userId: 1, tokenHash: createHash('sha256').update('history-test-token').digest('base64url'), expiresAt: new Date(Date.now() + 600000).toISOString() }],
   jobApplications: [{ id: 1, userId: 1, jobDescriptionId: 1 }, { id: 2, userId: 2 }, { id: 3, userId: 1 }],
   matchReports: [{ id: 1, userId: 1, jobApplicationId: 1, resumeJobMatchId: 1, reportVersion: 1, status: 'FAILED' }, { id: 2, userId: 2, jobApplicationId: 2, status: 'FAILED' }, { id: 3, userId: 1, jobApplicationId: 1, resumeJobMatchId: 1, reportVersion: 2, status: 'FAILED' }],
-  resumeJobMatches: [{ id: 1, userId: 1, jobApplicationId: 1, status: 'COMPLETED' }],
+  resumeJobMatches: [{ id: 1, userId: 1, jobApplicationId: 1, status: 'COMPLETED' }, { id: 2, userId: 2, jobApplicationId: 2, status: 'FAILED' }],
   suggestionRuns: [{ id: 1, userId: 1, jobApplicationId: 1, matchReportId: 1, status: 'COMPLETED' }],
   resumeSuggestions: [{ id: 1, userId: 1, suggestionRunId: 1, status: 'ACCEPTED', after: 'accepted' }, { id: 2, userId: 1, suggestionRunId: 1, status: 'PENDING' }],
   interviewSessions: [{ id: 1, userId: 1, jobApplicationId: 1, matchReportId: 1, status: 'COMPLETED' }],
@@ -34,6 +34,24 @@ for (const job of [
 }
 const locked = fixture(); assert.equal(deleteWorkspaceAnalysis(locked, 1, { reportId: 1 }, new Set([1])), false);
 const running = fixture(); running.answerFeedbacks[0].status = 'RUNNING'; assert.equal(deleteWorkspaceAnalysis(running, 1, { reportId: 1 }), false);
+for (const status of ['PENDING', 'RUNNING', 'ANALYZING']) {
+  const store = fixture(); store.resumeJobMatches[0].status = status;
+  const before = JSON.stringify(store);
+  assert.equal(deleteWorkspaceAnalysis(store, 1, { matchId: 1 }), false);
+  assert.equal(JSON.stringify(store), before);
+}
+const queuedMatch = fixture(); queuedMatch.jobs.push({ userId: 1, type: 'GROUNDED_MATCH_REPORT', resourceId: 1, payload: { matchId: 1 }, status: 'PENDING' });
+assert.equal(deleteWorkspaceAnalysis(queuedMatch, 1, { matchId: 1 }), false);
+const matchLocked = fixture(); assert.equal(deleteWorkspaceAnalysis(matchLocked, 1, { matchId: 1 }, new Set([1])), false);
+const cascadeMatch = fixture(); assert.equal(deleteWorkspaceAnalysis(cascadeMatch, 1, { matchId: 1 }), true);
+assert.ok(cascadeMatch.matchReports.filter(item => item.userId === 1).every(item => item.deletedAt));
+assert.ok(cascadeMatch.resumeJobMatches[0].deletedAt);
+assert.equal(cascadeMatch.resumeJobMatches[1].status, 'FAILED');
+assert.equal(cascadeMatch.jobApplications[0].deletedAt, undefined);
+assert.equal(cascadeMatch.resumeSuggestions[0].status, 'ACCEPTED');
+assert.ok(cascadeMatch.suggestionRuns[0].deletedAt);
+assert.ok(cascadeMatch.interviewSessions[0].deletedAt);
+assert.ok(cascadeMatch.agentRuns[0].deletedAt);
 
 const dir = await mkdtemp(path.join(tmpdir(), 'lingxi-analysis-delete-'));
 const file = path.join(dir, 'store.json'); await writeFile(file, JSON.stringify(fixture()));
@@ -68,6 +86,7 @@ try {
   await request('/api/resumes/1', 'GET');
   await request('/api/match-reports/2', 'DELETE', 404);
   await request('/api/job-applications/2', 'DELETE', 404);
+  await request('/api/resume-job-matches/2', 'DELETE', 404);
   await request('/api/match-reports/1', 'DELETE');
   await request('/api/match-reports/1', 'GET', 404);
   await request('/api/match-reports/1', 'DELETE', 404);
@@ -82,6 +101,12 @@ try {
   assert.ok(saved.resumeSuggestions.find(item => item.id === 2).deletedAt);
   assert.equal(saved.matchReports.find(item => item.id === 1).reportVersion, 1);
   assert.equal(saved.matchReports.find(item => item.id === 2).status, 'FAILED');
+  await request('/api/resume-job-matches/1', 'DELETE');
+  await request('/api/resume-job-matches/1', 'GET', 404);
+  await request('/api/resume-job-matches/1', 'DELETE', 404);
+  await request('/api/resume-job-matches/1/retry', 'POST', 404);
+  assert.deepEqual((await request('/api/job-applications/1/matches')).items, []);
+  assert.deepEqual((await request('/api/job-applications/1/reports')).items, []);
   await request('/api/job-applications/1', 'DELETE');
   await request('/api/job-applications/1/reports', 'GET', 404);
   await request('/api/job-applications/1/matches', 'GET', 404);

@@ -1,7 +1,7 @@
 // Preserve identifiers and accepted-edit provenance while removing user-visible history.
-export function deleteWorkspaceAnalysis(store, userId, { reportId, applicationId }, decisionLocks = new Set()) {
+export function deleteWorkspaceAnalysis(store, userId, { reportId, applicationId, matchId }, decisionLocks = new Set()) {
   const owned = item => item.userId === userId;
-  const reports = store.matchReports.filter(item => owned(item) && !item.deletedAt && (applicationId ? item.jobApplicationId === applicationId : item.id === reportId));
+  const reports = store.matchReports.filter(item => owned(item) && !item.deletedAt && (applicationId ? item.jobApplicationId === applicationId : matchId ? item.resumeJobMatchId === matchId : item.id === reportId));
   const reportIds = new Set(reports.map(item => item.id));
   const related = item => owned(item) && !item.deletedAt && (applicationId ? item.jobApplicationId === applicationId : reportIds.has(item.matchReportId));
   const runs = store.suggestionRuns.filter(related);
@@ -10,13 +10,13 @@ export function deleteWorkspaceAnalysis(store, userId, { reportId, applicationId
   const sessionIds = new Set(sessions.map(item => item.id));
   const agents = store.agentRuns.filter(related);
   const agentIds = new Set(agents.map(item => item.id));
-  const busy = item => ["PENDING", "RUNNING"].includes(item.status);
+  const busy = item => ["PENDING", "RUNNING", "ANALYZING"].includes(item.status);
   const jobsBusy = (store.jobs || []).some(job => owned(job) && busy(job) && (
     (job.type === "RESUME_SUGGESTIONS" && reportIds.has(job.resourceId)) ||
-    (job.type === "GROUNDED_MATCH_REPORT" && applicationId && job.resourceId === applicationId) ||
+    (job.type === "GROUNDED_MATCH_REPORT" && (applicationId ? job.resourceId === applicationId : matchId && job.payload?.matchId === matchId)) ||
     (["AGENT_RUN", "MOCK_INTERVIEW_GENERATION"].includes(job.type) && (applicationId ? job.resourceId === applicationId : reportIds.has(job.payload?.matchReportId)))
   ));
-  if (jobsBusy || [...reports, ...runs, ...sessions, ...agents].some(busy) ||
+  if (jobsBusy || (matchId && store.resumeJobMatches.some(item => owned(item) && item.id === matchId && busy(item))) || [...reports, ...runs, ...sessions, ...agents].some(busy) ||
     (applicationId && store.resumeJobMatches.some(item => owned(item) && item.jobApplicationId === applicationId && busy(item))) ||
     store.agentSteps.some(item => agentIds.has(item.agentRunId) && busy(item)) ||
     store.answerFeedbacks.some(item => sessionIds.has(item.sessionId) && busy(item)) ||
@@ -35,5 +35,6 @@ export function deleteWorkspaceAnalysis(store, userId, { reportId, applicationId
     store.jobApplications = store.jobApplications.map(item => owned(item) && item.id === applicationId ? tombstone(item) : item);
     store.resumeJobMatches = store.resumeJobMatches.map(item => owned(item) && item.jobApplicationId === applicationId ? tombstone(item) : item);
   }
+  if (matchId) store.resumeJobMatches = store.resumeJobMatches.map(item => owned(item) && item.id === matchId ? tombstone(item) : item);
   return true;
 }

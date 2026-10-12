@@ -1,5 +1,7 @@
 # 项目上下文索引
 
+- 最新任务：`docs/tasks/MATCH_HISTORY_DELETE.md`，基础匹配历史紧凑重试与删除，完成待独立验收。
+
 - 最新任务：`docs/tasks/PRIORITY_SUGGESTIONS_VISIBLE.md`，优先修改建议默认全部显示，待独立验收。
 
 - 最新任务：`docs/tasks/MATCH_OUTPUT_LIMIT.md`，基础匹配再次输出截断，真实脱敏复验通过，待独立验收。

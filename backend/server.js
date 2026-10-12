@@ -3455,7 +3455,7 @@ async function handleApiRequest(req, res) {
     const application = getOwnedJobApplication(store, user, applicationMatchesMatch[1]);
     if (!application) return send(res, 404, { message: "求职分析任务不存在" });
     const items = store.resumeJobMatches
-      .filter((item) => item.userId === user.id && item.jobApplicationId === application.id)
+      .filter((item) => item.userId === user.id && item.jobApplicationId === application.id && !item.deletedAt)
       .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
       .map(({ report, ...item }) => ({ ...item, hasReport: Boolean(report) }));
     return send(res, 200, { items });
@@ -3805,6 +3805,14 @@ async function handleApiRequest(req, res) {
   }
 
   const resumeJobMatchDetail = pathname.match(/^\/api\/resume-job-matches\/(\d+)$/);
+  if (resumeJobMatchDetail && method === "DELETE") {
+    const user = requireUser(store, req);
+    const item = getOwnedResumeJobMatch(store, user, resumeJobMatchDetail[1]);
+    if (!item) return send(res, 404, { message: "岗位匹配报告不存在" });
+    if (!deleteWorkspaceAnalysis(store, user.id, { matchId: item.id }, suggestionDecisionLocks)) return send(res, 409, { message: "匹配或关联任务正在处理，请完成后再删除", failureCode: "HISTORY_BUSY" });
+    await writeStore(store);
+    return send(res, 200, { deletedId: item.id });
+  }
   if (resumeJobMatchDetail && method === "GET") {
     const user = requireUser(store, req);
     const item = getOwnedResumeJobMatch(store, user, resumeJobMatchDetail[1]);

@@ -5451,8 +5451,8 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 .job-match-history { display: grid; gap: 5px; padding-top: 4px; border-top: 1px solid var(--line); }
 .job-match-history > strong { margin-top: 10px; font-size: 13px; }
 .job-match-history > div { display: flex; align-items: center; gap: 8px; }
-.job-match-history button { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); text-align: left; }
-.job-match-history button:hover, .job-match-history button.active { border-color: var(--line); background: var(--canvas); color: var(--ink); }
+.job-match-history .match-history-select { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); text-align: left; }
+.job-match-history .match-history-select:hover, .job-match-history .match-history-select.active { border-color: var(--line); background: var(--canvas); color: var(--ink); }
 .job-match-history small { font-size: 12px; }
 .job-match-history .link-button { min-height: 34px; padding: 0 8px; }
 
@@ -6130,14 +6130,14 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 /* Shared delete actions: quiet at rest, danger feedback on interaction. */
 :is(.resume-library-card-actions button.danger, .experience-entry-actions button.danger,
   .analysis-history-row > button.analysis-history-delete, .resume-version-row .version-delete,
-  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete,
+  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete, .match-history-actions .history-delete,
   button.danger-text-button, button.danger-action, button.module-remove, .custom-profile-field button) {
   color: var(--muted);
   background: transparent;
 }
 :is(.resume-library-card-actions button.danger, .experience-entry-actions button.danger,
   .analysis-history-row > button.analysis-history-delete, .resume-version-row .version-delete,
-  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete,
+  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete, .match-history-actions .history-delete,
   button.danger-text-button, button.danger-action, button.module-remove, .custom-profile-field button):is(:hover, :focus-visible):not(:disabled) {
   color: #b42318;
   background: #fff1f0;
@@ -6145,8 +6145,16 @@ textarea:focus-visible { box-shadow: 0 0 0 4px rgb(52 120 246 / 0.1); }
 }
 :is(.resume-library-card-actions button.danger, .experience-entry-actions button.danger,
   .analysis-history-row > button.analysis-history-delete, .resume-version-row .version-delete,
-  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete,
+  .workspace-history-row .history-delete, .interview-record-row .history-delete, .job-list-row .history-delete, .match-history-actions .history-delete,
   button.danger-text-button, button.danger-action, button.module-remove, .custom-profile-field button):disabled {
   color: var(--muted);
   background: transparent;
 }
+
+.match-history-row { min-width: 0; }
+.match-history-row .match-history-select { min-width: 0; }
+.match-history-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.match-history-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: 0 0 auto; min-height: 34px; padding: 7px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.match-history-actions .match-history-retry:hover:not(:disabled), .match-history-actions .match-history-retry:focus-visible:not(:disabled) { color: var(--blue); background: var(--blue-soft); }
+.match-history-actions button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 600px) { .match-history-select { flex-wrap: wrap; gap: 4px; } }

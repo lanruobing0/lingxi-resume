@@ -2792,9 +2792,28 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
     const { kind, item } = analysisDeleteCandidate;
     setAnalysisDeleting(true); setAnalysisDeleteError("");
     try {
-      await apiRequest(`/api/${kind === "report" ? "match-reports" : "job-applications"}/${item.id}`, { method: "DELETE" });
+      await apiRequest(`/api/${kind === "report" ? "match-reports" : kind === "match" ? "resume-job-matches" : "job-applications"}/${item.id}`, { method: "DELETE" });
       setAnalysisDeleteCandidate(null);
-      if (kind === "application") {
+      if (kind === "match") {
+        const remaining = matches.filter(candidate => candidate.id !== item.id);
+        setMatches(remaining);
+        if (selectedMatch?.id === item.id) {
+          setSelectedMatch(null); setMatchFailureMessage("");
+          const next = remaining.find(candidate => candidate.status === "COMPLETED") || remaining[0];
+          if (next?.status === "COMPLETED") await openMatch(next.id);
+          else if (next) setSelectedMatch(next);
+        }
+        const survivingReports = reports.filter(candidate => candidate.resumeJobMatchId !== item.id);
+        setReports(survivingReports);
+        if (selectedReport?.resumeJobMatchId === item.id) {
+          setSelectedReport(null); setReportFailure(null); setSuggestionRuns([]); setSelectedSuggestionRun(null);
+          setSuggestionSuccess(""); setSuggestionError(null); setSelectedVersionSnapshot(null); setResumeVersionHistory([]);
+          window.history.replaceState(null, "", jobWorkspaceHash({ tab: workspaceTab, jobId: detail.item.id, applicationId: selectedApplicationId }));
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
+          if (survivingReports[0]?.id) await openGroundedReport(survivingReports[0].id);
+        }
+        await Promise.all([loadAgentRuns(selectedApplicationId), loadInterviewSessions(selectedApplicationId)]);
+      } else if (kind === "application") {
         const remaining = applications.filter(candidate => candidate.id !== item.id);
         setApplications(remaining);
         if (String(selectedApplicationId) === String(item.id)) {
@@ -3184,7 +3203,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           {working && <ResultSkeleton lines={5} />}
           {!working && selectedMatch?.status === "COMPLETED" && <ResumeJobMatchReport match={selectedMatch} />}
           {!working && (selectedMatch?.status === "FAILED" || matchFailureMessage) && <p className="job-error">本次匹配失败：{selectedMatch?.failureMessage || matchFailureMessage}</p>}
-          {matches.length > 0 && <details className="job-match-history"><summary>匹配历史（{matches.length}）</summary>{matches.map((item) => <div key={item.id}><button className={selectedMatch?.id === item.id ? "active" : ""} onClick={() => item.status === "FAILED" ? (setMatchFailureMessage(""), setSelectedMatch(item)) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button>{item.status === "FAILED" && <button className="link-button" onClick={() => createMatch(item.id)}>重试</button>}</div>)}</details>}
+          {matches.length > 0 && <details className="job-match-history"><summary>匹配历史（{matches.length}）</summary>{matches.map((item) => <div className="match-history-row" key={item.id}><button className={`match-history-select ${selectedMatch?.id === item.id ? "active" : ""}`} disabled={working || analysisDeleting} onClick={() => item.status === "FAILED" ? (setMatchFailureMessage(""), setSelectedMatch(item)) : openMatch(item.id)}><span>{item.status === "COMPLETED" ? `${item.totalScore} 分` : item.status === "FAILED" ? "失败" : "处理中"}</span><small>{formatResumeDate(item.createdAt)}</small></button><div className="match-history-actions">{item.status === "FAILED" && <button className="match-history-retry" aria-label={`重试匹配 #${item.id}`} disabled={working || analysisDeleting} onClick={() => createMatch(item.id)}><RefreshCw size={14} />重试</button>}<button className="history-delete" aria-label={`删除匹配 #${item.id}`} disabled={working || analysisDeleting || reportWorking || suggestionWorking || agentWorking || interviewWorking || ["PENDING", "RUNNING", "ANALYZING"].includes(item.status)} onClick={() => { setAnalysisDeleteError(""); setAnalysisDeleteCandidate({ kind: "match", item }); }}><Trash2 size={14} />删除</button></div></div>)}</details>}
           {!working && !selectedMatch && !matches.length && <div className="job-empty"><strong>尚未生成匹配报告</strong><p>报告仅会在真实 AI 返回并通过证据校验后显示分数与建议。</p></div>}
         </section>
         <section className="grounded-report-panel" aria-labelledby="grounded-report-title">
@@ -3268,7 +3287,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
         </div>
         {analysisDeleteError && <p className="job-error" role="alert">{analysisDeleteError}</p>}
         <ConfirmDialog open={Boolean(versionDeleteCandidate)} title="删除简历版本历史" description={`删除 v${versionDeleteCandidate?.resumeVersion || versionDeleteCandidate?.version} 的历史记录？删除后无法从历史列表查看或用于新分析任务。当前简历内容不变，已有报告和面试引用的快照会保留。`} error={versionDeleteError} confirmLabel="删除版本" isWorking={versionDeleting} onClose={() => !versionDeleting && setVersionDeleteCandidate(null)} onConfirm={deleteResumeVersion} />
-        <ConfirmDialog open={Boolean(analysisDeleteCandidate)} error={analysisDeleteError} title={analysisDeleteCandidate?.kind === "report" ? "删除报告版本" : "删除分析任务"} description={analysisDeleteCandidate?.kind === "report" ? `删除报告 v${analysisDeleteCandidate?.item.reportVersion}？这份报告及关联的简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。已接受的简历修改、简历版本和基础匹配会保留。` : `删除分析任务 #${analysisDeleteCandidate?.item.id}？该任务下的基础匹配、报告版本、简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。岗位 JD、简历和已保存的简历版本会保留。`} confirmLabel="删除记录" isWorking={analysisDeleting} onClose={() => !analysisDeleting && setAnalysisDeleteCandidate(null)} onConfirm={deleteAnalysisHistory} />
+        <ConfirmDialog open={Boolean(analysisDeleteCandidate)} error={analysisDeleteError} title={analysisDeleteCandidate?.kind === "match" ? "删除匹配记录" : analysisDeleteCandidate?.kind === "report" ? "删除报告版本" : "删除分析任务"} description={analysisDeleteCandidate?.kind === "match" ? `删除匹配 #${analysisDeleteCandidate?.item.id}？这条基础匹配及以它为依据的 AI 报告、简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。简历、岗位、其他匹配记录和已接受的简历修改会保留。` : analysisDeleteCandidate?.kind === "report" ? `删除报告 v${analysisDeleteCandidate?.item.reportVersion}？这份报告及关联的简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。已接受的简历修改、简历版本和基础匹配会保留。` : `删除分析任务 #${analysisDeleteCandidate?.item.id}？该任务下的基础匹配、报告版本、简历建议、模拟面试和 Agent 分析将一并删除，无法恢复。岗位 JD、简历和已保存的简历版本会保留。`} confirmLabel="删除记录" isWorking={analysisDeleting} onClose={() => !analysisDeleting && setAnalysisDeleteCandidate(null)} onConfirm={deleteAnalysisHistory} />
         <ConfirmDialog
           open={Boolean(historyDeleteCandidate)}
           title={historyDeleteCandidate?.kind === "agent" ? "删除 Agent 分析" : historyDeleteCandidate?.kind === "suggestion" ? "删除建议生成记录" : "删除历史面试"}
