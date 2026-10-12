@@ -3691,7 +3691,7 @@ function ResumeJobMatchReport({ match }) {
           {dimension.suggestions?.length > 0 && <small>建议：{dimension.suggestions.join("；")}</small>}
         </details>
       </article>)}</div>
-      <section className="match-priority"><h4>优先修改建议</h4>{suggestions.length ? <><ol>{suggestions.slice(0, 3).map((item, index) => <li key={index}>{item}</li>)}</ol>{suggestions.length > 3 && <details className="match-report-disclosure"><summary>展开其余 {suggestions.length - 3} 条建议</summary><ol start={4}>{suggestions.slice(3).map((item, index) => <li key={index}>{item}</li>)}</ol></details>}</> : <p>报告暂无修改建议</p>}</section>
+      <section className="match-priority"><h4>优先修改建议</h4>{suggestions.length ? <ol>{suggestions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>报告暂无修改建议</p>}</section>
     </>}
     {view === "skills" && <div className="job-match-evidence">{groups.map(([title, items]) => <MatchEvidenceGroup key={title} title={title} items={items} />)}</div>}
     {view === "evidence" && <div className="job-match-suggestions">{[["最有力的简历证据", report.strongestResumeEvidence], ["风险提醒", report.risks]].map(([title, items]) => <div key={title}><h4>{title}</h4>{items?.length ? <ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>报告暂无相关项</p>}</div>)}</div>}
