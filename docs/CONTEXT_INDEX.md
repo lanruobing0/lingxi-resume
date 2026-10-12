@@ -1,5 +1,7 @@
 # 项目上下文索引
 
+- 最新任务：`docs/tasks/MATCH_OUTPUT_LIMIT.md`，基础匹配再次输出截断，真实脱敏复验通过，待独立验收。
+
 - 最新任务：`docs/tasks/DELETE_ACTION_STYLE.md`，所有删除按钮默认灰色、悬停变红，完成待独立验收。
 
 - 最新任务：`docs/tasks/RESUME_VERSION_DELETE.md`，简历版本历史确认删除，完成待独立验收。

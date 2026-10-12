@@ -101,7 +101,7 @@ async function main() {
     const prompt = chat ? request.messages?.[1]?.content || "" : request.input?.[1]?.content?.[0]?.text || "";
     const schemaName = chat ? prompt.match(/object named (\w+)/)?.[1] : request.text?.format?.name;
     if (schemaName === "resume_job_match") {
-      assert.equal(chat ? request.max_tokens : request.max_output_tokens, 8192);
+      assert.equal(chat ? request.max_tokens : request.max_output_tokens, 16384);
       if (!chat) {
         const properties = request.text.format.schema.properties;
         assert.equal(properties.matchedKeywords.items.properties.jdEvidence.minItems, 1);
