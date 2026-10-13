@@ -1,4 +1,4 @@
-export const resumeSuggestionPromptVersion = "resume-suggestions-v3-paths";
+export const resumeSuggestionPromptVersion = "resume-suggestions-v4-fact-guidance";
 
 const factEvidenceSchema = {
   type: "object",
@@ -14,12 +14,13 @@ const factEvidenceSchema = {
 const suggestionItemSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["sectionType", "targetPath", "suggestionType", "rationale", "before", "after", "patch", "factEvidence", "sourceClaimIds", "recommendationRefs"],
+  required: ["sectionType", "targetPath", "suggestionType", "rationale", "factQuestions", "before", "after", "patch", "factEvidence", "sourceClaimIds", "recommendationRefs"],
   properties: {
     sectionType: { type: "string" },
     targetPath: { type: "string" },
     suggestionType: { type: "string", enum: ["REWRITE", "CLARIFY", "KEYWORD_ALIGNMENT", "STRUCTURE", "FACT_REQUIRED"] },
     rationale: { type: "string" },
+    factQuestions: { type: "array", maxItems: 4, items: { type: "string", maxLength: 300 } },
     before: { type: "string" },
     after: { type: "string" },
     patch: { type: "array", maxItems: 1, items: { type: "object", additionalProperties: false, required: ["op", "path", "value"], properties: { op: { type: "string", enum: ["replace", "add"] }, path: { type: "string" }, value: { type: "string" } } } },
@@ -76,6 +77,7 @@ export function buildResumeSuggestionPrompt({ resumeDocument, jobDescription, re
       `Locked resume suggestion document: ${JSON.stringify(resumeDocument)}`,
       `Exclusive editable path catalog (copy op/path/before exactly): ${JSON.stringify(buildResumeSuggestionPathCatalog(resumeDocument))}`,
       "Entries use stable string IDs, not array positions. Never target a section, entry, or highlights array as a whole. Replace one highlight using its numeric index; append only with op add and final /-. FACT_REQUIRED must target an existing replace path with its exact before, even when asking for missing education or projects; use /selfEvaluation if no corresponding entry exists. Its after is empty, patch and factEvidence are empty. Executable patch value must equal after. sourcePath must be an existing replace path, never the append path. Return only a few highest-priority suggestions; do not rewrite every field.",
+      "For FACT_REQUIRED, include factQuestions: 1–4 specific Chinese questions about the exact missing facts (which project, your responsibility, actual implementation, or verifiable result). Ask only what this suggestion needs, never contact/profile information, and never supply invented answers or example metrics. For executable suggestions use factQuestions: []. Pure wording changes to already documented facts should retain those facts and cite exact source phrases rather than asking the user to add the same facts again. The fact field itself must occur verbatim in both sourceQuote and after; do not put a paraphrase in fact. A target role is an intention, not proof of experience: never convert it into claimed work experience.",
       `Locked JD summary: ${JSON.stringify({ title: jobDescription.title, rawText: jobDescription.rawText, parsedData: jobDescription.parsedData })}`,
       `Locked grounded report: ${JSON.stringify(safeReport)}`,
       "Return { suggestions: [...] }. Do not add Markdown or any fields outside the schema.",

@@ -45,7 +45,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCountUp } from "./hooks/useCountUp";
 import { useInViewOnce } from "./hooks/useInViewOnce";
 import { selectHistoryMatch, selectLatestFailedMatch } from "./matchState";
-import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, suggestionFailureMessage, suggestionStatusLabel, versionSourceLabel } from "./suggestionUiState";
+import { buildSuggestionDiff, suggestionActions, suggestionDecisionRequest, suggestionFailureMessage, suggestionStatusLabel, suggestionSectionLabel, suggestionFactGuidance, versionSourceLabel } from "./suggestionUiState";
 import { feedbackTextItems, interviewApiRequest, interviewCategoryLabel, interviewDifficultyLabel, interviewFailureMessage, interviewStatusLabel, nextInterviewQuestionIndex, safeKnowledgeSources } from "./interviewUiState";
 import { agentActionLabel, agentApiRequest, agentFailureMessage, agentResultTypes, agentStatusLabel, safeAgentStepSummary, safeRetrievalSources } from "./agentUiState";
 import { usePresence } from "./hooks/usePresence";
@@ -3240,6 +3240,7 @@ export function JobDescriptionWorkspace({ notify, activeResumeId, onOpenResume, 
           versionError={versionHistoryError}
           selectedVersion={selectedVersionSnapshot}
           onGenerate={createResumeSuggestions}
+          onSupplement={(suggestion) => { onOpenResume?.(selectedSuggestionRun?.resumeId); notify(`请在${suggestionSectionLabel(suggestion)}中核对或补充真实内容。保存后，回到岗位页用最新简历版本创建分析任务，再生成匹配、报告与建议。`); }}
           onSelectRun={openSuggestionRun}
           onDeleteRun={(item) => setHistoryDeleteCandidate({ kind: "suggestion", item })}
           onDecision={decideSuggestion}
@@ -3358,7 +3359,7 @@ function formatEvidenceCoverage(coverage) {
   return `${Math.round(Number(coverage.ratio) * 100)}%`;
 }
 
-function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, versionDeleting, onDeleteVersion, onGenerate, onSelectRun, onDeleteRun, onDecision, onRefresh, onSelectVersion }) {
+function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working, error, success, versions, versionLoading, versionError, selectedVersion, versionDeleting, onDeleteVersion, onGenerate, onSelectRun, onDeleteRun, onDecision, onRefresh, onSelectVersion, onSupplement }) {
   const [diffSuggestionId, setDiffSuggestionId] = useState(null);
   const canGenerate = ["COMPLETED", "DEGRADED"].includes(report?.status);
 
@@ -3390,15 +3391,29 @@ function ResumeSuggestionWorkspace({ report, runs, selectedRun, loading, working
 
       {!loading && selectedRun?.status === "COMPLETED" && <div className="suggestion-content">
         <div className="suggestion-run-summary"><span>本轮绑定简历版本 <b>v{selectedRun.baseResumeVersion}</b></span><span>生成于 {formatResumeDate(selectedRun.completedAt || selectedRun.createdAt)}</span></div>
+        {selectedRun.suggestions?.some((item) => suggestionActions(item).factRequired) && <p className="suggestion-fact-flow">补充后请保存简历，用最新版本创建岗位分析任务，再生成匹配、报告与建议。重新生成本报告的建议仍使用旧版 v{selectedRun.baseResumeVersion}。</p>}
         {!selectedRun.suggestions?.length && <div className="job-empty"><strong>本轮未返回可展示的建议</strong><p>系统没有将缺少安全校验的结果当作可应用修改。</p></div>}
         <div className="suggestion-list">{(selectedRun.suggestions || []).map((suggestion) => {
           const actions = suggestionActions(suggestion);
-          const displayStatus = actions.factRequired ? "FACT_REQUIRED" : suggestion.status;
+          const guidance = suggestionFactGuidance(suggestion);
+          const displayStatus = actions.factRequired && suggestion.status === "PENDING" ? "FACT_REQUIRED" : suggestion.status;
           const showDiff = diffSuggestionId === suggestion.id;
           return <article key={suggestion.id} className="suggestion-item">
-            <header><div><strong>{suggestion.sectionType}</strong><small>{suggestion.suggestionType}</small></div><em className={`suggestion-status suggestion-${String(displayStatus || "").toLowerCase()}`}>{suggestionStatusLabel(displayStatus)}</em></header>
+            <header><div><strong>{suggestionSectionLabel(suggestion)}</strong><small>{actions.factRequired ? guidance.validationFailed ? "请核对已有事实" : "待补充事实" : ({ REWRITE: "措辞优化", CLARIFY: "信息澄清", KEYWORD_ALIGNMENT: "关键词对齐", STRUCTURE: "结构调整" }[suggestion.suggestionType] || suggestion.suggestionType)}</small></div><em className={`suggestion-status suggestion-${String(displayStatus || "").toLowerCase()}`}>{displayStatus === "FACT_REQUIRED" && guidance.validationFailed ? "证据待核对" : suggestionStatusLabel(displayStatus)}</em></header>
             <p className="suggestion-rationale">{suggestion.rationale}</p>
-            {actions.factRequired ? <div className="fact-required-note"><strong>需要补充真实信息</strong><p>该建议需要你补充真实信息后才能应用。</p></div> : <>
+            {actions.factRequired ? <div className="fact-required-note">
+              <strong>{guidance.title}</strong><p>{guidance.reason}</p>
+              {suggestion.validationMessage && <p className="fact-validation-detail">校验原因：{suggestion.validationMessage}</p>}
+              <strong>{guidance.validationFailed ? "请核对" : "请补充或确认"}</strong>
+              <ul>{guidance.questions.map((question, index) => <li key={index}>{question}</li>)}</ul>
+              <details><summary>查看锁定简历原文 · v{selectedRun.baseResumeVersion}</summary><p className="fact-original-text">{suggestion.before || "该位置尚未填写内容。"}</p></details>
+              {actions.invalidated && <p>该建议已失效，请基于最新简历版本重新分析。</p>}
+              <div className="suggestion-actions">
+                {suggestion.status === "PENDING" && onSupplement && <button className="white-small" disabled={working} onClick={() => onSupplement(suggestion)}>去简历核对补充</button>}
+                {suggestion.status === "PENDING" && guidance.validationFailed && <button className="white-small" disabled={working || !canGenerate} onClick={onGenerate}>重新生成建议</button>}
+                {actions.canReject && <button className="link-button" disabled={working} onClick={() => onDecision(suggestion, "reject")}>暂不采纳</button>}
+              </div>
+            </div> : <>
               <dl className="suggestion-before-after"><div><dt>修改前</dt><dd>{suggestion.before || "—"}</dd></div><div><dt>修改后</dt><dd>{suggestion.after || "—"}</dd></div></dl>
               {actions.invalidated && <p className="suggestion-invalidated">该建议已失效：同一轮中已有建议被接受并生成新简历版本，原基础版本不再可安全应用。</p>}
               <div className="suggestion-actions">

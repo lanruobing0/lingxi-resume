@@ -2073,7 +2073,7 @@ function validateSuggestionEvidenceCoverage({ baseDocument, after, evidence }) {
   const chineseSpans = normalizeSuggestionEvidenceText(after).match(/[\u3400-\u9fff]{2,}/g) || [];
   for (const span of chineseSpans) {
     const supported = baseText.includes(span) || evidenceFacts.some((fact) => fact.includes(span) || span.includes(fact));
-    if (!supported && !isGenericSuggestionChineseSpan(span)) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_MISSING", "改写中的新增事实缺少锁定简历证据");
+    if (!supported && !isGenericSuggestionChineseSpan(span)) throw resumeSuggestionFailure(422, "SUGGESTION_EVIDENCE_MISSING", `改写表述“${span}”缺少锁定简历证据`);
   }
 }
 
@@ -2159,19 +2159,20 @@ function normalizeGeneratedResumeSuggestions(data, { baseDocument, report }) {
       // The location itself must still be a real editable field, even though this
       // suggestion intentionally has no patch and cannot be accepted.
       validateResumeSuggestionPatch(baseDocument, [{ op: "replace", path: targetPath, value: before }], targetPath, before, before);
-      return { sectionType, targetPath, suggestionType, rationale, before, after: "", patch: [], factEvidence: [], ...refs, failureCode: null };
+      const factQuestions = Array.isArray(item.factQuestions) ? item.factQuestions.filter((value) => typeof value === "string" && value.trim() && value.length <= 300).slice(0, 4).map((value) => value.trim()) : [];
+      return { sectionType, targetPath, suggestionType, rationale, before, after: "", patch: [], factEvidence: [], factQuestions, ...refs, failureCode: null };
     }
     const validatedPatch = validateResumeSuggestionPatch(baseDocument, item.patch, targetPath, before, after);
     const factualFailure = factualDeltaFailure(before, after, baseDocument);
     if (factualFailure) {
-      return { sectionType, targetPath, suggestionType: "FACT_REQUIRED", rationale: `${rationale}；${factualFailure}，请由用户补充后再修改。`, before, after: "", patch: [], factEvidence: [], ...refs, failureCode: "SUGGESTION_UNSUPPORTED_FACT" };
+      return { sectionType, targetPath, suggestionType: "FACT_REQUIRED", rationale, before, after: "", patch: [], factEvidence: [], validationMessage: factualFailure, ...refs, failureCode: "SUGGESTION_UNSUPPORTED_FACT" };
     }
     try {
       const factEvidence = validateSuggestionEvidence({ baseDocument, before, after, factEvidence: item.factEvidence });
       return { sectionType, targetPath, suggestionType, rationale, before, after, patch: [{ op: validatedPatch.op, path: validatedPatch.path, value: validatedPatch.value }], factEvidence, ...refs, failureCode: null };
     } catch (error) {
       if (!["SUGGESTION_EVIDENCE_MISSING", "SUGGESTION_EVIDENCE_INVALID"].includes(error.code)) throw error;
-      return { sectionType, targetPath, suggestionType: "FACT_REQUIRED", rationale: `${rationale}；${error.message}，请由用户补充后再修改。`, before, after: "", patch: [], factEvidence: [], ...refs, failureCode: error.code };
+      return { sectionType, targetPath, suggestionType: "FACT_REQUIRED", rationale, before, after: "", patch: [], factEvidence: [], validationMessage: error.message, ...refs, failureCode: error.code };
     }
   });
 }
@@ -2215,7 +2216,7 @@ function resolveSuggestionReportContext(store, user, report) {
 async function executeResumeSuggestionRun(store, user, report) {
   const context = resolveSuggestionReportContext(store, user, report);
   const config = getAiConfig(store, user.id);
-  const generationConfigHash = suggestionHash({ promptVersion: resumeSuggestionPromptVersion, schema: "resume-suggestions-v3-paths", maxPatchOperations: resumeSuggestionMaxPatchOperations, maxTextLength: resumeSuggestionMaxTextLength });
+  const generationConfigHash = suggestionHash({ promptVersion: resumeSuggestionPromptVersion, schema: "resume-suggestions-v4-fact-guidance", maxPatchOperations: resumeSuggestionMaxPatchOperations, maxTextLength: resumeSuggestionMaxTextLength });
   const run = {
     id: nextId(store.suggestionRuns), userId: user.id, jobApplicationId: report.jobApplicationId, resumeJobMatchId: report.resumeJobMatchId, matchReportId: report.id,
     resumeId: report.resumeId, baseResumeVersionId: report.resumeVersionId, baseResumeVersion: report.resumeVersion, baseResumeContentHash: report.resumeContentHash,
@@ -2231,11 +2232,14 @@ async function executeResumeSuggestionRun(store, user, report) {
     const schema = buildResumeSuggestionSchema(baseDocument);
     let normalized;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const userPrompt = attempt === 0 ? prompt.user : `${prompt.user}\n建议格式纠正：上次返回的修改路径或格式未通过校验。重新生成完整 JSON，严格复制合法路径清单中的 op、path、before，不使用点号路径、数组整体路径或不存在的经历。缺失事实使用 FACT_REQUIRED 并定位已有 replace 字段。不要增加未经简历支持的事实。`;
+      const userPrompt = attempt === 0 ? prompt.user : `${prompt.user}\n建议格式与证据纠正：上次返回的修改路径、格式或事实证据未通过校验。重新生成完整 JSON，严格复制合法路径清单中的 op、path、before。每条可应用建议必须提供真实 sourcePath、逐字 sourceQuote，fact 必须同时逐字出现于引文和 after。仅调整已有事实措辞，删除无法支持的新增表述。确实缺失事实时使用 FACT_REQUIRED，附具体 factQuestions。不使用不存在的经历，不增加未经简历支持的事实。`;
       const ai = await runAiJson(store, user.id, { schemaName: "resume_suggestions", schema, system: prompt.system, user: userPrompt, strictJson: true });
       if (!ai.ok) throw resumeSuggestionFailure(ai.status || 502, mappedAiFailureCode(ai, { notConfigured: "SUGGESTION_PROVIDER_NOT_CONFIGURED", invalidResponse: "SUGGESTION_INVALID_OUTPUT", unavailable: "SUGGESTION_PROVIDER_UNAVAILABLE" }), ai.error || "建议生成服务不可用");
       try {
         normalized = normalizeGeneratedResumeSuggestions(ai.data, { baseDocument, report });
+        // Share the existing single correction budget with evidence failures.
+        // Never turn a failed check into an executable patch locally.
+        if (attempt === 0 && normalized.some((item) => ["SUGGESTION_EVIDENCE_MISSING", "SUGGESTION_EVIDENCE_INVALID"].includes(item.failureCode))) continue;
         break;
       } catch (error) {
         if (attempt !== 0 || !["SUGGESTION_INVALID_PATCH", "SUGGESTION_INVALID_OUTPUT"].includes(error.code)) throw error;

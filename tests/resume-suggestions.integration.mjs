@@ -54,7 +54,7 @@ async function main() {
   const provider = createServer(async (req, res) => {
     let raw = ""; for await (const chunk of req) raw += chunk;
     state.providerBodies.push(raw);
-    const suggestions = (state.mode === "invalidPatch" || (state.mode === "correctablePatch" && !raw.includes("建议格式纠正："))) ? [{ sectionType: "自我评价", targetPath: "/userId", suggestionType: "REWRITE", rationale: "非法路径", before: "", after: "x", patch: [{ op: "replace", path: "/userId", value: "x" }], factEvidence: [], sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] }] : state.entityCase ? [
+    const suggestions = (state.mode === "invalidPatch" || (state.mode === "correctablePatch" && !raw.includes("建议格式与证据纠正："))) ? [{ sectionType: "自我评价", targetPath: "/userId", suggestionType: "REWRITE", rationale: "非法路径", before: "", after: "x", patch: [{ op: "replace", path: "/userId", value: "x" }], factEvidence: [], sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] }] : state.entityCase ? [
       { sectionType: "自我评价", targetPath: "/selfEvaluation", suggestionType: "REWRITE", rationale: "固定事实差异回归", before: state.entityCase.before, after: state.entityCase.after, patch: [{ op: "replace", path: "/selfEvaluation", value: state.entityCase.after }], factEvidence: state.entityCase.factEvidence ?? (state.entityCase.blocked ? [] : mockFactEvidence(state.entityCase.before, state.entityCase.after)), sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] },
     ] : [
       { sectionType: "自我评价", targetPath: "/selfEvaluation", suggestionType: "REWRITE", rationale: "报告建议突出已有 React 经历", before: "具备 React 组件开发经验。", after: "具备 React 组件开发经验，表达更聚焦前端岗位。", patch: [{ op: "replace", path: "/selfEvaluation", value: "具备 React 组件开发经验，表达更聚焦前端岗位。" }], factEvidence: mockFactEvidence("具备 React 组件开发经验。", "具备 React 组件开发经验，表达更聚焦前端岗位。"), sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] },
@@ -62,6 +62,8 @@ async function main() {
       { sectionType: "专业技能", targetPath: "/selfEvaluation", suggestionType: "KEYWORD_ALIGNMENT", rationale: "需要技能事实支撑", before: "具备 React 组件开发经验。", after: "具备 Kubernetes 运维经验。", patch: [{ op: "replace", path: "/selfEvaluation", value: "具备 Kubernetes 运维经验。" }], factEvidence: [], sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] },
       { sectionType: "项目经历", targetPath: "/selfEvaluation", suggestionType: "FACT_REQUIRED", rationale: "请补充可验证的性能指标。", before: "具备 React 组件开发经验。", after: "", patch: [], factEvidence: [], sourceClaimIds: ["claim-1"], recommendationRefs: ["建议突出已有 React 经历"] },
     ];
+    if (state.mode === "correctableEvidence" && !raw.includes("建议格式与证据纠正：")) suggestions[0].factEvidence = [];
+    for (const item of suggestions) item.factQuestions = item.suggestionType === "FACT_REQUIRED" ? ["哪个项目有可以核实的性能结果？"] : [];
     const body = JSON.stringify({ output_text: JSON.stringify({ suggestions }) });
     res.writeHead(200, { "Content-Type": "application/json" }); res.end(body);
   });
@@ -244,6 +246,8 @@ async function main() {
     assert.equal(created.item.status, "COMPLETED"); assert.equal(created.item.baseResumeVersion, 1); assert.equal(created.item.baseResumeContentHash, lockedSnapshot.contentHash); assert.equal(created.item.suggestions.length, 4);
     const [rewrite, fabricated, fabricatedTechnology, factRequired] = created.item.suggestions;
     assert.equal(rewrite.status, "PENDING"); assert.equal(fabricated.suggestionType, "FACT_REQUIRED"); assert.equal(fabricated.patch.length, 0); assert.equal(fabricated.failureCode, "SUGGESTION_UNSUPPORTED_FACT"); assert.equal(factRequired.suggestionType, "FACT_REQUIRED");
+    assert.deepEqual(factRequired.factQuestions, ["哪个项目有可以核实的性能结果？"]);
+    assert.match(fabricated.validationMessage, /50/);
     assert.equal(fabricatedTechnology.suggestionType, "FACT_REQUIRED"); assert.equal(fabricatedTechnology.failureCode, "SUGGESTION_UNSUPPORTED_FACT");
     assert.equal((await call(otherToken, "/api/match-reports/1/resume-suggestions", undefined, 404)).failureCode, "SUGGESTION_REPORT_NOT_FOUND");
     assert.equal((await call(otherToken, `/api/resume-suggestions/${rewrite.id}/accept`, { expectedBaseResumeVersion: 1 }, 404)).failureCode, "SUGGESTION_NOT_FOUND");
@@ -263,7 +267,10 @@ async function main() {
       const testCase = factualDeltaCases[index];
       const reportId = index + 2;
       state.entityCase = testCase;
+      const requestCount = state.providerBodies.length;
       const generated = await call(token, `/api/match-reports/${reportId}/resume-suggestions`, {});
+      assert.ok(state.providerBodies.length - requestCount <= 2, "correction budget must stay bounded");
+      if (testCase.evidenceBlocked) assert.equal(state.providerBodies.length - requestCount, 2, "evidence failure receives one correction");
       assert.equal(generated.item?.status, "COMPLETED", `${testCase.name}: ${JSON.stringify(generated)}`);
       state.entityCase = null;
       const suggestion = generated.item.suggestions[0];
@@ -315,6 +322,12 @@ async function main() {
     assert.equal(corrected.item.status, "COMPLETED");
     assert.equal(state.providerBodies.length - correctedCallCount, 2);
     assert.ok(state.providerBodies.at(-1).includes("Exclusive editable path catalog"));
+    state.mode = "correctableEvidence";
+    const evidenceCallCount = state.providerBodies.length;
+    const evidenceCorrected = await call(token, "/api/match-reports/1/resume-suggestions", {}, 201);
+    assert.equal(state.providerBodies.length - evidenceCallCount, 2);
+    assert.equal(evidenceCorrected.item.suggestions[0].suggestionType, "REWRITE", "corrected evidence must pass the original checks");
+    assert.equal(evidenceCorrected.item.suggestions[0].failureCode, null);
     state.mode = "invalidPatch";
     await call(token, "/api/match-reports/1/resume-suggestions", {}, 422);
     const persisted = JSON.parse(await readFile(path.join(dir, "store.json"), "utf8")); assert.equal(persisted.suggestionRuns.at(-1).status, "FAILED", "provider/validation failure must persist");
